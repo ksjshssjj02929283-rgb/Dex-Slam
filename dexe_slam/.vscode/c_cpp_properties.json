@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/opt/ros/galactic/include/**",
+        "/home/hz/hz/Work/Grabotics/B1-Project-new/b1_devel/b1_slam/src/2d_lidar_slam/b1_cartographer_ros/cartographer_ros/include/**",
+        "/home/hz/hz/Work/Grabotics/B1-Project-new/b1_devel/b1_slam/src/2d_lidar_slam/b1_cartographer_ros/cartographer_rviz/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}
