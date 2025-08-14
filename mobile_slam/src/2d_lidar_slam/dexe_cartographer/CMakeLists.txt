@@ -26,10 +26,10 @@ set(CARTOGRAPHER_HAS_GRPC ${BUILD_GRPC})
 option(BUILD_PROMETHEUS "build Prometheus monitoring support" false)
 
 # added by hz
-set(GLOG_INCLUDE_DIR "/root/Third-Party/glog-0.4.0/include")
-set(GLOG_LIBRARY_DIR "/root/Third-Party/glog-0.4.0/lib-static")
-set(GLOG_LIBRARY "${GLOG_LIBRARY_DIR}/libglog.a")
-set(CMAKE_PREFIX_PATH "/root/Third-Party/glog-0.4.0" ${CMAKE_PREFIX_PATH})
+# set(GLOG_INCLUDE_DIR "/root/Third-Party/glog-0.4.0/include")
+# set(GLOG_LIBRARY_DIR "/root/Third-Party/glog-0.4.0/lib-static")
+# set(GLOG_LIBRARY "${GLOG_LIBRARY_DIR}/libglog.a")
+# set(CMAKE_PREFIX_PATH "/root/Third-Party/glog-0.4.0" ${CMAKE_PREFIX_PATH})
 #
 
 include("${PROJECT_SOURCE_DIR}/cmake/functions.cmake")
@@ -45,7 +45,7 @@ endif()
 find_package(Boost REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 find_package(Ceres REQUIRED COMPONENTS SuiteSparse)
 find_package(Eigen3 REQUIRED)
-find_package(Lua REQUIRED)
+find_package(LuaGoogle REQUIRED)
 if(WIN32)
   # On Windows, Protobuf is incorrectly found by the bundled CMake module, so prefer native CMake config.
   set(protobuf_MODULE_COMPATIBLE TRUE CACHE INTERNAL "")
@@ -235,6 +235,8 @@ target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   "${EIGEN3_INCLUDE_DIR}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${EIGEN3_LIBRARIES})
 
+target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+  "${CERES_INCLUDE_DIR}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${CERES_LIBRARIES})
 
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
@@ -251,13 +253,18 @@ target_link_libraries(${PROJECT_NAME} PUBLIC ${Boost_LIBRARIES})
 # set(GLOG_LIBRARY "${GLOG_LIBRARY_DIR}/libglog.a")
 # set(CMAKE_PREFIX_PATH "/root/Third-Party/glog-0.4.0" ${CMAKE_PREFIX_PATH})
 
-message(STATUS "GLOG_INCLUDE_DIR: ${GLOG_INCLUDE_DIR}")
-message(STATUS "GLOG_LIBRARY_DIR: ${GLOG_LIBRARY_DIR}")
-message(STATUS "PROJECT_NAME: ${PROJECT_NAME}")
+# message(STATUS "GLOG_INCLUDE_DIR: ${GLOG_INCLUDE_DIR}")
+# message(STATUS "GLOG_LIBRARY_DIR: ${GLOG_LIBRARY_DIR}")
+# message(STATUS "PROJECT_NAME: ${PROJECT_NAME}")
 
-target_include_directories(${PROJECT_NAME} PUBLIC "${GLOG_INCLUDE_DIR}")
+# target_include_directories(${PROJECT_NAME} PUBLIC "${GLOG_INCLUDE_DIR}")
 # end
-
+if (WIN32)
+  find_package(glog REQUIRED)
+  set(GLOG_LIBRARY glog::glog)
+else()
+  set(GLOG_LIBRARY glog)
+endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC "${GLOG_LIBRARY}")
 
 target_link_libraries(cartographer_autogenerate_ground_truth PUBLIC "${GLOG_LIBRARY}")
@@ -373,7 +380,7 @@ install(
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
   # added by hz
-  INCLUDES DESTINATION "${GLOG_INCLUDE_DIR}"
+  # INCLUDES DESTINATION "${GLOG_INCLUDE_DIR}"
 )
 
 foreach(HDR ${INSTALL_SOURCE_HDRS})

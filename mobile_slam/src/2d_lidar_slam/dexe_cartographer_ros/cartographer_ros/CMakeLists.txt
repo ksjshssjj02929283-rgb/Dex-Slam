@@ -29,10 +29,10 @@ endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # added by hz
-set(GLOG_INCLUDE_DIR "/root/Third-Party/glog-0.4.0/include")
-set(GLOG_LIBRARY_DIR "/root/Third-Party/glog-0.4.0/lib-static")
-set(GLOG_LIBRARY "${GLOG_LIBRARY_DIR}/libglog.a")
-set(CMAKE_PREFIX_PATH "/root/Third-Party/glog-0.4.0" ${CMAKE_PREFIX_PATH})
+# set(GLOG_INCLUDE_DIR "/root/Third-Party/glog-0.4.0/include")
+# set(GLOG_LIBRARY_DIR "/root/Third-Party/glog-0.4.0/lib-static")
+# set(GLOG_LIBRARY "${GLOG_LIBRARY_DIR}/libglog.a")
+# set(CMAKE_PREFIX_PATH "/root/Third-Party/glog-0.4.0" ${CMAKE_PREFIX_PATH})
 #
 
 find_package(builtin_interfaces REQUIRED)
