@@ -194,6 +194,9 @@ class PoseGraph2DTest : public ::testing::Test {
                                  {},
                                  {},
                                  {},
+                                 {},
+                                 {},
+                                 {},
                                  transform::Embed3D(pose_estimate)}),
         kTrajectoryId, insertion_submaps);
   }

@@ -27,6 +27,8 @@ proto::TimedPointCloudData ToProto(
   proto::TimedPointCloudData proto;
   proto.set_timestamp(common::ToUniversal(timed_point_cloud_data.time));
   *proto.mutable_origin() = transform::ToProto(timed_point_cloud_data.origin);
+  *proto.mutable_sensor_to_tracking() =
+      transform::ToProto(timed_point_cloud_data.sensor_to_tracking);
   proto.mutable_point_data()->Reserve(timed_point_cloud_data.ranges.size());
   for (const TimedRangefinderPoint& range : timed_point_cloud_data.ranges) {
     *proto.add_point_data() = ToProto(range);
@@ -55,6 +57,7 @@ TimedPointCloudData FromProto(const proto::TimedPointCloudData& proto) {
   }
   return TimedPointCloudData{common::FromUniversal(proto.timestamp()),
                              transform::ToEigen(proto.origin()),
+                             transform::ToRigid3(proto.sensor_to_tracking()),
                              timed_point_cloud,
                              std::vector<float>(proto.intensities().begin(),
                                                 proto.intensities().end())};

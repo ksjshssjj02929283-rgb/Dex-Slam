@@ -1,0 +1,158 @@
+// Copyright (c) 2021 Geekplus Inc
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef CARTOGRAPHER__MAPPING__2D__NORMAL_GRID_H_
+#define CARTOGRAPHER__MAPPING__2D__NORMAL_GRID_H_
+
+#include <vector>
+#include <atomic>
+#include <memory>
+#include <utility>
+#include <string>
+#include "cartographer/common/port.h"
+#include "cartographer/sensor/point_cloud.h"
+#include "cartographer/mapping/2d/grid_2d.h"
+#include "cartographer/mapping/2d/map_limits.h"
+#include "cartographer/mapping/2d/xy_index.h"
+
+namespace cartographer
+{
+namespace mapping
+{
+
+const Eigen::Vector2f kUnknownGridNormal = Eigen::Vector2f(0, 0);
+
+struct NormalCell
+{
+  // EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  Eigen::Vector2f normal;
+  bool is_known;
+  float l_angle;
+  float r_angle;
+};
+// , -10, -10
+const NormalCell kUnknownGridNormalCell = NormalCell{kUnknownGridNormal, false, 10, -10};
+class NormalGrid;
+
+
+std::shared_ptr<NormalGrid>
+InitFromImage(
+  const std::vector<uint8_t> & map_data,
+  const sensor::NormalPointCloud & normals,
+  const std::vector<std::pair<Eigen::Array2i, Eigen::Array2i>> & weight_lines,
+  const std::vector<std::pair<Eigen::Array2i, Eigen::Array2i>> & weight_area,
+  const Eigen::Vector2d & origin,
+  const Eigen::Vector2i & size,
+  double scale,
+  mapping::ValueConversionTables & conversion_tables);
+
+
+// Represents a 2D grid of probabilities.
+// template <typename CellType>
+class NormalGrid : public Grid2D
+{
+public:
+  explicit NormalGrid(
+    const MapLimits & limits,
+    ValueConversionTables * conversion_tables);
+  explicit NormalGrid(
+    const proto::Grid2D & proto,
+    ValueConversionTables * conversion_tables);
+
+  // Sets the probability of the cell at 'cell_index' to the given
+  // 'probability'. Only allowed if the cell was unknown before.
+  void SetProbability(
+    const Eigen::Array2i & cell_index,
+    const float probability);
+
+  // Applies the 'odds' specified when calling ComputeLookupTableToApplyOdds()
+  // to the probability of the cell at 'cell_index' if the cell has not already
+  // been updated. Multiple updates of the same cell will be ignored until
+  // FinishUpdate() is called. Returns true if the cell was updated.
+  //
+  // If this is the first call to ApplyOdds() for the specified cell, its value
+  // will be set to probability corresponding to 'odds'.
+  bool ApplyLookupTable(
+    const Eigen::Array2i & cell_index,
+    const std::vector<uint16> & table);
+
+  GridType GetGridType() const override;
+
+  // Returns the probability of the cell with 'cell_index'.
+  float GetProbability(const Eigen::Array2i & cell_index) const;
+
+  proto::Grid2D ToProto() const override;
+  std::unique_ptr<Grid2D> ComputeCroppedGrid() const override;
+  bool DrawToSubmapTexture(
+    proto::SubmapQuery::Response::SubmapTexture * const texture,
+    transform::Rigid3d local_pose) const override;
+  bool DrawToSubmapTextureWithoutTextures(
+    proto::SubmapQuery::Response::SubmapTexture * const texture,
+    transform::Rigid3d local_pose) const override;
+  // for normal
+  int ToNormalFlatIndex(const Eigen::Array2i & cell_index) const;
+  void GrowNormalLimits(const Eigen::Vector2f & point);
+  bool MergeNormal(
+    const Eigen::Array2i & cell_index,
+    const Eigen::Vector2f & normal);
+  void SetNormalCell(
+    const Eigen::Array2i & cell_index,
+    const NormalCell & normal);
+  bool IsKnownNormal(const Eigen::Array2i & cell_index) const;
+  Eigen::Vector2f GetNormal(const Eigen::Array2i & cell_index) const;
+  NormalCell GetNormalCell(const Eigen::Array2i & cell_index) const;
+  // 生成完多栅格尺度地图为了节省内存开销，将原先法向量存储由grid_normals_转移到finished_normals_
+  bool FinishUpdateNormals() const;
+  // bool FinishNormalInFrontend();
+  // for test
+  const MapLimits & NormalLimits()const {return normal_limits_;}
+  size_t NormalSize()const {return grid_normals_.size();}
+  size_t ProbabilitySize()const {return correspondence_cost_cells().size();}
+  bool OutNormalsToFile(const std::string & filename) const;
+  sensor::NormalPointCloud GetNormals() const;
+  static std::shared_ptr<NormalGrid> LoadFromImage(
+    const std::vector<uint8_t> & map_data,
+    const sensor::NormalPointCloud & normals,
+    const std::vector<std::pair<Eigen::Array2i, Eigen::Array2i>> & weight_lines,
+    const std::vector<std::pair<Eigen::Array2i, Eigen::Array2i>> & weight_areas,
+    const Eigen::Vector2d & origin, const Eigen::Vector2i & size,
+    double scale, double negate, double occupied_thresh, double free_thresh)
+  {
+    //                  std::cout<<"ppp"<<std::endl;
+    static mapping::ValueConversionTables conversion_tables_ =
+      mapping::ValueConversionTables();
+    // std::cout<< size[0] << " "<<size[1]<<std::endl;
+    return InitFromImage(
+      map_data, normals, weight_lines, weight_areas,
+      origin, size, scale, conversion_tables_);
+  }
+
+private:
+  void GrowNormalLimits(
+    const Eigen::Vector2f & point,
+    const std::vector<std::vector<NormalCell> *> & grids,
+    const std::vector<NormalCell> & grids_unknown_cell_values);
+  ValueConversionTables * conversion_tables_;
+  mutable std::vector<NormalCell> grid_normals_;
+  MapLimits normal_limits_;
+
+  // 生成完多栅格尺度地图为了节省内存开销，将原先法向量存储由grid_normals_转移到finished_normals_
+  mutable std::vector<std::pair<Eigen::Vector2f, Eigen::Vector2f>> finished_normals_;
+  mutable std::atomic_flag is_finished_;
+};
+
+}  // namespace mapping
+}  // namespace cartographer
+
+#endif  // CARTOGRAPHER__MAPPING__2D__NORMAL_GRID_H_

@@ -51,8 +51,10 @@ class PointCloud {
   using ConstIterator = std::vector<PointType>::const_iterator;
   ConstIterator begin() const;
   ConstIterator end() const;
+  ConstIterator erase(ConstIterator it);
 
-  void push_back(PointType value);
+  void push_back(PointType value, float intensity = 0.0);
+  void InsertCloud(const PointCloud & cloud);
 
   // Creates a PointCloud consisting of all the points for which `predicate`
   // returns true, together with the corresponding intensities.
@@ -97,10 +99,18 @@ class PointCloud {
 // If timing is not available, all fourth entries are 0.f. For 2D points, the
 // third entry is 0.f (and the fourth entry is time).
 using TimedPointCloud = std::vector<TimedRangefinderPoint>;
+using NormalPointCloud = std::vector<NormalRangefinderPoint>;
+using PointCloudWithIntensity = std::vector<IntensityRangefinderPoint>;
 
 // TODO(wohe): Retained for cartographer_ros. To be removed once it is no
 // longer used there.
 struct PointCloudWithIntensities {
+  TimedPointCloud points;
+  std::vector<float> intensities;
+};
+
+struct TimedPointCloudWithIntensities
+{
   TimedPointCloud points;
   std::vector<float> intensities;
 };
@@ -110,15 +120,8 @@ PointCloud TransformPointCloud(const PointCloud& point_cloud,
                                const transform::Rigid3f& transform);
 
 // Transforms 'point_cloud' according to 'transform'.
-// TimedPointCloud TransformTimedPointCloud(const TimedPointCloud& point_cloud,
-//                                          const transform::Rigid3f& transform);
-// added by hz
 TimedPointCloud TransformTimedPointCloud(const TimedPointCloud& point_cloud,
-                                         const transform::Rigid3f& transformbool,
-                                         bool if_filter = false,
-                                         float robot_x = 0.6,
-                                         float robot_y = 0.3);
-// added by hz end
+                                         const transform::Rigid3f& transform);
 
 // Returns a new point cloud without points that fall outside the region defined
 // by 'min_z' and 'max_z'.

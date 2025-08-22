@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package cartographer.mapping.scan_matching.proto;
+message LineMatcherOptions {
+  double line_delta_theta_threshold = 1;
+  double line_delta_tra_elongation_threshold = 2;
+  double min_delta_tra_parallel = 3;
+}

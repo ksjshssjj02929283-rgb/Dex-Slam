@@ -39,6 +39,19 @@ struct TimedRangefinderPoint {
   float time;
 };
 
+// Stores 3D position of a point observed by a rangefinder sensor.
+struct NormalRangefinderPoint
+{
+  Eigen::Vector3f position;
+  Eigen::Vector3f normal;
+};
+
+struct IntensityRangefinderPoint
+{
+  Eigen::Vector3f position;
+  float intensity;
+};
+
 template <class T>
 inline RangefinderPoint operator*(const transform::Rigid3<T>& lhs,
                                   const RangefinderPoint& rhs) {

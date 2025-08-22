@@ -22,10 +22,16 @@
 #include <fstream>
 #include <limits>
 
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/io/pcd_io.h>
+
 #include "Eigen/Geometry"
 #include "absl/memory/memory.h"
 #include "cartographer/common/port.h"
+#include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
+// #include "cartographer/mapping/2d/normal_grid_range_data_inserter_2d.h"
 #include "cartographer/mapping/internal/2d/tsdf_range_data_inserter_2d.h"
 #include "cartographer/mapping/range_data_inserter_interface.h"
 #include "glog/logging.h"
@@ -38,6 +44,16 @@ proto::SubmapsOptions2D CreateSubmapsOptions2D(
   proto::SubmapsOptions2D options;
   options.set_num_range_data(
       parameter_dictionary->GetNonNegativeInt("num_range_data"));
+  options.set_cloud_culling_prob(
+      parameter_dictionary->GetDouble("cloud_culling_prob"));
+  options.set_min_line_length(
+      parameter_dictionary->GetDouble("min_line_length"));
+  options.set_max_line_length(
+      parameter_dictionary->GetDouble("max_line_length"));
+  options.set_line_culling_obs(
+      parameter_dictionary->GetInt("line_culling_obs"));
+  options.set_culling_interval(
+      parameter_dictionary->GetInt("culling_interval"));
   *options.mutable_grid_options_2d() = CreateGridOptions2D(
       parameter_dictionary->GetDictionary("grid_options_2d").get());
   *options.mutable_range_data_inserter_options() =
@@ -64,15 +80,28 @@ proto::SubmapsOptions2D CreateSubmapsOptions2D(
       << "Invalid combination grid_type " << grid_type
       << " with range_data_inserter_type " << range_data_inserter_type;
   CHECK_GT(options.num_range_data(), 0);
+  CHECK_GE(options.cloud_culling_prob(), 0.1);
+  CHECK_LE(options.cloud_culling_prob(), 0.9);
   return options;
 }
 
-Submap2D::Submap2D(const Eigen::Vector2f& origin, std::unique_ptr<Grid2D> grid,
-                   ValueConversionTables* conversion_tables)
+Submap2D::Submap2D(const Eigen::Vector2f& origin,
+                   std::unique_ptr<Grid2D> grid,
+                   ValueConversionTables* conversion_tables,
+                   std::unique_ptr<sensor::PointCloud> cloud,
+                   std::unique_ptr<sensor::PointCloud> highlight_cloud,
+                   int latest_line_id,
+                   std::map<int, MapLine2D> active_line_data)
     : Submap(transform::Rigid3d::Translation(
           Eigen::Vector3d(origin.x(), origin.y(), 0.))),
       conversion_tables_(conversion_tables) {
   grid_ = std::move(grid);
+  cloud_ = std::move(cloud);
+  highlight_cloud_ = std::move(highlight_cloud);
+  cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  line_map_2d_list_ = std::make_unique<LineMap2DList>(
+      latest_line_id, std::move(active_line_data));
 }
 
 Submap2D::Submap2D(const proto::Submap2D& proto,
@@ -81,15 +110,22 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
       conversion_tables_(conversion_tables) {
   if (proto.has_grid()) {
     if (proto.grid().has_probability_grid_2d()) {
+      // 占用栅格地图，对象初始化
       grid_ =
-          absl::make_unique<ProbabilityGrid>(proto.grid(), conversion_tables_);
+          std::make_unique<ProbabilityGrid>(proto.grid(), conversion_tables_);
     } else if (proto.grid().has_tsdf_2d()) {
-      grid_ = absl::make_unique<TSDF2D>(proto.grid(), conversion_tables_);
+      // TSDF地图，对象初始化
+      grid_ = std::make_unique<TSDF2D>(proto.grid(), conversion_tables_);
     } else {
       LOG(FATAL) << "proto::Submap2D has grid with unknown type.";
     }
   }
-  set_num_range_data(proto.num_range_data());
+  cloud_ = std::make_unique<sensor::PointCloud>();
+  highlight_cloud_ = std::make_unique<sensor::PointCloud>();
+  cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  line_map_2d_list_ = std::make_unique<LineMap2DList>();
+  set_num_range_data(proto.num_range_data());  // 设置激光点数量
   set_insertion_finished(proto.finished());
 }
 
@@ -113,10 +149,10 @@ void Submap2D::UpdateFromProto(const proto::Submap& proto) {
   set_insertion_finished(submap_2d.finished());
   if (proto.submap_2d().has_grid()) {
     if (proto.submap_2d().grid().has_probability_grid_2d()) {
-      grid_ = absl::make_unique<ProbabilityGrid>(proto.submap_2d().grid(),
+      grid_ = std::make_unique<ProbabilityGrid>(proto.submap_2d().grid(),
                                                  conversion_tables_);
     } else if (proto.submap_2d().grid().has_tsdf_2d()) {
-      grid_ = absl::make_unique<TSDF2D>(proto.submap_2d().grid(),
+      grid_ = std::make_unique<TSDF2D>(proto.submap_2d().grid(),
                                         conversion_tables_);
     } else {
       LOG(FATAL) << "proto::Submap2D has grid with unknown type.";
@@ -124,29 +160,247 @@ void Submap2D::UpdateFromProto(const proto::Submap& proto) {
   }
 }
 
+/**
+ * @brief 将submap的信息转换为proto::SubmapQuery::Response
+ * 
+ * @param response 
+ */
 void Submap2D::ToResponseProto(
     const transform::Rigid3d&,
     proto::SubmapQuery::Response* const response) const {
   if (!grid_) return;
+  // 设置submap的观测激光数量
   response->set_submap_version(num_range_data());
+  // 获取texture
   proto::SubmapQuery::Response::SubmapTexture* const texture =
       response->add_textures();
+  // 生成submap
   grid()->DrawToSubmapTexture(texture, local_pose());
+}
+
+bool Submap2D::SaveSubmapCloud(const std::string& folder,
+                               const std::string& filename)
+{
+  if (!boost::filesystem::is_directory(folder)) {
+    LOG(INFO) << "Creating folder: " << folder;
+    if (!boost::filesystem::create_directories(folder)) {
+      LOG(ERROR) << "Could not create directory: " << folder;
+      return false;
+    }
+  }
+
+  // save as pcl::PointCloud
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+  for (const auto& point : this->cloud()->points()) {
+    pcl::PointXYZ p;
+    p.x = point.position.x();
+    p.y = point.position.y();
+    p.z = 0.0;
+    cloud->push_back(p);
+  }
+
+  int res = pcl::io::savePCDFileBinary(folder + "/" + filename, *cloud);
+  return res > 0;
 }
 
 void Submap2D::InsertRangeData(
     const sensor::RangeData& range_data,
     const RangeDataInserterInterface* range_data_inserter) {
   CHECK(grid_);
+  CHECK(cloud_);
+  CHECK(highlight_cloud_);
   CHECK(!insertion_finished());
   range_data_inserter->Insert(range_data, grid_.get());
+
   set_num_range_data(num_range_data() + 1);
+}
+
+void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
+                               const sensor::PointCloud & highlight_cloud_data)
+{
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+  PointCloudToPCL(cloud_data, cloud_pcl);
+
+  if (cloud_ikdtree_->Root_Node == nullptr) {
+    float resolution = grid_->limits().resolution();
+    cloud_ikdtree_->set_downsample_param(resolution);
+    cloud_ikdtree_->Build(cloud_pcl->points);
+  } else {
+    auto add_point_size = cloud_ikdtree_->Add_Points(cloud_pcl->points, true);
+  }
+
+  if (highlight_cloud_data.size() > 0) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr highlight_cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+    PointCloudToPCL(highlight_cloud_data, highlight_cloud_pcl);
+
+    if (highlight_cloud_ikdtree_->Root_Node == nullptr) {
+      float resolution = grid_->limits().resolution();
+      highlight_cloud_ikdtree_->set_downsample_param(resolution);
+      highlight_cloud_ikdtree_->Build(highlight_cloud_pcl->points);
+    } else {
+      auto add_point_size = highlight_cloud_ikdtree_->Add_Points(highlight_cloud_pcl->points, true);
+    }
+  }
+
+  // cloud_->InsertCloud(cloud_data);
+  // highlight_cloud_->InsertCloud(highlight_cloud_data);
+
+  cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
+                          cloud_ikdtree_->PCL_Storage,
+                          ikd_tree::NOT_RECORD);
+
+  cloud_ = std::make_unique<sensor::PointCloud>();
+  for (const auto& point : cloud_ikdtree_->PCL_Storage) {
+    sensor::PointCloud::PointType p;
+    p.position.x() = point.x;
+    p.position.y() = point.y;
+    p.position.z() = 0.0;
+    cloud_->push_back(p);
+  }
+
+  highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
+                                    highlight_cloud_ikdtree_->PCL_Storage,
+                                    ikd_tree::NOT_RECORD);
+
+  highlight_cloud_ = std::make_unique<sensor::PointCloud>();
+  for (const auto& point : highlight_cloud_ikdtree_->PCL_Storage) {
+    sensor::PointCloud::PointType p;
+    p.position.x() = point.x;
+    p.position.y() = point.y;
+    p.position.z() = 0.0;
+    highlight_cloud_->push_back(p);
+  }
+
+  cloud_culling_count_++;
+  // 当cloud_culling_prob = 0.1时，不进行culling操作
+  if ((cloud_culling_prob_ - 0.1) < std::numeric_limits<double>::epsilon()) {
+    return;
+  }
+  
+  if (cloud_culling_count_ % culling_interval_ != 0) {
+    return;
+  }
+
+  CloudDataCulling();
+}
+
+
+// void Submap2D::GenerateCloudKdTree()
+// {
+//   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+//   for (const auto& p : cloud_->points()) {
+//     pcl::PointXYZ p_pcl;
+//     p_pcl.x = p.position.x();
+//     p_pcl.y = p.position.y();
+//     p_pcl.z = p.position.z();
+//     // pcl::PointXYZ p_pcl_transformed;
+//     // pcl::transformPoint(p_pcl, p_pcl_transformed, local_pose().cast<float>());
+//     cloud_pcl->push_back(p_pcl);
+//   }
+//   cloud_kdtree_->setInputCloud(cloud_pcl);
+
+//   pcl::PointCloud<pcl::PointXYZ>::Ptr highlight_cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+
+//   for (const auto& p : highlight_cloud_->points()) {
+//     pcl::PointXYZ p_pcl;
+//     p_pcl.x = p.position.x();
+//     p_pcl.y = p.position.y();
+//     p_pcl.z = p.position.z();
+
+//     // pcl::PointXYZ p_pcl_transformed;
+//     // pcl::transformPoint(p_pcl, p_pcl_transformed, local_pose().cast<float>());
+//     highlight_cloud_pcl->push_back(p_pcl);
+//   }
+
+//   if (!highlight_cloud_pcl->empty()) {
+//     highlight_cloud_kdtree_->setInputCloud(highlight_cloud_pcl);
+//   }
+// }
+
+void Submap2D::CloudDataCulling()
+{
+  const MapLimits& limits = grid_->limits();
+
+  ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_to_delete; // 用于保存需要删除的点  
+  for (auto iter = cloud_ikdtree_->PCL_Storage.begin(); iter != cloud_ikdtree_->PCL_Storage.end(); iter++) {
+    Eigen::Vector2f p_vec(iter->x, iter->y);
+    const Eigen::Array2i p_ind = limits.GetCellIndex(p_vec);
+    const float prob = CorrespondenceCostToProbability(grid_->GetCorrespondenceCost(p_ind));
+    if (prob < cloud_culling_prob_) {
+      points_to_delete.emplace_back(*iter); // 将需要删除的点保存到向量中  
+    }
+  }
+  cloud_ikdtree_->Delete_Points(points_to_delete);
+
+  points_to_delete.clear();
+  for (auto iter = highlight_cloud_ikdtree_->PCL_Storage.begin(); iter != highlight_cloud_ikdtree_->PCL_Storage.end(); iter++) {
+    Eigen::Vector2f p_vec(iter->x, iter->y);
+    const Eigen::Array2i p_ind = limits.GetCellIndex(p_vec);
+    const float prob = CorrespondenceCostToProbability(grid_->GetCorrespondenceCost(p_ind));
+    if (prob < cloud_culling_prob_) {
+      points_to_delete.emplace_back(*iter); // 将需要删除的点保存到向量中  
+    }
+  }
+  highlight_cloud_ikdtree_->Delete_Points(points_to_delete);
+}
+
+void Submap2D::PointCloudToPCL(const sensor::PointCloud & cloud_data,
+                               pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud)
+{
+  if (pcl_cloud == nullptr) {
+    pcl_cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+  }
+
+  for (const auto& p : cloud_data.points()) {
+    pcl::PointXYZ p_pcl;
+    p_pcl.x = p.position.x();
+    p_pcl.y = p.position.y();
+    p_pcl.z = p.position.z();
+    pcl_cloud->push_back(p_pcl);
+  }
+}
+
+void Submap2D::SetLineCullingParam(const double& min_line_length,
+                          const double& max_line_length,
+                          const int& culling_obs)
+{
+  line_map_2d_list_->SetCullingParam(min_line_length, max_line_length, culling_obs);
+}
+
+void Submap2D::InsertLineData(
+  const std::map<int, std::vector<sensor::LineData>> & line_data)
+{
+  // std::cout << "line_data: " << line_data.size() << std::endl;
+  line_map_2d_list_->UpdateLoseTime();
+  for (auto iter = line_data.begin(); iter != line_data.end(); iter++) {
+    if (iter->first < 0) {
+      line_map_2d_list_->PushBack(iter->second);
+    } else {
+      line_map_2d_list_->UpdateLineMap(iter->first, iter->second);
+    }
+  }
+  line_culling_count_++;
+  if (line_culling_count_ % culling_interval_ == 0) {
+    line_map_2d_list_->LineDataCulling();
+  }
+}
+
+void Submap2D::InsertReflectorData(
+  const std::vector<sensor::LandmarkPointData> & reflector_data)
+{
+  reflector_map_.insert(
+    reflector_map_.end(), reflector_data.begin(), reflector_data.end());
 }
 
 void Submap2D::Finish() {
   CHECK(grid_);
+  CHECK(cloud_);
+  CHECK(highlight_cloud_);
   CHECK(!insertion_finished());
   grid_ = grid_->ComputeCroppedGrid();
+  line_map_2d_list_->LineDataCulling();
+  CloudDataCulling();
   set_insertion_finished(true);
 }
 
@@ -160,6 +414,7 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::submaps() const {
 
 std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
     const sensor::RangeData& range_data) {
+  // TODO: 增加角速度过大时候，不增加submap的操作(旋转中增加submap会增大建图的误差)
   if (submaps_.empty() ||
       submaps_.back()->num_range_data() == options_.num_range_data()) {
     AddSubmap(range_data.origin.head<2>());
@@ -167,21 +422,62 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
   for (auto& submap : submaps_) {
     submap->InsertRangeData(range_data, range_data_inserter_.get());
   }
+
   if (submaps_.front()->num_range_data() == 2 * options_.num_range_data()) {
     submaps_.front()->Finish();
+
+    // static int submap_count = 0;
+    // std::string folder = "/home/ubt/data/submaps/";
+    // std::string filename = "submap_" + std::to_string(submap_count++) + ".pcd";
+    // submaps_.front()->SaveSubmapCloud(folder, filename);
+    // submaps_.front()->grid()->DrawAsImage(folder, filename);
   }
   return submaps();
+}
+
+void ActiveSubmaps2D::InsertReflectorData(
+  const std::vector<sensor::LandmarkPointData> & reflector_data)
+{
+  if (submaps_.empty() || reflector_data.empty()) {
+    return;
+  }
+  // 反光柱只与前一个子图绑定
+  submaps_.front()->InsertReflectorData(reflector_data);
+}
+
+void ActiveSubmaps2D::InsertLineData(
+  const std::map<int, std::vector<sensor::LineData>> & line_data)
+{
+  // std::cout << "\033[31m InsertLineData \033[0m" << std::endl;
+  if (submaps_.empty() || line_data.empty()) {
+    // std::cout << "return" << std::endl;
+    return;
+  }
+  for (auto & submap : submaps_) {
+    submap->InsertLineData(line_data);
+  }
+}
+
+void ActiveSubmaps2D::InsertCloudData(const sensor::PointCloud & cloud_data,
+                                      const sensor::PointCloud & highlight_cloud_data)
+{
+  if (submaps_.empty()) {
+    return;
+  }
+  for (auto & submap : submaps_) {
+    submap->InsertCloudData(cloud_data, highlight_cloud_data);
+  }
 }
 
 std::unique_ptr<RangeDataInserterInterface>
 ActiveSubmaps2D::CreateRangeDataInserter() {
   switch (options_.range_data_inserter_options().range_data_inserter_type()) {
     case proto::RangeDataInserterOptions::PROBABILITY_GRID_INSERTER_2D:
-      return absl::make_unique<ProbabilityGridRangeDataInserter2D>(
+      return std::make_unique<ProbabilityGridRangeDataInserter2D>(
           options_.range_data_inserter_options()
               .probability_grid_range_data_inserter_options_2d());
     case proto::RangeDataInserterOptions::TSDF_INSERTER_2D:
-      return absl::make_unique<TSDFRangeDataInserter2D>(
+      return std::make_unique<TSDFRangeDataInserter2D>(
           options_.range_data_inserter_options()
               .tsdf_range_data_inserter_options_2d());
     default:
@@ -195,7 +491,7 @@ std::unique_ptr<GridInterface> ActiveSubmaps2D::CreateGrid(
   float resolution = options_.grid_options_2d().resolution();
   switch (options_.grid_options_2d().grid_type()) {
     case proto::GridOptions2D::PROBABILITY_GRID:
-      return absl::make_unique<ProbabilityGrid>(
+      return std::make_unique<ProbabilityGrid>(
           MapLimits(resolution,
                     origin.cast<double>() + 0.5 * kInitialSubmapSize *
                                                 resolution *
@@ -203,7 +499,7 @@ std::unique_ptr<GridInterface> ActiveSubmaps2D::CreateGrid(
                     CellLimits(kInitialSubmapSize, kInitialSubmapSize)),
           &conversion_tables_);
     case proto::GridOptions2D::TSDF:
-      return absl::make_unique<TSDF2D>(
+      return std::make_unique<TSDF2D>(
           MapLimits(resolution,
                     origin.cast<double>() + 0.5 * kInitialSubmapSize *
                                                 resolution *
@@ -228,12 +524,30 @@ void ActiveSubmaps2D::AddSubmap(const Eigen::Vector2f& origin) {
     CHECK(submaps_.front()->insertion_finished());
     submaps_.erase(submaps_.begin());
   }
-  submaps_.push_back(absl::make_unique<Submap2D>(
+
+  int latest_line_id = 0;
+  std::map<int, MapLine2D> active_line_data;
+  if (submaps_.size() != 0) {
+    latest_line_id = submaps_.front()->line_map_2d_list()->latest_local_id();
+    active_line_data = submaps_.front()->line_map_2d_list()->GetActiveLineData();
+  }
+
+  submaps_.push_back(std::make_unique<Submap2D>(
       origin,
       std::unique_ptr<Grid2D>(
           static_cast<Grid2D*>(CreateGrid(origin).release())),
-      &conversion_tables_));
+      &conversion_tables_,
+      std::make_unique<sensor::PointCloud>(),
+      std::make_unique<sensor::PointCloud>(),
+      latest_line_id, active_line_data));
+  submaps_.back()->SetCloudCullingProb(options_.cloud_culling_prob());
+  submaps_.back()->SetLineCullingParam(options_.min_line_length(),
+                                       options_.max_line_length(),
+                                       options_.line_culling_obs());
+  submaps_.back()->SetCullingInterval(options_.culling_interval());
 }
+
+
 
 }  // namespace mapping
 }  // namespace cartographer

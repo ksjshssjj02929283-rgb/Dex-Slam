@@ -121,6 +121,9 @@ class FastCorrelativeScanMatcher3DTest : public ::testing::Test {
     return TrajectoryNode::Data{common::FromUniversal(0),
                                 Eigen::Quaterniond::Identity(),
                                 {},
+                                {},
+                                {},
+                                {},
                                 point_cloud_,
                                 low_resolution_point_cloud,
                                 GetRotationalScanMatcherHistogram()};

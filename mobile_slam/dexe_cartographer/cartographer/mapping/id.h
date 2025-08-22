@@ -55,6 +55,7 @@ common::Time GetTime(const T& t) {
 // Uniquely identifies a trajectory node using a combination of a unique
 // trajectory ID and a zero-based index of the node inside that trajectory.
 struct NodeId {
+  NodeId() = default;
   NodeId(int trajectory_id, int node_index)
       : trajectory_id(trajectory_id), node_index(node_index) {}
 

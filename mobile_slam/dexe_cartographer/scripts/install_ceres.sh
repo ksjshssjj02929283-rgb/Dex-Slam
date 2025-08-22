@@ -1,5 +1,3 @@
-#!/bin/sh
-
 # Copyright 2016 The Cartographer Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,18 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -o errexit
-set -o verbose
+FROM ubuntu:trusty
 
-VERSION="1.13.0"
+ARG cc
+ARG cxx
 
-# Build and install Ceres.
-git clone https://ceres-solver.googlesource.com/ceres-solver
-cd ceres-solver
-git checkout tags/${VERSION}
-mkdir build
-cd build
-cmake .. -G Ninja -DCXX11=ON
-ninja
-CTEST_OUTPUT_ON_FAILURE=1 ninja test
-sudo ninja install
+# Set the preferred C/C++ compiler toolchain, if given (otherwise default).
+ENV CC=$cc
+ENV CXX=$cxx
+
+COPY scripts/install_debs_bazel.sh cartographer/scripts/
+RUN cartographer/scripts/install_debs_bazel.sh && rm -rf /var/lib/apt/lists/*
+COPY . cartographer
+RUN cartographer/scripts/install_cartographer_bazel.sh && rm -rf cartographer

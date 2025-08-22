@@ -102,7 +102,10 @@ TEST(Submap2DTest, ToFromProto) {
   Submap2D expected(Eigen::Vector2f(4.f, 5.f),
                     absl::make_unique<ProbabilityGrid>(expected_map_limits,
                                                        &conversion_tables),
-                    &conversion_tables);
+                    &conversion_tables,
+                    absl::make_unique<sensor::PointCloud>(),
+                    absl::make_unique<sensor::PointCloud>(),
+                    0, std::map<int, cartographer::mapping::MapLine2D>());
   const proto::Submap proto =
       expected.ToProto(true /* include_probability_grid_data */);
   EXPECT_TRUE(proto.has_submap_2d());

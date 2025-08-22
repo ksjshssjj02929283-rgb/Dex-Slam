@@ -1,0 +1,46 @@
+// Copyright 2016 The Cartographer Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package cartographer.laser_perception.proto;
+message LaserPerceptionOptions {
+  bool predict_rec = 1;
+  bool reflect_rec = 2;
+  bool shape_rec = 3;
+  bool line_rec = 4;
+  bool angle_rec = 5;
+  int32 intensity_threshold = 6;
+  double connect_threshold = 7;
+  int32 min_cluster_points = 8;
+  double search_distance = 9;
+  double max_dis_error = 10;
+  double max_ang_error = 11;
+  double start_rec_dis = 12;
+  string target_file = 13;
+  string model_file = 14;
+  int32 min_select_points = 15;
+  double reflector_error = 16;
+  double reflector_radius = 17;
+  double min_line_length = 18;
+  double shape_match_score = 19;
+  double shape_match_close_degree = 20;
+  double shape_dis_to_robot_center = 21;
+  int32 intensity_max_threshold = 22;
+  int32 laser_intensity_type = 23;
+  double intensity_max_range_threshold = 24;
+  double intensity_min_range_threshold = 25;
+  double reflector_error_range = 26;
+  double angle_increment = 27;
+}

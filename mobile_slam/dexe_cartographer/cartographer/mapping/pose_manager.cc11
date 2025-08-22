@@ -1,0 +1,194 @@
+/*
+ * Copyright 2017 The Cartographer Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "cartographer/mapping/pose_manager.h"
+
+#include <algorithm>
+
+#include "absl/memory/memory.h"
+#include "cartographer/transform/transform.h"
+#include "glog/logging.h"
+
+namespace cartographer {
+namespace mapping {
+
+PoseManager::PoseManager(const common::Duration pose_queue_duration)
+    : pose_queue_duration_(pose_queue_duration),
+      cached_extrapolated_pose_{common::Time::min(),
+                                transform::Rigid3d::Identity()} {}
+
+/**
+ * @brief 获取最新的位姿时间（如果刚初始化，则为duration::min）
+ * 
+ * @return common::Time 
+ */
+common::Time PoseManager::GetLastPoseTime() const {
+  if (timed_pose_queue_.empty()) {
+    return common::Time::min();
+  }
+  return timed_pose_queue_.back().time;
+}
+
+common::Time PoseManager::GetLastExtrapolatedTime() const {
+  if (!extrapolation_imu_tracker_) {
+    return common::Time::min();
+  }
+  return extrapolation_imu_tracker_->time();
+}
+
+void PoseManager::AddPose(const common::Time time,
+                               const transform::Rigid3d& pose) {
+  // timed_pose_queue_中加入新的位姿
+  timed_pose_queue_.push_back(TimedPose{time, pose});
+  // 2. TrimPoseData
+  while (timed_pose_queue_.size() > 2 &&
+         timed_pose_queue_[1].time <= time - pose_queue_duration_) {
+    timed_pose_queue_.pop_front();
+  }
+  // 3. 计算队列中速度的平均值
+  UpdateVelocitiesFromPoses();
+  TrimOdometryData();
+}
+
+
+/**
+ * @brief 加入里程计数据
+ * 
+ * @param odometry_data 
+ */
+void PoseManager::AddOdometryData(
+    const sensor::OdometryData& odometry_data) {
+  CHECK(timed_pose_queue_.empty() ||
+        odometry_data.time >= timed_pose_queue_.back().time);
+
+  transform::Rigid3d odom_delta_pose =
+    last_odometry_data_.pose.inverse() * odometry_data.pose;
+  last_odometry_data_ = odometry_data;
+  
+  transform::Rigid3d latest_pose = timed_pose_queue_.back().pose;
+  TimedPose new_pose{odometry_data.time, latest_pose * odom_delta_pose};
+  timed_pose_queue_.push_back(new_pose);
+
+  odometry_data_buff_.push_back(odometry_data);
+  TrimOdometryData();  // 清除过期的里程计数据
+  if (odometry_data_.size() < 2) {
+    return;
+  }
+
+}
+
+/**
+ * @brief 插值计算当前时间的位姿
+ * 
+ * @param time 
+ * @return transform::Rigid3d 
+ */
+transform::Rigid3d PoseManager::ExtrapolatePose(const common::Time time) {
+  // 1. 获取队列中最新的位姿
+  const TimedPose& newest_timed_pose = timed_pose_queue_.back();
+  // 2. 如果请求的时间大于等于最新的位姿，则报错
+  CHECK_GE(time, newest_timed_pose.time);
+  if (cached_extrapolated_pose_.time != time) {
+    // 3. 根据线速度，对位置进行插值
+    const Eigen::Vector3d translation =
+        ExtrapolateTranslation(time) + newest_timed_pose.pose.translation();
+    // 4. 根据角速度，对角度进行插值
+    const Eigen::Quaterniond rotation =
+        newest_timed_pose.pose.rotation() *
+        ExtrapolateRotation(time, extrapolation_imu_tracker_.get());
+    cached_extrapolated_pose_ =
+        TimedPose{time, transform::Rigid3d{translation, rotation}};
+  }
+  return cached_extrapolated_pose_.pose;
+}
+
+/**
+ * @brief 从位姿队列中计算速度，长度为pose_queue_duration_时间内的位姿
+ * 
+ */
+void PoseManager::UpdateVelocitiesFromPoses() {
+  if (timed_pose_queue_.size() < 2) {
+    // We need two poses to estimate velocities.
+    return;
+  }
+  CHECK(!timed_pose_queue_.empty());
+  const TimedPose& newest_timed_pose = timed_pose_queue_.back();
+  const auto newest_time = newest_timed_pose.time;
+  const TimedPose& oldest_timed_pose = timed_pose_queue_.front();
+  const auto oldest_time = oldest_timed_pose.time;
+  const double queue_delta = common::ToSeconds(newest_time - oldest_time);
+  if (queue_delta < common::ToSeconds(pose_queue_duration_)) {
+    LOG(WARNING) << "Queue too short for velocity estimation. Queue duration: "
+                 << queue_delta << " s";
+    return;
+  }
+  // 计算速度只用了最新和最老的位姿
+  const transform::Rigid3d& newest_pose = newest_timed_pose.pose;
+  const transform::Rigid3d& oldest_pose = oldest_timed_pose.pose;
+  linear_velocity_from_poses_ =
+      (newest_pose.translation() - oldest_pose.translation()) / queue_delta;
+  angular_velocity_from_poses_ =
+      transform::RotationQuaternionToAngleAxisVector(
+          oldest_pose.rotation().inverse() * newest_pose.rotation()) /
+      queue_delta;
+}
+
+/**
+ * @brief 清除旧的里程计数据，timed_pose_queue_是插值器中最后一个位姿的时间，
+ *        这个操作就是将odometry_data_buff_中的数据，早于插值器位姿列表的数据，处理最后一个，都剔除掉
+ *        这样，odom的时间，就是从timed_pose_queue_的前一帧里程计信息到最新的里程计信息
+ * 
+ */
+void PoseManager::TrimOdometryData() {
+  while (odometry_data_buff_.size() > 2 && !timed_pose_queue_.empty() &&
+         odometry_data_buff_[1].time <= timed_pose_queue_.back().time) {
+    odometry_data_buff_.pop_front();
+  }
+}
+
+/**
+ * @brief 根据角速度，对角度进行插值
+ * 
+ * @param time 
+ * @param imu_tracker 
+ * @return Eigen::Quaterniond 
+ */
+Eigen::Quaterniond PoseManager::ExtrapolateRotation(
+    const common::Time time) const {
+  CHECK_GE(time, imu_tracker->time());
+  AdvanceImuTracker(time, imu_tracker);
+  const Eigen::Quaterniond last_orientation = imu_tracker_->orientation();
+  return last_orientation.inverse() * imu_tracker->orientation();
+}
+
+/**
+ * @brief 根据线速度，对位姿进行插值
+ * 
+ * @param time 
+ * @return Eigen::Vector3d 
+ */
+Eigen::Vector3d PoseManager::ExtrapolateTranslation(common::Time time) {
+  const TimedPose& newest_timed_pose = timed_pose_queue_.back();
+  const double extrapolation_delta =
+      common::ToSeconds(time - newest_timed_pose.time);
+  if (odometry_data_buff_.size() < 2) {
+    return extrapolation_delta * linear_velocity_from_poses_;
+  }
+  return extrapolation_delta * linear_velocity_from_odometry_;
+}
+
+}  // namespace mapping
+}  // namespace cartographer

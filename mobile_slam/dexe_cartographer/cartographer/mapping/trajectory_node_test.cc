@@ -37,6 +37,12 @@ TEST(TrajectoryNodeTest, ToAndFromProto) {
                               {Eigen::Vector3f{0.f, 0.f, 1.f}}}))
           .Decompress(),
       sensor::CompressedPointCloud(
+          sensor::PointCloud({{Eigen::Vector3f{1.f, 2.f, 0.f}},
+                              {Eigen::Vector3f{0.f, 0.f, 1.f}}}))
+          .Decompress(),
+      {},
+      {},
+      sensor::CompressedPointCloud(
           sensor::PointCloud({{Eigen::Vector3f{2.f, 3.f, 4.f}}}))
           .Decompress(),
       sensor::CompressedPointCloud(
