@@ -25,13 +25,6 @@ option(BUILD_GRPC "build Cartographer gRPC support" false)
 set(CARTOGRAPHER_HAS_GRPC ${BUILD_GRPC})
 option(BUILD_PROMETHEUS "build Prometheus monitoring support" false)
 
-# added by hz
-set(GLOG_INCLUDE_DIR "/root/Third-Party/glog-0.4.0/include")
-set(GLOG_LIBRARY_DIR "/root/Third-Party/glog-0.4.0/lib-static")
-set(GLOG_LIBRARY "${GLOG_LIBRARY_DIR}/libglog.a")
-set(CMAKE_PREFIX_PATH "/root/Third-Party/glog-0.4.0" ${CMAKE_PREFIX_PATH})
-#
-
 include("${PROJECT_SOURCE_DIR}/cmake/functions.cmake")
 google_initialize_cartographer_project()
 google_enable_testing()
