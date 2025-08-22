@@ -24,7 +24,10 @@ namespace sensor {
 
 PointCloud::PointCloud() {}
 PointCloud::PointCloud(std::vector<PointCloud::PointType> points)
-    : points_(std::move(points)) {}
+    : points_(std::move(points))
+{
+  intensities_ = std::vector<float>(points_.size(), 0.0);
+}
 PointCloud::PointCloud(std::vector<PointType> points,
                        std::vector<float> intensities)
     : points_(std::move(points)), intensities_(std::move(intensities)) {
@@ -48,10 +51,26 @@ const PointCloud::PointType& PointCloud::operator[](const size_t index) const {
 
 PointCloud::ConstIterator PointCloud::begin() const { return points_.begin(); }
 PointCloud::ConstIterator PointCloud::end() const { return points_.end(); }
-
-void PointCloud::push_back(PointCloud::PointType value) {
-  points_.push_back(std::move(value));
+PointCloud::ConstIterator PointCloud::erase(ConstIterator it)
+{
+  size_t offset = it - points_.begin();
+  assert(intensities_.begin() + offset < intensities_.end());
+  intensities_.erase(intensities_.begin() + offset);
+  return points_.erase(it);
 }
+
+void PointCloud::push_back(PointType value, float intensity)
+{
+  points_.push_back(std::move(value));
+  intensities_.push_back(intensity);
+}
+
+void PointCloud::InsertCloud(const PointCloud & cloud) {
+  points_.insert(points_.end(), cloud.points().begin(), cloud.points().end());
+  intensities_.insert(intensities_.end(), cloud.intensities().begin(),
+                      cloud.intensities().end());
+}
+
 
 PointCloud TransformPointCloud(const PointCloud& point_cloud,
                                const transform::Rigid3f& transform) {
@@ -63,38 +82,11 @@ PointCloud TransformPointCloud(const PointCloud& point_cloud,
   return PointCloud(points, point_cloud.intensities());
 }
 
-// source code
-// TimedPointCloud TransformTimedPointCloud(const TimedPointCloud& point_cloud,
-//                                          const transform::Rigid3f& transform) {
-//   TimedPointCloud result;
-//   result.reserve(point_cloud.size());
-//   for (const TimedRangefinderPoint& point : point_cloud) {
-//     result.push_back(transform * point);
-//   }
-//   return result;
-// }
-
-// modified by hz
-// 过滤掉距离机器人中心robot_x和robot_y范围内的激光点
 TimedPointCloud TransformTimedPointCloud(const TimedPointCloud& point_cloud,
-                                         const transform::Rigid3f& transform,
-                                         bool if_filter,
-                                         float robot_x,
-                                         float robot_y) {
+                                         const transform::Rigid3f& transform) {
   TimedPointCloud result;
   result.reserve(point_cloud.size());
-  // added by hz
-  int count = 0;
-  // end
   for (const TimedRangefinderPoint& point : point_cloud) {
-    // modified by hz
-    if(if_filter && point.position[0] < robot_x && point.position[1] < robot_y)
-    {
-      std::cout << "Filter noisy point..." << count << std::endl;
-      count++;
-      continue;
-    }
-    // end 
     result.push_back(transform * point);
   }
   return result;

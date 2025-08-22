@@ -1,0 +1,587 @@
+// Copyright (c) 2021 Geekplus Inc
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "cartographer/mapping/2d/normal_grid.h"
+
+#include <limits>
+#include <fstream>
+#include <memory>
+#include <vector>
+#include <utility>
+#include <algorithm>
+#include <string>
+
+#include "absl/memory/memory.h"
+#include "cartographer/mapping/probability_values.h"
+#include "cartographer/mapping/submaps.h"
+#include "cartographer/mapping/internal/2d/ray_to_pixel_mask.h"
+#include "opencv2/core/core.hpp"
+#include "opencv2/highgui/highgui.hpp"
+
+namespace cartographer
+{
+namespace mapping
+{
+
+
+double NormalizedAngleDiff(double a, double b)
+{
+  double d1, d2;
+  d1 = a - b;
+  d2 = 2 * M_PI - fabs(d1);
+  if (d1 > 0) {
+    d2 *= -1.0;
+  }
+  if (fabs(d1) < fabs(d2)) {
+    return d1;
+  } else {
+    return d2;
+  }
+}
+
+
+std::shared_ptr<NormalGrid> InitFromImage(
+  const std::vector<uint8_t> & map_data,
+  const sensor::NormalPointCloud & normals,
+  const std::vector<std::pair<Eigen::Array2i, Eigen::Array2i>> & weight_lines,
+  const std::vector<std::pair<Eigen::Array2i, Eigen::Array2i>> & weight_areas,
+  const Eigen::Vector2d & origin,
+  const Eigen::Vector2i & size,
+  double scale,
+  mapping::ValueConversionTables & conversion_tables)
+{
+  int num_y_cells = size[0];
+  int num_x_cells = size[1];
+  Eigen::Vector2d max = Eigen::Vector2d{origin[0] + num_y_cells * scale,
+    origin[1] + num_x_cells * scale};
+  mapping::CellLimits cell_limits(num_x_cells, num_y_cells);
+  mapping::MapLimits map_limits(scale, max, cell_limits);
+  std::shared_ptr<NormalGrid> res =
+    std::make_shared<NormalGrid>(map_limits, &conversion_tables);
+  const double reduce_occ_weight_ratio = 1.0;
+
+  if (size[0] == 1) {
+    return res;
+  }
+
+  std::vector<Eigen::Array2i> weight_points;
+  for (const auto & weight_line : weight_lines) {
+    auto tmp_weight_points =
+      mapping::RayToPixelMask(weight_line.first, weight_line.second, 1);
+    weight_points.insert(
+      weight_points.end(),
+      tmp_weight_points.begin(), tmp_weight_points.end());
+  }
+
+  for (int x = 0; x < num_x_cells; x++) {
+    for (int y = 0; y < num_y_cells; y++) {
+      int xx = num_y_cells - 1 - y;
+      // int yy = num_x_cells - 1 - x;
+      // int xx = y;
+      int yy = x;
+
+      if (map_data[xx + yy * num_y_cells] == 205 ||
+        map_data[xx + yy * num_y_cells] == 128 ||
+        map_data[xx + yy * num_y_cells] == 127 ||
+        map_data[xx + yy * num_y_cells] == 126)
+      {
+        res->set_correspondence_cost_cells()[
+          res->ToFlatIndex(Eigen::Array2i{x, y})] = 0;
+      } else {
+        // 将地图被占据的初始权重设置的稍低一些，
+        double correspondence = (map_data[xx + yy * num_y_cells]) / 255.0;
+        if (correspondence < 0.3) {
+          res->set_correspondence_cost_cells()[
+            res->ToFlatIndex(Eigen::Array2i{x, y})] =
+            mapping::BoundedFloatToValue(
+            1 - mapping::kMaxProbability * reduce_occ_weight_ratio,
+            mapping::kMinProbability, mapping::kMaxProbability);
+        } else if (correspondence < 0.7) {
+          const double occ = (1 - correspondence) * reduce_occ_weight_ratio;
+          res->set_correspondence_cost_cells()[
+            res->ToFlatIndex(Eigen::Array2i{x, y})] =
+            std::max(1, static_cast<int>((1 - occ) * 0.5 * 65535));
+        } else {
+          res->set_correspondence_cost_cells()[
+            res->ToFlatIndex(Eigen::Array2i{x, y})] = 0.5 * 65535;
+        }
+      }
+    }
+  }
+  for (auto point : weight_points) {
+    // LOG(INFO)<<point.x()<<" "<<point.y()<<" "
+    //          <<(int)map_data[point.x() + point.y() * num_y_cells];
+    res->set_correspondence_cost_cells()[
+      res->ToFlatIndex(Eigen::Array2i{point.y(), num_y_cells - point.x() - 1})] = 1;
+  }
+  for (auto area : weight_areas) {
+    auto top_left = area.first;
+    auto bottom_right = area.second;
+    CHECK_GE(bottom_right.x(), top_left.x());
+    CHECK_GE(bottom_right.y(), top_left.y());
+    for (int x = top_left.x(); x <= bottom_right.x(); x++) {
+      for (int y = top_left.y(); y <= bottom_right.y(); y++) {
+        //              if(map_data[ x + y * num_y_cells] < 100){
+        // LOG(INFO) << x << " " << y << " " << (int)map_data[x + y * num_y_cells];
+        res->set_correspondence_cost_cells()[res->ToFlatIndex(
+            Eigen::Array2i{y, num_y_cells - x - 1})] = 1;
+        //              }
+      }
+    }
+  }
+  const mapping::MapLimits & limits = res->limits();
+  for (const auto & normal_point : normals) {
+    // LOG(INFO) << "sa" << normal_point.position.head(2);
+    Eigen::Array2i cell_index = limits.GetCellIndex(normal_point.position.head(2));
+    // LOG(INFO) << cell_index;
+    res->MergeNormal(cell_index, normal_point.normal.head(2));
+  }
+  // std::unique_ptr<Grid2D> grid_2d = res->ComputeCroppedGrid();
+  // NormalGrid* normal_grid =
+  //     static_cast<NormalGrid*>(grid_2d.release());
+  // normal_grid->FinishUpdateNormals();
+  return res;  // std::shared_ptr<NormalGrid>(normal_grid);
+}
+
+
+NormalGrid::NormalGrid(
+  const MapLimits & limits,
+  ValueConversionTables * conversion_tables)
+: Grid2D(limits, kMinCorrespondenceCost, kMaxCorrespondenceCost,
+    conversion_tables),
+  conversion_tables_(conversion_tables),
+  grid_normals_(limits.cell_limits().num_x_cells *
+    limits.cell_limits().num_y_cells, kUnknownGridNormalCell),
+  normal_limits_(limits), is_finished_(ATOMIC_FLAG_INIT)
+{
+}
+
+NormalGrid::NormalGrid(
+  const proto::Grid2D & proto,
+  ValueConversionTables * conversion_tables)
+: Grid2D(proto, conversion_tables), conversion_tables_(conversion_tables),
+  grid_normals_(limits().cell_limits().num_x_cells *
+    limits().cell_limits().num_y_cells, kUnknownGridNormalCell),
+  normal_limits_(limits()), is_finished_(ATOMIC_FLAG_INIT)
+{
+  CHECK(proto.has_probability_grid_2d());
+}
+
+// Sets the probability of the cell at 'cell_index' to the given
+// 'probability'. Only allowed if the cell was unknown before.
+void NormalGrid::SetProbability(
+  const Eigen::Array2i & cell_index,
+  const float probability)
+{
+  uint16 & cell =
+    (*mutable_correspondence_cost_cells())[ToFlatIndex(cell_index)];
+  CHECK_EQ(cell, kUnknownProbabilityValue);
+  cell =
+    CorrespondenceCostToValue(ProbabilityToCorrespondenceCost(probability));
+  mutable_known_cells_box()->extend(cell_index.matrix());
+}
+
+// Applies the 'odds' specified when calling ComputeLookupTableToApplyOdds()
+// to the probability of the cell at 'cell_index' if the cell has not already
+// been updated. Multiple updates of the same cell will be ignored until
+// FinishUpdate() is called. Returns true if the cell was updated.
+//
+// If this is the first call to ApplyOdds() for the specified cell, its value
+// will be set to probability corresponding to 'odds'.
+bool NormalGrid::ApplyLookupTable(
+  const Eigen::Array2i & cell_index,
+  const std::vector<uint16> & table)
+{
+  DCHECK_EQ(table.size(), kUpdateMarker);
+  const int flat_index = ToFlatIndex(cell_index);
+  uint16 * cell = &(*mutable_correspondence_cost_cells())[flat_index];
+  if (*cell >= kUpdateMarker) {
+    return false;
+  }
+  mutable_update_indices()->push_back(flat_index);
+  *cell = table[*cell];
+  DCHECK_GE(*cell, kUpdateMarker);
+  mutable_known_cells_box()->extend(cell_index.matrix());
+  return true;
+}
+
+GridType NormalGrid::GetGridType() const
+{
+  return GridType::NORMAL_GRID;
+}
+
+// Returns the probability of the cell with 'cell_index'.
+float NormalGrid::GetProbability(const Eigen::Array2i & cell_index) const
+{
+  if (!limits().Contains(cell_index)) {return kMinProbability;}
+  return CorrespondenceCostToProbability(
+    ValueToCorrespondenceCost(
+      correspondence_cost_cells()[ToFlatIndex(cell_index)]));
+}
+
+proto::Grid2D NormalGrid::ToProto() const
+{
+  proto::Grid2D result;
+  result = Grid2D::ToProto();
+  result.mutable_probability_grid_2d();
+  return result;
+}
+
+
+std::unique_ptr<Grid2D> NormalGrid::ComputeCroppedGrid() const
+{
+  CHECK_EQ(grid_normals_.size(), correspondence_cost_cells().size());
+  Eigen::Array2i offset;
+  CellLimits cell_limits;
+  ComputeCroppedLimits(&offset, &cell_limits);
+  const double resolution = limits().resolution();
+  const Eigen::Vector2d max =
+    limits().max() - resolution * Eigen::Vector2d(offset.y(), offset.x());
+  std::unique_ptr<NormalGrid> cropped_grid =
+    absl::make_unique<NormalGrid>(
+    MapLimits(resolution, max, cell_limits), conversion_tables_);
+  // cv::Mat mat1 = cv::Mat(cell_limits.num_x_cells, cell_limits.num_y_cells,CV_8UC1);
+  for (const Eigen::Array2i & xy_index : XYIndexRangeIterator(cell_limits)) {
+    if (!IsKnown(xy_index + offset)) {continue;}
+    cropped_grid->SetProbability(xy_index, GetProbability(xy_index + offset));
+    cropped_grid->SetNormalCell(xy_index, GetNormalCell(xy_index + offset));
+    // mat1.at<uint8_t>(xy_index.x(), xy_index.y()) =
+    //    uint8_t(255*GetProbability(xy_index + offset));
+  }
+  // static int index = 0;
+  // cv::imwrite("/home/lmt/cartographer/data/submaps" + std::to_string(index++) + ".png",mat1);
+  return std::unique_ptr<Grid2D>(cropped_grid.release());
+}
+
+bool NormalGrid::DrawToSubmapTexture(
+  proto::SubmapQuery::Response::SubmapTexture * const texture,
+  transform::Rigid3d local_pose) const
+{
+  Eigen::Array2i offset;
+  CellLimits cell_limits;
+  ComputeCroppedLimits(&offset, &cell_limits);
+
+  std::string cells;
+  for (const Eigen::Array2i & xy_index : XYIndexRangeIterator(cell_limits)) {
+    if (!IsKnown(xy_index + offset)) {
+      cells.push_back(0 /* unknown log odds value */);
+      cells.push_back(0 /* alpha */);
+      continue;
+    }
+    // We would like to add 'delta' but this is not possible using a value and
+    // alpha. We use premultiplied alpha, so when 'delta' is positive we can
+    // add it by setting 'alpha' to zero. If it is negative, we set 'value' to
+    // zero, and use 'alpha' to subtract. This is only correct when the pixel
+    // is currently white, so walls will look too gray. This should be hard to
+    // detect visually for the user, though.
+    const int delta =
+      128 - ProbabilityToLogOddsInteger(GetProbability(xy_index + offset));
+    const uint8 alpha = delta > 0 ? 0 : -delta;
+    const uint8 value = delta > 0 ? delta : 0;
+    cells.push_back(value);
+    cells.push_back((value || alpha) ? alpha : 1);
+  }
+
+  common::FastGzipString(cells, texture->mutable_cells());
+  texture->set_width(cell_limits.num_x_cells);
+  texture->set_height(cell_limits.num_y_cells);
+  const double resolution = limits().resolution();
+  texture->set_resolution(resolution);
+  const double max_x = limits().max().x() - resolution * offset.y();
+  const double max_y = limits().max().y() - resolution * offset.x();
+  *texture->mutable_slice_pose() = transform::ToProto(
+    local_pose.inverse() *
+    transform::Rigid3d::Translation(Eigen::Vector3d(max_x, max_y, 0.)));
+
+  return true;
+}
+
+bool NormalGrid::DrawToSubmapTextureWithoutTextures(
+  proto::SubmapQuery::Response::SubmapTexture * const texture,
+  transform::Rigid3d local_pose) const
+{
+  Eigen::Array2i offset;
+  CellLimits cell_limits;
+  ComputeCroppedLimits(&offset, &cell_limits);
+
+  // std::string cells;
+  // for (const Eigen::Array2i & xy_index : XYIndexRangeIterator(cell_limits)) {
+  //   if (!IsKnown(xy_index + offset)) {
+  //     cells.push_back(0 /* unknown log odds value */);
+  //     cells.push_back(0 /* alpha */);
+  //     continue;
+  //   }
+  //   // We would like to add 'delta' but this is not possible using a value and
+  //   // alpha. We use premultiplied alpha, so when 'delta' is positive we can
+  //   // add it by setting 'alpha' to zero. If it is negative, we set 'value' to
+  //   // zero, and use 'alpha' to subtract. This is only correct when the pixel
+  //   // is currently white, so walls will look too gray. This should be hard to
+  //   // detect visually for the user, though.
+  //   const int delta =
+  //     128 - ProbabilityToLogOddsInteger(GetProbability(xy_index + offset));
+  //   const uint8 alpha = delta > 0 ? 0 : -delta;
+  //   const uint8 value = delta > 0 ? delta : 0;
+  //   cells.push_back(value);
+  //   cells.push_back((value || alpha) ? alpha : 1);
+  // }
+
+  // common::FastGzipString(cells, texture->mutable_cells());
+  texture->set_width(cell_limits.num_x_cells);
+  texture->set_height(cell_limits.num_y_cells);
+  const double resolution = limits().resolution();
+  texture->set_resolution(resolution);
+  const double max_x = limits().max().x() - resolution * offset.y();
+  const double max_y = limits().max().y() - resolution * offset.x();
+  *texture->mutable_slice_pose() = transform::ToProto(
+    local_pose.inverse() *
+    transform::Rigid3d::Translation(Eigen::Vector3d(max_x, max_y, 0.)));
+
+  return true;
+}
+
+// for test  输出在生成多栅格地图之前
+bool NormalGrid::OutNormalsToFile(const std::string & filename) const
+{
+  // pcl::PointCloud<pcl::>
+  CHECK(!grid_normals_.empty());
+  std::ofstream ofs(filename.c_str());
+  LOG(INFO) << "normal size: " << grid_normals_.size();
+  // LOG(INFO) << ProbabilitySize();
+  for (size_t i = 0; i < grid_normals_.size(); i++) {
+    if (!grid_normals_[i].is_known) {
+      continue;
+    }
+    // LOG(INFO) << grid_normals_[i].normal.x() << " " << grid_normals_[i].normal.y();
+    const Eigen::Vector2f & point = limits().GetCellCenter(FromFlatIndex(i));
+    Eigen::Vector2f normal = grid_normals_[i].normal.normalized();
+    ofs << point.x() << " " << point.y() << " " << 0 <<
+      " " << normal.x() << " " << normal.y() << " " << 0 <<
+      std::endl;
+  }
+  ofs.close();
+  return true;
+}
+
+// 生成完多栅格尺度地图为了节省内存开销，将原先法向量存储由grid_normals_转移到finished_normals_
+bool NormalGrid::FinishUpdateNormals() const
+{
+  if (is_finished_.test_and_set()) {
+    CHECK(!grid_normals_.empty());
+    for (size_t i = 0; i < grid_normals_.size(); i++) {
+      if (!grid_normals_[i].is_known) {
+        continue;
+      }
+      // LOG(INFO) << grid_normals_[i].normal.x() << " " << grid_normals_[i].normal.y();
+      // const Eigen::Array2i& cell_index = FromFlatIndex(i);
+      const Eigen::Vector2f & point = limits().GetCellCenter(FromFlatIndex(i));
+      Eigen::Vector2f normal = grid_normals_[i].normal.normalized();
+      finished_normals_.push_back(std::make_pair(point, normal));
+      // finished_normals_[cell_index] = normal;
+    }
+    grid_normals_.clear();
+    std::vector<NormalCell>().swap(grid_normals_);
+  }
+
+  return true;
+}
+
+void NormalGrid::GrowNormalLimits(const Eigen::Vector2f & point)
+{
+  GrowNormalLimits(point, {&grid_normals_}, {kUnknownGridNormalCell});
+  // LOG(INFO) << grid_normals_.size();
+  // LOG(INFO) << normal_limits_.cell_limits().num_x_cells << ","
+  //          << normal_limits_.cell_limits().num_y_cells;
+}
+
+void NormalGrid::GrowNormalLimits(
+  const Eigen::Vector2f & point,
+  const std::vector<std::vector<NormalCell> *> & grids,
+  const std::vector<NormalCell> & grids_unknown_cell_values)
+{
+  // CHECK(update_indices_.empty());
+  // const MapLimits& limits = limits();
+  // LOG(INFO) << point;
+  // LOG(INFO) << normal_limits_.GetCellIndex(point);
+  while (!normal_limits_.Contains(normal_limits_.GetCellIndex(point))) {
+    const int x_offset = normal_limits_.cell_limits().num_x_cells / 2;
+    const int y_offset = normal_limits_.cell_limits().num_y_cells / 2;
+    const MapLimits new_limits(
+      normal_limits_.resolution(),
+      normal_limits_.max() +
+      normal_limits_.resolution() * Eigen::Vector2d(y_offset, x_offset),
+      CellLimits(
+        2 * normal_limits_.cell_limits().num_x_cells,
+        2 * normal_limits_.cell_limits().num_y_cells));
+    const int stride = new_limits.cell_limits().num_x_cells;
+    const int offset = x_offset + stride * y_offset;
+    const int new_size = new_limits.cell_limits().num_x_cells *
+      new_limits.cell_limits().num_y_cells;
+    for (size_t grid_index = 0; grid_index < grids.size(); ++grid_index) {
+      std::vector<NormalCell> new_cells(new_size,
+        grids_unknown_cell_values[grid_index]);
+      for (int i = 0; i < normal_limits_.cell_limits().num_y_cells; ++i) {
+        for (int j = 0; j < normal_limits_.cell_limits().num_x_cells; ++j) {
+          size_t old_index = j + i * normal_limits_.cell_limits().num_x_cells;
+          if ((*grids[grid_index])[old_index].is_known) {
+            new_cells[offset + j + i * stride] =
+              (*grids[grid_index])[old_index];
+          }
+        }
+      }
+      *grids[grid_index] = new_cells;
+    }
+    normal_limits_ = new_limits;
+    /*
+    // limits_ = new_limits;
+    if (!known_cells_box_.isEmpty()) {
+      known_cells_box_.translate(Eigen::Vector2i(x_offset, y_offset));
+    }
+    */
+  }
+}
+
+// Converts a 'cell_index' into an index into 'cells_'.
+int NormalGrid::ToNormalFlatIndex(const Eigen::Array2i & cell_index) const
+{
+  CHECK(normal_limits_.Contains(cell_index)) << cell_index <<
+    " " << normal_limits_.cell_limits().num_x_cells << " " <<
+    normal_limits_.cell_limits().num_y_cells;
+  return normal_limits_.cell_limits().num_x_cells * cell_index.y() + cell_index.x();
+}
+
+bool NormalGrid::MergeNormal(
+  const Eigen::Array2i & cell_index,
+  const Eigen::Vector2f & normal)
+{
+  // todo 判定栅格法向量是否可用
+  // if(!normal_limits_.Contains(cell_index)) return false;
+  const int flat_index = ToNormalFlatIndex(cell_index);
+
+  float current_angle = atan2(normal.y(), normal.x());
+  if (fabs(grid_normals_[flat_index].l_angle) > 4) {
+    grid_normals_[flat_index].l_angle = current_angle - 0.00001;
+    grid_normals_[flat_index].r_angle = current_angle + 0.00001;
+  }
+  if (current_angle > grid_normals_[flat_index].r_angle) {
+    grid_normals_[flat_index].r_angle = current_angle;
+  }
+  if (current_angle < grid_normals_[flat_index].l_angle) {
+    grid_normals_[flat_index].l_angle = current_angle;
+  }
+  // 最小夹角
+  if (fabs(
+      NormalizedAngleDiff(
+        grid_normals_[flat_index].r_angle,
+        grid_normals_[flat_index].l_angle)) < 0.174)
+  {
+    grid_normals_[flat_index].is_known = true;
+  } else {
+    grid_normals_[flat_index].is_known = false;
+  }
+  grid_normals_[flat_index].normal += normal;
+  // LOG(INFO) << normal.x() << " " << normal.y();
+  // 为了防止超过float类型的上限
+  if (grid_normals_[flat_index].normal.x() > 100000 ||
+    grid_normals_[flat_index].normal.y() > 100000)
+  {
+    grid_normals_[flat_index].normal =
+      10000 * grid_normals_[flat_index].normal.normalized();
+  }
+  // grid_normals_[flat_index].normalize();
+  return true;
+}
+void NormalGrid::SetNormalCell(
+  const Eigen::Array2i & cell_index,
+  const NormalCell & normal)
+{
+  // CHECK(normal.normal.norm() < 10000) << normal.normal;
+  if (!normal_limits_.Contains(cell_index)) {
+    // LOG(INFO)<< normal_limits_.cell_limits().num_x_cells
+    //   << " " << normal_limits_.cell_limits().num_y_cells;
+    // CHECK(0);
+    return;
+  }
+  CHECK(!grid_normals_.empty());
+  grid_normals_[ToNormalFlatIndex(cell_index)] = normal;
+}
+
+bool NormalGrid::IsKnownNormal(const Eigen::Array2i & cell_index) const
+{
+  CHECK(!grid_normals_.empty());
+  return normal_limits_.Contains(cell_index) &&
+         grid_normals_[ToNormalFlatIndex(cell_index)].is_known;
+}
+
+Eigen::Vector2f NormalGrid::GetNormal(const Eigen::Array2i & cell_index) const
+{
+  CHECK(!grid_normals_.empty());
+  if (!normal_limits_.Contains(cell_index)) {
+    return kUnknownGridNormal;
+  }
+  const int flat_index = ToNormalFlatIndex(cell_index);
+  if (!grid_normals_[flat_index].is_known) {
+    return kUnknownGridNormal;
+  }
+  return grid_normals_[flat_index].normal.normalized();
+}
+
+NormalCell NormalGrid::GetNormalCell(const Eigen::Array2i & cell_index) const
+{
+  CHECK(!grid_normals_.empty());
+  if (!normal_limits_.Contains(cell_index)) {
+    return kUnknownGridNormalCell;
+  }
+
+  const int flat_index = ToNormalFlatIndex(cell_index);
+  if (!grid_normals_[flat_index].is_known) {
+    // LOG(INFO) << "lll";
+    // CHECK(0);
+    return kUnknownGridNormalCell;
+  }
+
+  return grid_normals_[flat_index];
+}
+
+sensor::NormalPointCloud NormalGrid::GetNormals() const
+{
+  sensor::NormalPointCloud res;
+  if (!grid_normals_.empty()) {
+    for (size_t i = 0; i < grid_normals_.size(); i++) {
+      sensor::NormalRangefinderPoint normal_point;
+      if (!grid_normals_[i].is_known) {
+        continue;
+      }
+      const Eigen::Vector2f & point = limits().GetCellCenter(FromFlatIndex(i));
+      Eigen::Vector2f normal = grid_normals_[i].normal.normalized();
+      normal_point.position = Eigen::Vector3f(point.x(), point.y(), 0);
+      normal_point.normal = Eigen::Vector3f(normal.x(), normal.y(), 0);
+      res.push_back(normal_point);
+    }
+  } else {
+    for (size_t i = 0; i < finished_normals_.size(); i++) {
+      sensor::NormalRangefinderPoint normal_point;
+      normal_point.position = Eigen::Vector3f(
+        finished_normals_[i].first.x(), finished_normals_[i].first.y(), 0);
+      normal_point.normal = Eigen::Vector3f(
+        finished_normals_[i].second.x(), finished_normals_[i].second.y(), 0);
+      res.push_back(normal_point);
+    }
+  }
+  return res;
+}
+
+
+}  // namespace mapping
+}  // namespace cartographer
+

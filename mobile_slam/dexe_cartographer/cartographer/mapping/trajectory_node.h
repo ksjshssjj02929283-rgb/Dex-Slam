@@ -25,6 +25,8 @@
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/proto/trajectory_node_data.pb.h"
 #include "cartographer/sensor/range_data.h"
+#include "cartographer/sensor/line_data.h"
+#include "cartographer/sensor/landmark_data.h"
 #include "cartographer/transform/rigid_transform.h"
 
 namespace cartographer {
@@ -52,6 +54,10 @@ struct TrajectoryNode {
     // Used for loop closure in 2D: voxel filtered returns in the
     // 'gravity_alignment' frame.
     sensor::PointCloud filtered_gravity_aligned_point_cloud;
+    sensor::PointCloud highlight_point_cloud;
+
+    std::map<int, std::vector<sensor::LineData>> lines;  // line data with id
+    std::vector<sensor::LandmarkPointData> reflectors;
 
     // Used for loop closure in 3D.
     sensor::PointCloud high_resolution_point_cloud;

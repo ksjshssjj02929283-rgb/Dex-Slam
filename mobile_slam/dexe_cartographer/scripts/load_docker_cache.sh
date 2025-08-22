@@ -1,6 +1,4 @@
-#!/bin/bash
-
-# Copyright 2016 The Cartographer Authors
+# Copyright 2018 The Cartographer Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Cache intermediate Docker layers. For a description of how this works, see:
-# https://giorgos.sealabs.net/docker-cache-on-travis-and-docker-112.html
+# Do an optimized build by default, or otherwise Cartographer cannot run
+# real-time and certain tests will timeout.
+build -c opt
 
-set -o errexit
-set -o verbose
-set -o pipefail
+# By default, an optimized C++ build with Bazel will build each library twice,
+# with and without -fPIC. --force_pic avoids the unnecessary actions and
+# reduces build time.
+build --force_pic
 
-if [ -f ${DOCKER_CACHE_FILE} ]; then
-  gunzip -c ${DOCKER_CACHE_FILE} | docker load;
-fi

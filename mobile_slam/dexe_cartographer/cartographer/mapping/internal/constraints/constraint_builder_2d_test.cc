@@ -79,7 +79,10 @@ TEST_F(ConstraintBuilder2DTest, FindsConstraints) {
   Submap2D submap(
       Eigen::Vector2f(4.f, 5.f),
       absl::make_unique<ProbabilityGrid>(map_limits, &conversion_tables),
-      &conversion_tables);
+      &conversion_tables,
+      absl::make_unique<sensor::PointCloud>(),
+      absl::make_unique<sensor::PointCloud>(),
+      0, std::map<int, cartographer::mapping::MapLine2D>());
   int expected_nodes = 0;
   for (int i = 0; i < 2; ++i) {
     EXPECT_EQ(constraint_builder_->GetNumFinishedNodes(), expected_nodes);

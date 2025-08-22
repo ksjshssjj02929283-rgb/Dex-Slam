@@ -58,7 +58,7 @@ struct CollatorInput {
         MakeDispatchable(
             sensor_id,
             TimedPointCloudData{
-                common::FromUniversal(time), Eigen::Vector3f::Zero(), {}}),
+                common::FromUniversal(time), Eigen::Vector3f::Zero(), transform::Rigid3d::Identity(), {}}),
         CollatorOutput{trajectory_id, sensor_id, common::FromUniversal(time)}};
   }
   static CollatorInput CreateOdometryData(int trajectory_id,

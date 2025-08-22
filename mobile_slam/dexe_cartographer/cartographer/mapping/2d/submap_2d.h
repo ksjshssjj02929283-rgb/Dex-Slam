@@ -20,6 +20,9 @@
 #include <memory>
 #include <vector>
 
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+
 #include "Eigen/Core"
 #include "cartographer/common/lua_parameter_dictionary.h"
 #include "cartographer/mapping/2d/grid_2d.h"
@@ -31,8 +34,13 @@
 #include "cartographer/mapping/submaps.h"
 #include "cartographer/mapping/trajectory_node.h"
 #include "cartographer/mapping/value_conversion_tables.h"
+#include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/sensor/range_data.h"
+#include "cartographer/sensor/line_data.h"
+#include "cartographer/sensor/landmark_data.h"
+#include "cartographer/sensor/feature_data.h"
 #include "cartographer/transform/rigid_transform.h"
+#include "cartographer/ikd_tree/ikd_tree.h"
 
 namespace cartographer {
 namespace mapping {
@@ -42,8 +50,14 @@ proto::SubmapsOptions2D CreateSubmapsOptions2D(
 
 class Submap2D : public Submap {
  public:
-  Submap2D(const Eigen::Vector2f& origin, std::unique_ptr<Grid2D> grid,
-           ValueConversionTables* conversion_tables);
+  Submap2D(const Eigen::Vector2f& origin,
+           std::unique_ptr<Grid2D> grid,
+           ValueConversionTables* conversion_tables,
+           std::unique_ptr<sensor::PointCloud> cloud,
+           std::unique_ptr<sensor::PointCloud> highlight_cloud,
+           int latest_line_id,
+           std::map<int, MapLine2D> active_line_data);
+
   explicit Submap2D(const proto::Submap2D& proto,
                     ValueConversionTables* conversion_tables);
 
@@ -54,16 +68,63 @@ class Submap2D : public Submap {
                        proto::SubmapQuery::Response* response) const override;
 
   const Grid2D* grid() const { return grid_.get(); }
+  const sensor::PointCloud* cloud() const { return cloud_.get(); }
+  const sensor::PointCloud* highlight_cloud() const { return highlight_cloud_.get(); }
+
+  ikd_tree::iKdTree<pcl::PointXYZ>* cloud_ikdtree() const { return cloud_ikdtree_.get(); }
+  ikd_tree::iKdTree<pcl::PointXYZ>* highlight_cloud_ikdtree() const { return highlight_cloud_ikdtree_.get(); }
+
+  const LineMap2DList * line_map_2d_list() const {return line_map_2d_list_.get();}
 
   // Insert 'range_data' into this submap using 'range_data_inserter'. The
   // submap must not be finished yet.
   void InsertRangeData(const sensor::RangeData& range_data,
                        const RangeDataInserterInterface* range_data_inserter);
+
+  void InsertCloudData(const sensor::PointCloud & cloud_data,
+                       const sensor::PointCloud & highlight_cloud_in_local);
+
+  // void InsertNormalData(const sensor::NormalPointCloud & normals,
+  //                       const RangeDataInserterInterface * range_data_inserter);
+
+  void InsertLineData(const std::map<int, std::vector<sensor::LineData>> & line_data);
+
+
+  void InsertReflectorData(
+          const std::vector<sensor::LandmarkPointData> & reflector_data);
+  // void InsertHighLightCloudData(const sensor::PointCloudWithIntensity & high_light_cloud);
+
   void Finish();
+
+  bool SaveSubmapCloud(const std::string& folder,
+                       const std::string& filename);
+
+  void SetCloudCullingProb(const double prob) { cloud_culling_prob_ = prob; }
+  void SetLineCullingParam(const double& min_line_length,
+                           const double& max_line_length,
+                           const int& culling_obs);
+  void SetCullingInterval(const int& interval) { culling_interval_ = interval; }
+ private:
+  void CloudDataCulling();
+  // void GenerateCloudKdTree();
+  void PointCloudToPCL(const sensor::PointCloud & cloud_data,
+                       pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud);
 
  private:
   std::unique_ptr<Grid2D> grid_;
+  std::unique_ptr<sensor::PointCloud> cloud_;
+  std::unique_ptr<sensor::PointCloud> highlight_cloud_;
+  std::unique_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> cloud_ikdtree_;
+  std::unique_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> highlight_cloud_ikdtree_;
+
+  std::unique_ptr<LineMap2DList> line_map_2d_list_;
+  std::vector<sensor::LandmarkPointData> reflector_map_;
   ValueConversionTables* conversion_tables_;
+  double cloud_culling_prob_ = 0.5;
+
+  int line_culling_count_ = 0;
+  int cloud_culling_count_ = 0;
+  int culling_interval_ = 5;
 };
 
 // The first active submap will be created on the insertion of the first range
@@ -87,7 +148,23 @@ class ActiveSubmaps2D {
   std::vector<std::shared_ptr<const Submap2D>> InsertRangeData(
       const sensor::RangeData& range_data);
 
+  // void InsertNormalData(const sensor::NormalPointCloud & normals);
+
+  void InsertCloudData(const sensor::PointCloud & cloud_data,
+                       const sensor::PointCloud & highlight_cloud_data);
+
+  void InsertLineData(
+    const std::map<int, std::vector<sensor::LineData>> & line_data);
+
+  // void InsertHighLightCloudData(const sensor::PointCloudWithIntensity & high_light_cloud);
+
+  void InsertReflectorData(const std::vector<sensor::LandmarkPointData> & reflector_data);
+
+  void clear() { submaps_.clear(); }
+
   std::vector<std::shared_ptr<const Submap2D>> submaps() const;
+
+  const LineMap2DList * line_map_2d_list() {return submaps().front()->line_map_2d_list();}
 
  private:
   std::unique_ptr<RangeDataInserterInterface> CreateRangeDataInserter();

@@ -37,15 +37,16 @@ SearchParameters::SearchParameters(const double linear_search_window,
     max_scan_range = std::max(range, max_scan_range);
   }
   const double kSafetyMargin = 1. - 1e-3;
-  angular_perturbation_step_size =
-      kSafetyMargin * std::acos(1. - common::Pow2(resolution) /
-                                         (2. * common::Pow2(max_scan_range)));
+  // angular_perturbation_step_size =
+  //     kSafetyMargin * std::acos(1. - common::Pow2(resolution * 2) /
+  //                                        (2. * common::Pow2(max_scan_range)));
+  angular_perturbation_step_size = 0.017;
   num_angular_perturbations =
       std::ceil(angular_search_window / angular_perturbation_step_size);
   num_scans = 2 * num_angular_perturbations + 1;
 
   const int num_linear_perturbations =
-      std::ceil(linear_search_window / resolution);
+      std::ceil(linear_search_window / (resolution * 2));
   linear_bounds.reserve(num_scans);
   for (int i = 0; i != num_scans; ++i) {
     linear_bounds.push_back(

@@ -18,6 +18,7 @@
 
 #include "cartographer/mapping/internal/2d/local_trajectory_builder_options_2d.h"
 #include "cartographer/mapping/internal/3d/local_trajectory_builder_options_3d.h"
+#include "cartographer/localization/internal/2d/pose_estimator_options_2d.h"
 #include "cartographer/mapping/internal/local_slam_result_data.h"
 
 namespace cartographer {
@@ -65,6 +66,9 @@ proto::TrajectoryBuilderOptions CreateTrajectoryBuilderOptions(
   *options.mutable_trajectory_builder_3d_options() =
       CreateLocalTrajectoryBuilderOptions3D(
           parameter_dictionary->GetDictionary("trajectory_builder_3d").get());
+  *options.mutable_pose_estimator_2d_options() =
+      localization::CreatePoseEstimatorOptions2D(
+          parameter_dictionary->GetDictionary("pose_estimator_2d").get());
   options.set_collate_fixed_frame(
       parameter_dictionary->GetBool("collate_fixed_frame"));
   options.set_collate_landmarks(

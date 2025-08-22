@@ -79,6 +79,7 @@ inline float ClampCorrespondenceCost(const float correspondence_cost) {
 
 constexpr uint16 kUnknownProbabilityValue = 0;
 constexpr uint16 kUnknownCorrespondenceValue = kUnknownProbabilityValue;
+constexpr uint16 kFreeCorrespondenceValue = 32767;
 constexpr uint16 kUpdateMarker = 1u << 15;
 
 // Converts a correspondence_cost to a uint16 in the [1, 32767] range.

@@ -19,6 +19,8 @@
 
 #include <deque>
 #include <memory>
+#include <thread>
+#include <mutex>
 
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/imu_tracker.h"
@@ -76,6 +78,7 @@ class PoseExtrapolator : public PoseExtrapolatorInterface {
     common::Time time;
     transform::Rigid3d pose;
   };
+  std::deque<TimedPose> laser_pose_queue_;
   std::deque<TimedPose> timed_pose_queue_;
   Eigen::Vector3d linear_velocity_from_poses_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d angular_velocity_from_poses_ = Eigen::Vector3d::Zero();
@@ -90,6 +93,8 @@ class PoseExtrapolator : public PoseExtrapolatorInterface {
   std::deque<sensor::OdometryData> odometry_data_;
   Eigen::Vector3d linear_velocity_from_odometry_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d angular_velocity_from_odometry_ = Eigen::Vector3d::Zero();
+
+  std::mutex pose_queue_mutex_;
 };
 
 }  // namespace mapping

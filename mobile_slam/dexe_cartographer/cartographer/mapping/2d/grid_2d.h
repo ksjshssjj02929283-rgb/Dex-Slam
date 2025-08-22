@@ -89,6 +89,23 @@ class Grid2D : public GridInterface {
       proto::SubmapQuery::Response::SubmapTexture* const texture,
       transform::Rigid3d local_pose) const = 0;
 
+  std::vector<uint16>* mutable_correspondence_cost_cells() {
+    return &correspondence_cost_cells_;
+  }
+
+  // Converts a 'cell_index' into an index into 'cells_'.
+  int ToFlatIndex(const Eigen::Array2i& cell_index) const {
+    CHECK(limits_.Contains(cell_index)) << cell_index;
+    return limits_.cell_limits().num_x_cells * cell_index.y() + cell_index.x();
+  }
+
+  // Converts a 'cell_index' into an index into 'cells_'.
+  Eigen::AlignedBox2i* mutable_known_cells_box() { return &known_cells_box_; }
+
+  virtual bool DrawAsImage(
+    const std::string& folder,
+    const std::string& filename) const;
+
  protected:
   void GrowLimits(const Eigen::Vector2f& point,
                   const std::vector<std::vector<uint16>*>& grids,
@@ -102,18 +119,7 @@ class Grid2D : public GridInterface {
     return known_cells_box_;
   }
 
-  std::vector<uint16>* mutable_correspondence_cost_cells() {
-    return &correspondence_cost_cells_;
-  }
-
   std::vector<int>* mutable_update_indices() { return &update_indices_; }
-  Eigen::AlignedBox2i* mutable_known_cells_box() { return &known_cells_box_; }
-
-  // Converts a 'cell_index' into an index into 'cells_'.
-  int ToFlatIndex(const Eigen::Array2i& cell_index) const {
-    CHECK(limits_.Contains(cell_index)) << cell_index;
-    return limits_.cell_limits().num_x_cells * cell_index.y() + cell_index.x();
-  }
 
  private:
   MapLimits limits_;
