@@ -34,9 +34,9 @@
 #include "cartographer_ros_msgs/SubmapList.h"
 #include "cartographer_ros_msgs/SubmapQuery.h"
 #include "gflags/gflags.h"
-#include "nav_msgs/OccupancyGrid.h"
-#include "ros/ros.h"
-#include "std_srvs/Trigger.h"
+#include "nav_msgs/msg/occupancy_grid.hpp"
+#include <rclcpp/rclcpp.hpp>
+#include "std_srvs/srv/trigger.hpp"
 
 DEFINE_double(resolution, 0.05,
               "Resolution of a grid cell in the published occupancy grid.");
@@ -55,7 +55,8 @@ using ::cartographer::io::PaintSubmapSlicesResult;
 using ::cartographer::io::SubmapSlice;
 using ::cartographer::mapping::SubmapId;
 
-class Node {
+class Node : public rclcpp::Node
+{
  public:
   explicit Node(double resolution, double publish_period_sec);
   ~Node() {}
@@ -64,79 +65,99 @@ class Node {
   Node& operator=(const Node&) = delete;
 
  private:
-  void HandleSubmapList(const cartographer_ros_msgs::SubmapList::ConstPtr& msg);
-  void DrawAndPublish(const ::ros::WallTimerEvent& timer_event);
+  void HandleSubmapList(const cartographer_ros_msgs::msg::SubmapList::ConstSharedPtr& msg);
+  void DrawAndPublish();
 
-  bool StartMappingCallback(std_srvs::Trigger::Request &req,
-                            std_srvs::Trigger::Response &res);
-  bool FinishMappingCallback(std_srvs::Trigger::Request &req,
-                             std_srvs::Trigger::Response &res);
-
-  ::ros::NodeHandle node_handle_;
-  ::ros::NodeHandle node_handle_private_;
+  bool StartMappingCallback(std_srvs::srv::Trigger::Request &req,
+                            std_srvs::srv::Trigger::Response &res);
+  bool FinishMappingCallback(std_srvs::srv::Trigger::Request &req,
+                             std_srvs::srv::Trigger::Response &res);
 
   const double resolution_;
+  const double publish_period_sec_;
 
   absl::Mutex mutex_;
-  ::ros::ServiceClient client_ GUARDED_BY(mutex_);
-  ::ros::Subscriber submap_list_subscriber_ GUARDED_BY(mutex_);
-  ::ros::Publisher occupancy_grid_publisher_ GUARDED_BY(mutex_);
-  std::map<SubmapId, SubmapSlice> submap_slices_ GUARDED_BY(mutex_);
-  ::ros::WallTimer occupancy_grid_publisher_timer_;
-  std::string last_frame_id_;
-  ros::Time last_timestamp_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_;
+  rclcpp::executors::SingleThreadedExecutor::SharedPtr callback_group_executor_;
 
-  ros::ServiceServer start_mapping_srv_;
-  ros::ServiceServer finish_mapping_srv_;
-  bool is_activating_ = false;
+  ::rclcpp::Client<cartographer_ros_msgs::srv::SubmapQuery>::SharedPtr client_ GUARDED_BY(mutex_);
+  ::rclcpp::Subscription<cartographer_ros_msgs::msg::SubmapList>::SharedPtr submap_list_subscriber_ GUARDED_BY(mutex_);
+  ::rclcpp::Publisher<::nav_msgs::msg::OccupancyGrid>::SharedPtr occupancy_grid_publisher_ GUARDED_BY(mutex_);
+  std::map<SubmapId, SubmapSlice> submap_slices_ GUARDED_BY(mutex_);
+  rclcpp::TimerBase::SharedPtr occupancy_grid_publisher_timer_;
+  std::string last_frame_id_;
+  rclcpp::Time last_timestamp_;
+
+  ::rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_mapping_service_;
+  ::rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_service_;
+  bool is_active_ = false;
 };
 
-/**
- * @brief Construct a new Node:: Node object
- * 
- * @param resolution 地图分辨率
- * @param publish_period_sec 多久发布一次（单位 秒）
- */
 Node::Node(const double resolution, const double publish_period_sec)
-    : node_handle_private_("~"),
-      resolution_(resolution)
+    : rclcpp::Node("cartographer_occupancy_grid_node"),
+      resolution_(resolution),
+      publish_period_sec_(publish_period_sec)
 {
-  client_ = node_handle_.serviceClient<::cartographer_ros_msgs::SubmapQuery>(kSubmapQueryServiceName);  // 请求submap_query的service
-  submap_list_subscriber_ = node_handle_.subscribe( // 订阅submap_list的topic
-                                kSubmapListTopic, kLatestOnlyPublisherQueueSize,
-                                boost::function<void(
-                                    const cartographer_ros_msgs::SubmapList::ConstPtr&)>(
-                                    [this](const cartographer_ros_msgs::SubmapList::ConstPtr& msg) {
-                                      HandleSubmapList(msg);
-                                    }));
+  callback_group_ = this->create_callback_group(
+    rclcpp::CallbackGroupType::MutuallyExclusive,
+    false);
+  callback_group_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  callback_group_executor_->add_callback_group(callback_group_, this->get_node_base_interface());
+  client_ = this->create_client<cartographer_ros_msgs::srv::SubmapQuery>(
+        kSubmapQueryServiceName,
+        rmw_qos_profile_services_default,
+        callback_group_
+        );
+  submap_list_subscriber_ = this->create_subscription<cartographer_ros_msgs::msg::SubmapList>(
+      kSubmapListTopic, rclcpp::QoS(10),
+      std::bind(&Node::HandleSubmapList, this, std::placeholders::_1));
+  occupancy_grid_publisher_ = this->create_publisher<::nav_msgs::msg::OccupancyGrid>(
+      kOccupancyGridTopic, rclcpp::QoS(10).transient_local());
 
-  occupancy_grid_publisher_ = node_handle_.advertise<nav_msgs::OccupancyGrid>(
-                                            ComputeRepeatedTopicNames(FLAGS_occupancy_grid_topic, 1)[0],
-                                            kLatestOnlyPublisherQueueSize, true);
+  occupancy_grid_publisher_timer_ = this->create_wall_timer(
+    std::chrono::milliseconds(int(publish_period_sec_ * 1000)),
+    [this]() {
+      DrawAndPublish();
+    });
 
-  occupancy_grid_publisher_timer_ = node_handle_.createWallTimer(
-                                                  ::ros::WallDuration(FLAGS_publish_period_sec),
-                                                  &Node::DrawAndPublish, this);
+  occupancy_grid_publisher_timer_->cancel();
 
-  start_mapping_srv_ = node_handle_private_.advertiseService("start_mapping", &Node::StartMappingCallback, this);
-  finish_mapping_srv_ = node_handle_private_.advertiseService("finish_mapping", &Node::FinishMappingCallback, this);
+  start_mapping_service_ = this->create_service<std_srvs::srv::Trigger>(
+    "start_mapping",
+    std::bind(&Node::StartMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
+
+  finish_mapping_service_ = this->create_service<std_srvs::srv::Trigger>(
+    "finish_mapping",
+    std::bind(&Node::FinishMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
 }
 
-bool Node::StartMappingCallback(std_srvs::Trigger::Request &req,
-                                std_srvs::Trigger::Response &res)
+bool Node::StartMappingCallback(std_srvs::srv::Trigger::Request &req,
+                std_srvs::srv::Trigger::Response &res)
 {
-  occupancy_grid_publisher_timer_.stop();
-  is_activating_ = true;
-  res.success = true;
+  if (!is_active_) {
+  occupancy_grid_publisher_timer_->reset();
+  is_active_ = true;
+  RCLCPP_INFO(this->get_logger(), "Mapping started: timer activated.");
+  res->message = "Started mapping";
+  } else {
+  res->message = "Mapping already active";
+  }
+  res->success = true;
   return true;
 }
 
-bool Node::FinishMappingCallback(std_srvs::Trigger::Request &req,
-                                 std_srvs::Trigger::Response &res)
+bool Node::FinishMappingCallback(std_srvs::srv::Trigger::Request &req,
+                 std_srvs::srv::Trigger::Response &res)
 {
-  occupancy_grid_publisher_timer_.start();
-  is_activating_ = false;
-  res.success = true;
+  if (is_active_) {
+  occupancy_grid_publisher_timer_->cancel();
+  is_active_ = false;
+  RCLCPP_INFO(this->get_logger(), "Mapping finished: timer deactivated.");
+  res->message = "Finished mapping";
+  } else {
+  res->message = "Mapping already inactive";
+  }
+  res->success = true;
   return true;
 }
 
@@ -146,12 +167,13 @@ bool Node::FinishMappingCallback(std_srvs::Trigger::Request &req,
  * @param msg 
  */
 void Node::HandleSubmapList(
-    const cartographer_ros_msgs::SubmapList::ConstPtr& msg) {
+    const cartographer_ros_msgs::msg::SubmapList::SharedPtr& msg) {
+{
   absl::MutexLock locker(&mutex_);
 
-  // 1. 检查submap_list话题是否被定于
+  // 1. 检查submap_list话题是否被订阅
   // We do not do any work if nobody listens.
-  if (occupancy_grid_publisher_.getNumSubscribers() == 0) {
+  if (this->count_publishers(kSubmapListTopic) == 0){
     return;
   }
 
@@ -181,8 +203,9 @@ void Node::HandleSubmapList(
       continue;
     }
     // 3.4 获取submap的texture
-    auto fetched_textures =
-        ::cartographer_ros::FetchSubmapTextures(id, &client_);
+    auto fetched_textures = cartographer_ros::FetchSubmapTextures(
+          id, client_, callback_group_executor_,
+          std::chrono::milliseconds(int(publish_period_sec_ * 1000)));
     if (fetched_textures == nullptr) {
       continue;
     }
@@ -192,7 +215,7 @@ void Node::HandleSubmapList(
     // We use the first texture only. By convention this is the highest
     // resolution texture and that is the one we want to use to construct the
     // map for ROS.
-    // 3.5 对submap_slice进行赋值
+  // 3.5 对submap_slice进行赋值
     const auto fetched_texture = fetched_textures->textures.begin();
     submap_slice.width = fetched_texture->width;
     submap_slice.height = fetched_texture->height;
@@ -221,34 +244,36 @@ void Node::HandleSubmapList(
  * 
  * @param unused_timer_event 
  */
-void Node::DrawAndPublish(const ::ros::WallTimerEvent& unused_timer_event) {
+void Node::DrawAndPublish() {
   absl::MutexLock locker(&mutex_);
   if (submap_slices_.empty() || last_frame_id_.empty()) {
     return;
   }
   // 调用cartographer::io::PaintSubmapSlices接口进行画图
   auto painted_slices = PaintSubmapSlices(submap_slices_, resolution_);
-  std::unique_ptr<nav_msgs::OccupancyGrid> msg_ptr = CreateOccupancyGridMsg(
+  std::unique_ptr<nav_msgs::msg::OccupancyGrid> msg_ptr = CreateOccupancyGridMsg(
       painted_slices, resolution_, last_frame_id_, last_timestamp_);
-  occupancy_grid_publisher_.publish(*msg_ptr);
+  occupancy_grid_publisher_->publish(*msg_ptr);
 }
 
 }  // namespace
 }  // namespace cartographer_ros
 
 int main(int argc, char** argv) {
+  // Init rclcpp first because gflags reorders command line flags in argv
+  rclcpp::init(argc, argv);
+
+  google::AllowCommandLineReparsing();
   google::InitGoogleLogging(argv[0]);
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  google::ParseCommandLineFlags(&argc, &argv, false);
 
   CHECK(FLAGS_include_frozen_submaps || FLAGS_include_unfrozen_submaps)
       << "Ignoring both frozen and unfrozen submaps makes no sense.";
 
-  ::ros::init(argc, argv, "cartographer_occupancy_grid_node");
-  ::ros::start();
-
   cartographer_ros::ScopedRosLogSink ros_log_sink;
-  ::cartographer_ros::Node node(FLAGS_resolution, FLAGS_publish_period_sec);
+  auto node = std::make_shared<cartographer_ros::Node>(FLAGS_resolution, FLAGS_publish_period_sec);
 
-  ::ros::spin();
-  ::ros::shutdown();
+  rclcpp::spin(node);
+  ::rclcpp::shutdown();
+  return 0;
 }

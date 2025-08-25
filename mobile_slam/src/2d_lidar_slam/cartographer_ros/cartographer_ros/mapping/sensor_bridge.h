@@ -27,16 +27,16 @@
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
 #include "cartographer_ros/mapping/tf_bridge.h"
-#include "cartographer_ros_msgs/LandmarkList.h"
-#include "geometry_msgs/Transform.h"
-#include "geometry_msgs/TransformStamped.h"
-#include "nav_msgs/OccupancyGrid.h"
-#include "nav_msgs/Odometry.h"
-#include "sensor_msgs/Imu.h"
-#include "sensor_msgs/LaserScan.h"
-#include "sensor_msgs/MultiEchoLaserScan.h"
-#include "sensor_msgs/NavSatFix.h"
-#include "sensor_msgs/PointCloud2.h"
+#include "cartographer_ros_msgs/msg/landmark_list.hpp"
+#include <geometry_msgs/msg/transform.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/multi_echo_laser_scan.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
 namespace cartographer_ros {
 
@@ -54,26 +54,27 @@ class SensorBridge {
   SensorBridge& operator=(const SensorBridge&) = delete;
 
   std::unique_ptr<::cartographer::sensor::OdometryData> ToOdometryData(
-      const nav_msgs::Odometry::ConstPtr& msg);
+      const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
   void HandleOdometryMessage(const std::string& sensor_id,
-                             const nav_msgs::Odometry::ConstPtr& msg);
+                             const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
   void HandleNavSatFixMessage(const std::string& sensor_id,
-                              const sensor_msgs::NavSatFix::ConstPtr& msg);
+                              const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg);
   void HandleLandmarkMessage(
       const std::string& sensor_id,
-      const cartographer_ros_msgs::LandmarkList::ConstPtr& msg);
+      const cartographer_ros_msgs::msg::LandmarkList::ConstSharedPtr& msg);
 
   std::unique_ptr<::cartographer::sensor::ImuData> ToImuData(
-      const sensor_msgs::Imu::ConstPtr& msg);
+      const sensor_msgs::msg::Imu::ConstSharedPtr& msg);
   void HandleImuMessage(const std::string& sensor_id,
-                        const sensor_msgs::Imu::ConstPtr& msg);
+                        const sensor_msgs::msg::Imu::ConstSharedPtr& msg);
+  // noted by hz: 处理雷达数据（包含 将雷达msg转换为carto数据类型 + 雷达数据处理的回调）
   void HandleLaserScanMessage(const std::string& sensor_id,
-                              const sensor_msgs::LaserScan::ConstPtr& msg);
+                              const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg);
   void HandleMultiEchoLaserScanMessage(
       const std::string& sensor_id,
-      const sensor_msgs::MultiEchoLaserScan::ConstPtr& msg);
+      const sensor_msgs::msg::MultiEchoLaserScan::ConstSharedPtr& msg);
   void HandlePointCloud2Message(const std::string& sensor_id,
-                                const sensor_msgs::PointCloud2::ConstPtr& msg);
+                                const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
 
   const TfBridge& tf_bridge() const;
   bool IgnoreMessage(const std::string& sensor_id,
@@ -95,6 +96,7 @@ class SensorBridge {
       sensor_to_previous_subdivision_time_;
   std::map<std::string, cartographer::common::Time> latest_sensor_time_;
   const TfBridge tf_bridge_;
+  // noted by hz: SLAM算法的接口
   ::cartographer::mapping::TrajectoryBuilderInterface* const
       trajectory_builder_;
 

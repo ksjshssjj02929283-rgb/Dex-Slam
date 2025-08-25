@@ -62,8 +62,9 @@ SensorBridge::SensorBridge(
       trajectory_builder_(trajectory_builder) {}
 
 std::unique_ptr<carto::sensor::OdometryData> SensorBridge::ToOdometryData(
-    const nav_msgs::Odometry::ConstPtr& msg) {
+    const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
   const carto::common::Time time = FromRos(msg->header.stamp);
+  // noted by hz: 查询tracking_frame到里程计的child_frame_id的转换
   const auto sensor_to_tracking = tf_bridge_.LookupToTracking(
       time, CheckNoLeadingSlash(msg->child_frame_id));
   if (sensor_to_tracking == nullptr) {
@@ -101,7 +102,7 @@ bool SensorBridge::IgnoreMessage(const std::string& sensor_id,
 }
 
 void SensorBridge::HandleOdometryMessage(
-    const std::string& sensor_id, const nav_msgs::Odometry::ConstPtr& msg) {
+    const std::string& sensor_id, const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
   std::unique_ptr<carto::sensor::OdometryData> odometry_data =
       ToOdometryData(msg);
   if (odometry_data != nullptr) {
@@ -120,9 +121,9 @@ void SensorBridge::HandleOdometryMessage(
 }
 
 void SensorBridge::HandleNavSatFixMessage(
-    const std::string& sensor_id, const sensor_msgs::NavSatFix::ConstPtr& msg) {
+    const std::string& sensor_id, const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg) {
   const carto::common::Time time = FromRos(msg->header.stamp);
-  if (msg->status.status == sensor_msgs::NavSatStatus::STATUS_NO_FIX) {
+  if (msg->status.status == sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX) {
     trajectory_builder_->AddSensorData(
         sensor_id,
         carto::sensor::FixedFramePoseData{time, absl::optional<Rigid3d>()});
@@ -146,7 +147,7 @@ void SensorBridge::HandleNavSatFixMessage(
 
 void SensorBridge::HandleLandmarkMessage(
     const std::string& sensor_id,
-    const cartographer_ros_msgs::LandmarkList::ConstPtr& msg) {
+    const cartographer_ros_msgs::msg::LandmarkList::ConstSharedPtr& msg) {
   auto landmark_data = ToLandmarkData(*msg);
 
   auto tracking_from_landmark_sensor = tf_bridge_.LookupToTracking(
@@ -168,7 +169,7 @@ void SensorBridge::HandleLandmarkMessage(
  * @return std::unique_ptr<carto::sensor::ImuData> 
  */
 std::unique_ptr<carto::sensor::ImuData> SensorBridge::ToImuData(
-    const sensor_msgs::Imu::ConstPtr& msg) {
+    const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
   // 1. 检查IMU数据是否完成
   CHECK_NE(msg->linear_acceleration_covariance[0], -1)
       << "Your IMU data claims to not contain linear acceleration measurements "
@@ -203,7 +204,7 @@ std::unique_ptr<carto::sensor::ImuData> SensorBridge::ToImuData(
 }
 
 void SensorBridge::HandleImuMessage(const std::string& sensor_id,
-                                    const sensor_msgs::Imu::ConstPtr& msg) {
+                                    const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
   std::unique_ptr<carto::sensor::ImuData> imu_data = ToImuData(msg);
   if (imu_data != nullptr) {
     if (IgnoreMessage(sensor_id, imu_data->time)) {
@@ -222,7 +223,7 @@ void SensorBridge::HandleImuMessage(const std::string& sensor_id,
 }
 
 void SensorBridge::HandleLaserScanMessage(
-    const std::string& sensor_id, const sensor_msgs::LaserScan::ConstPtr& msg) {
+    const std::string& sensor_id, const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg) {
   carto::sensor::PointCloudWithIntensities point_cloud;
   carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
@@ -231,7 +232,7 @@ void SensorBridge::HandleLaserScanMessage(
 
 void SensorBridge::HandleMultiEchoLaserScanMessage(
     const std::string& sensor_id,
-    const sensor_msgs::MultiEchoLaserScan::ConstPtr& msg) {
+    const sensor_msgs::msg::MultiEchoLaserScan::ConstSharedPtr& msg) {
   carto::sensor::PointCloudWithIntensities point_cloud;
   carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
@@ -240,11 +241,11 @@ void SensorBridge::HandleMultiEchoLaserScanMessage(
 
 void SensorBridge::HandlePointCloud2Message(
     const std::string& sensor_id,
-    const sensor_msgs::PointCloud2::ConstPtr& msg) {
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
   carto::sensor::PointCloudWithIntensities point_cloud;
   carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
-  HandleRangefinder(sensor_id, time, msg->header.frame_id, point_cloud);
+  HandleRangefinder(sensor_id, time, msg->header.frame_id, point_cloud.points);
 }
 
 const TfBridge& SensorBridge::tf_bridge() const { return tf_bridge_; }
@@ -259,6 +260,7 @@ void SensorBridge::HandleLaserScan(
   CHECK_LE(points.points.back().time, 0.f);
   // 将激光雷达数据分成几个部分，每个部分单独进行跟踪
   // TODO(gaschler): Use per-point time instead of subdivisions.
+  // num_subdivisions_per_laser_scan_代表一帧激光分批处理的批次
   for (int i = 0; i != num_subdivisions_per_laser_scan_; ++i) {
     const size_t start_index =
         points.points.size() * i / num_subdivisions_per_laser_scan_;
@@ -325,7 +327,7 @@ void SensorBridge::HandleRangefinder(
         sensor_id, carto::sensor::TimedPointCloudData{
                         time, sensor_to_tracking_refined.translation().cast<float>(),
                         carto::transform::Rigid3d::Identity(),
-                        carto::sensor::TransformTimedPointCloud(
+                       carto::sensor::TransformTimedPointCloud(
                            ranges.points, sensor_to_tracking_refined.cast<float>()),
                         ranges.intensities});
   }
