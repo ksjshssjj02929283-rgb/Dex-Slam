@@ -27,23 +27,21 @@ TfBridge::TfBridge(const std::string& tracking_frame,
     : tracking_frame_(tracking_frame),
       lookup_transform_timeout_sec_(lookup_transform_timeout_sec),
       buffer_(buffer) {}
-
+// noted by hz: 查询tracking_frame到frame_id的tf，并转换为carto的刚体变换格式
 std::unique_ptr<::cartographer::transform::Rigid3d> TfBridge::LookupToTracking(
     const ::cartographer::common::Time time,
     const std::string& frame_id) const {
-  ::ros::Duration timeout(lookup_transform_timeout_sec_);
+  tf2::Duration timeout(tf2::durationFromSec(lookup_transform_timeout_sec_));
   std::unique_ptr<::cartographer::transform::Rigid3d> frame_id_to_tracking;
   try {
-    const ::ros::Time latest_tf_time =
-        buffer_
-            ->lookupTransform(tracking_frame_, frame_id, ::ros::Time(0.),
-                              timeout)
-            .header.stamp;
-    const ::ros::Time requested_time = ToRos(time);
+    const rclcpp::Time latest_tf_time =
+        buffer_->lookupTransform(tracking_frame_, frame_id, ::rclcpp::Time(0.), timeout).header.stamp;
+    const rclcpp::Time requested_time = ToRos(time);
+
     if (latest_tf_time >= requested_time) {
       // We already have newer data, so we do not wait. Otherwise, we would wait
       // for the full 'timeout' even if we ask for data that is too old.
-      timeout = ::ros::Duration(0.);
+      timeout = tf2::durationFromSec(0.0);
     }
     return absl::make_unique<::cartographer::transform::Rigid3d>(
         ToRigid3d(buffer_->lookupTransform(tracking_frame_, frame_id,

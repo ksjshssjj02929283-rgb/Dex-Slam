@@ -33,37 +33,46 @@
 #include "cartographer_ros/common/node_constants.h"
 #include "cartographer_ros/options/mapping_node_options.h"
 #include "cartographer_ros/options/trajectory_options.h"
-#include "cartographer_ros_msgs/FinishTrajectory.h"
-#include "cartographer_ros_msgs/GetTrajectoryStates.h"
-#include "cartographer_ros_msgs/ReadMetrics.h"
-#include "cartographer_ros_msgs/StartTrajectory.h"
-#include "cartographer_ros_msgs/StatusResponse.h"
-#include "cartographer_ros_msgs/SubmapEntry.h"  
-#include "cartographer_ros_msgs/SubmapList.h"
-#include "cartographer_ros_msgs/SubmapQuery.h"
-#include "cartographer_ros_msgs/WriteState.h"
-#include "nav_msgs/Odometry.h"
-#include "nav_msgs/Path.h"
-#include "ros/ros.h"
-#include "sensor_msgs/Imu.h"
-#include "sensor_msgs/LaserScan.h"
-#include "sensor_msgs/MultiEchoLaserScan.h"
-#include "sensor_msgs/NavSatFix.h"
-#include "sensor_msgs/PointCloud2.h"
-#include "tf2_ros/transform_broadcaster.h"
+#include "cartographer_ros_msgs/srv/finish_trajectory.hpp"
+#include "cartographer_ros_msgs/srv/get_trajectory_states.hpp"
+#include "cartographer_ros_msgs/srv/read_metrics.hpp"
+#include "cartographer_ros_msgs/srv/start_trajectory.hpp"
+#include "cartographer_ros_msgs/msg/status_response.hpp"
+#include "cartographer_ros_msgs/msg/submap_entry.hpp"
+#include "cartographer_ros_msgs/msg/submap_list.hpp"
+#include "cartographer_ros_msgs/srv/submap_query.hpp"
+#include "cartographer_ros_msgs/srv/write_state.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "nav_msgs/msg/path.hpp"
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/multi_echo_laser_scan.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+// added by hz
+#include "cartographer/transform/rigid_transform.h"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "geometry_msgs/msg/pose.hpp"
+#include "geometry_msgs/msg/pose_array.hpp"
 
 #include "file_manager.hpp"
 #include "pose_save_tool.hpp"
 
 namespace cartographer_ros {
 
-// Wires up ROS topics to SLAM. 
+// Wires up ROS topics to SLAM.
 class Node
 {
-public:
+ public:
   Node(const MappingNodeOptions& node_options,
-     std::unique_ptr<cartographer::mapping::MapBuilderInterface> map_builder,
-     tf2_ros::Buffer* tf_buffer, bool collect_metrics);
+       std::unique_ptr<cartographer::mapping::MapBuilderInterface> map_builder,
+       std::shared_ptr<tf2_ros::Buffer> tf_buffer,
+       rclcpp::Node::SharedPtr node,
+       bool collect_metrics);
   ~Node();
 
   Node(const Node&) = delete;
@@ -78,86 +87,94 @@ public:
   // Runs final optimization. All trajectories have to be finished when calling.
   void RunFinalOptimization();
 
+  // added by hz
+//   void StartLocalizationWithInitialPose(cartographer::transform::Rigid3d initial_pose);    
+  // end
+
   // 保存最后优化的位姿
   void SaveOptimizedPoses(const int & trajectory_id);
 
   bool SaveMap(const std::string & map_filename, const double resolution);
   // Starts the first trajectory with the default topics.
+//   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options, 
+//                                         bool flag_localization, 
+//                                         const std::string& initial_poses_filename, 
+//                                         const std::string& apriltag_poses_filename,
+//                                         const std::string& location_name); // added by hz
+
   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options);
 
   // Returns unique SensorIds for multiple input bag files based on
   // their TrajectoryOptions.
   // 'SensorId::id' is the expected ROS topic name.
   std::vector<
-    std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>>
+      std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>>
   ComputeDefaultSensorIdsForMultipleBags(
-    const std::vector<TrajectoryOptions>& bags_options) const;
+      const std::vector<TrajectoryOptions>& bags_options) const;
 
   // Adds a trajectory for offline processing, i.e. not listening to topics.
   int AddOfflineTrajectory(
-    const std::set<
-      cartographer::mapping::TrajectoryBuilderInterface::SensorId>&
-      expected_sensor_ids,
-    const TrajectoryOptions& options);
+      const std::set<
+          cartographer::mapping::TrajectoryBuilderInterface::SensorId>&
+          expected_sensor_ids,
+      const TrajectoryOptions& options);
 
   // The following functions handle adding sensor data to a trajectory.
   void HandleOdometryMessage(int trajectory_id, const std::string& sensor_id,
-               const nav_msgs::Odometry::ConstPtr& msg);
+                             const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
   void HandleNavSatFixMessage(int trajectory_id, const std::string& sensor_id,
-                const sensor_msgs::NavSatFix::ConstPtr& msg);
+                              const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg);
   void HandleLandmarkMessage(
-    int trajectory_id, const std::string& sensor_id,
-    const cartographer_ros_msgs::LandmarkList::ConstPtr& msg);
+      int trajectory_id, const std::string& sensor_id,
+      const cartographer_ros_msgs::msg::LandmarkList::ConstSharedPtr& msg);
   void HandleImuMessage(int trajectory_id, const std::string& sensor_id,
-            const sensor_msgs::Imu::ConstPtr& msg);
+                        const sensor_msgs::msg::Imu::ConstSharedPtr &msg);
   void HandleLaserScanMessage(int trajectory_id, const std::string& sensor_id,
-                const sensor_msgs::LaserScan::ConstPtr& msg);
+                              const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg);
   void HandleMultiEchoLaserScanMessage(
-    int trajectory_id, const std::string& sensor_id,
-    const sensor_msgs::MultiEchoLaserScan::ConstPtr& msg);
+      int trajectory_id, const std::string& sensor_id,
+      const sensor_msgs::msg::MultiEchoLaserScan::ConstSharedPtr& msg);
   void HandlePointCloud2Message(int trajectory_id, const std::string& sensor_id,
-                const sensor_msgs::PointCloud2::ConstPtr& msg);
+                                const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
 
   // Serializes the complete Node state.
   void SerializeState(const std::string& filename,
-            const bool include_unfinished_submaps);
+                      const bool include_unfinished_submaps);
 
   // Loads a serialized SLAM state from a .pbstream file.
   void LoadState(const std::string& state_filename, bool load_frozen_state);
 
-  ::ros::NodeHandle* node_handle();
-
-private:
+ private:
   struct Subscriber {
-  ::ros::Subscriber subscriber;
+    rclcpp::SubscriptionBase::SharedPtr subscriber;
 
-  // ::ros::Subscriber::getTopic() does not necessarily return the same
-  // std::string
-  // it was given in its constructor. Since we rely on the topic name as the
-  // unique identifier of a subscriber, we remember it ourselves.
-  std::string topic;
+    // ::ros::Subscriber::getTopic() does not necessarily return the same
+    // std::string
+    // it was given in its constructor. Since we rely on the topic name as the
+    // unique identifier of a subscriber, we remember it ourselves.
+    std::string topic;
   };
 
   bool HandleSubmapQuery(
-    cartographer_ros_msgs::SubmapQuery::Request& request,
-    cartographer_ros_msgs::SubmapQuery::Response& response);
+      const cartographer_ros_msgs::srv::SubmapQuery::Request::SharedPtr request,
+      cartographer_ros_msgs::srv::SubmapQuery::Response::SharedPtr response);
   bool HandleTrajectoryQuery(
-    ::cartographer_ros_msgs::TrajectoryQuery::Request& request,
-    ::cartographer_ros_msgs::TrajectoryQuery::Response& response);
+      const cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr request,
+      cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr response);
   bool HandleStartTrajectory(
-    cartographer_ros_msgs::StartTrajectory::Request& request,
-    cartographer_ros_msgs::StartTrajectory::Response& response);
+      const cartographer_ros_msgs::srv::StartTrajectory::Request::SharedPtr request,
+      cartographer_ros_msgs::srv::StartTrajectory::Response::SharedPtr response);
   bool HandleFinishTrajectory(
-    cartographer_ros_msgs::FinishTrajectory::Request& request,
-    cartographer_ros_msgs::FinishTrajectory::Response& response);
-  bool HandleWriteState(cartographer_ros_msgs::WriteState::Request& request,
-            cartographer_ros_msgs::WriteState::Response& response);
+      const cartographer_ros_msgs::srv::FinishTrajectory::Request::SharedPtr request,
+      cartographer_ros_msgs::srv::FinishTrajectory::Response::SharedPtr response);
+  bool HandleWriteState(
+      const cartographer_ros_msgs::srv::WriteState::Request::SharedPtr request,
+      cartographer_ros_msgs::srv::WriteState::Response::SharedPtr response);
   bool HandleGetTrajectoryStates(
-    ::cartographer_ros_msgs::GetTrajectoryStates::Request& request,
-    ::cartographer_ros_msgs::GetTrajectoryStates::Response& response);
-  bool HandleReadMetrics(
-    cartographer_ros_msgs::ReadMetrics::Request& request,
-    cartographer_ros_msgs::ReadMetrics::Response& response);
+      const cartographer_ros_msgs::srv::GetTrajectoryStates::Request::SharedPtr,
+      cartographer_ros_msgs::srv::GetTrajectoryStates::Response::SharedPtr response);
+  bool HandleReadMetrics(const cartographer_ros_msgs::srv::ReadMetrics::Request::SharedPtr,
+      cartographer_ros_msgs::srv::ReadMetrics::Response::SharedPtr response);
 
   // Returns the set of SensorIds expected for a trajectory.
   // 'SensorId::id' is the expected ROS topic name.
@@ -165,87 +182,123 @@ private:
   ComputeExpectedSensorIds(const TrajectoryOptions& options) const;
   int AddTrajectory(const TrajectoryOptions& options);
   void LaunchSubscribers(const TrajectoryOptions& options, int trajectory_id);
-  void PublishSubmapList(const ::ros::WallTimerEvent& timer_event);
+  void PublishSubmapList();
   void AddExtrapolator(int trajectory_id, const TrajectoryOptions& options);
   void AddSensorSamplers(int trajectory_id, const TrajectoryOptions& options);
-  void PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event);
-  void PublishTrajectoryNodeList(const ::ros::WallTimerEvent& timer_event);
-  void PublishLandmarkPosesList(const ::ros::WallTimerEvent& timer_event);
-  void PublishConstraintList(const ::ros::WallTimerEvent& timer_event);
+  void PublishLocalTrajectoryData();
+  void PublishTrajectoryNodeList();
+  void PublishLandmarkPosesList();
+  void PublishConstraintList();
   bool ValidateTrajectoryOptions(const TrajectoryOptions& options);
   bool ValidateTopicNames(const TrajectoryOptions& options);
-  cartographer_ros_msgs::StatusResponse FinishTrajectoryUnderLock(
-    int trajectory_id) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-  void MaybeWarnAboutTopicMismatch(const ::ros::WallTimerEvent&);
+  cartographer_ros_msgs::msg::StatusResponse FinishTrajectoryUnderLock(
+      int trajectory_id) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void MaybeWarnAboutTopicMismatch();
 
   // Helper function for service handlers that need to check trajectory states.
-  cartographer_ros_msgs::StatusResponse TrajectoryStateToStatus(
-    int trajectory_id,
-    const std::set<
-      cartographer::mapping::PoseGraphInterface::TrajectoryState>&
-      valid_states);
+  cartographer_ros_msgs::msg::StatusResponse TrajectoryStateToStatus(
+      int trajectory_id,
+      const std::set<
+          cartographer::mapping::PoseGraphInterface::TrajectoryState>&
+          valid_states);
   const MappingNodeOptions node_options_;
 
-  tf2_ros::TransformBroadcaster tf_broadcaster_;
+  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   absl::Mutex mutex_;
   std::unique_ptr<cartographer_ros::metrics::FamilyFactory> metrics_registry_;
-  MapBuilderBridge map_builder_bridge_ GUARDED_BY(mutex_);
+  // 在访问 map_builder_bridge_ 之前，需要先获得 mutex_ 锁，并在访问结束后释放锁,确保多个线程在同时访问 map_builder_bridge_ 时不会产生数据竞争问题
+  std::shared_ptr<MapBuilderBridge> map_builder_bridge_ GUARDED_BY(mutex_);
 
-  ::ros::NodeHandle node_handle_;
-  ::ros::Publisher submap_list_publisher_;
-  ::ros::Publisher trajectory_node_list_publisher_;
-  ::ros::Publisher landmark_poses_list_publisher_;
-  ::ros::Publisher constraint_list_publisher_;
-  ::ros::Publisher tracked_pose_publisher_;
-  ::ros::Publisher tracked_path_publisher_;
-  ::nav_msgs::Path tracked_path_msg_;
-  // These ros::ServiceServers need to live for the lifetime of the node.
-  std::vector<::ros::ServiceServer> service_servers_;
-  ::ros::Publisher scan_matched_point_cloud_publisher_;
-  ::ros::Publisher local_map_cloud_publisher_;
-  ::ros::Publisher matched_feature_publisher_;
-  ::ros::Publisher local_feature_map_publisher_;
+  rclcpp::Node::SharedPtr node_;
+  ::rclcpp::Publisher<::cartographer_ros_msgs::msg::SubmapList>::SharedPtr submap_list_publisher_;
+  ::rclcpp::Publisher<::visualization_msgs::msg::MarkerArray>::SharedPtr trajectory_node_list_publisher_;
+  ::rclcpp::Publisher<::visualization_msgs::msg::MarkerArray>::SharedPtr landmark_poses_list_publisher_;
+  ::rclcpp::Publisher<::visualization_msgs::msg::MarkerArray>::SharedPtr constraint_list_publisher_;
+  ::rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr tracked_pose_publisher_;
+  ::rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr tracked_path_publisher_;
+  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_matched_point_cloud_publisher_;
+  ::nav_msgs::msg::Path tracked_path_msg_;
+  // These ros service servers need to live for the lifetime of the node.
+  ::rclcpp::Service<cartographer_ros_msgs::srv::SubmapQuery>::SharedPtr submap_query_server_;
+  ::rclcpp::Service<cartographer_ros_msgs::srv::TrajectoryQuery>::SharedPtr trajectory_query_server;
+  ::rclcpp::Service<cartographer_ros_msgs::srv::StartTrajectory>::SharedPtr start_trajectory_server_;
+  ::rclcpp::Service<cartographer_ros_msgs::srv::FinishTrajectory>::SharedPtr finish_trajectory_server_;
+  ::rclcpp::Service<cartographer_ros_msgs::srv::WriteState>::SharedPtr write_state_server_;
+  ::rclcpp::Service<cartographer_ros_msgs::srv::GetTrajectoryStates>::SharedPtr get_trajectory_states_server_;
+  ::rclcpp::Service<cartographer_ros_msgs::srv::ReadMetrics>::SharedPtr read_metrics_server_;
+
+  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr local_map_cloud_publisher_;
+  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr matched_feature_publisher_;
+  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr local_feature_map_publisher_;
+
+  // new added by hz:
+  ::rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr local_pose_publisher_;
+  ::rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr init_pose_subscriber_;
+  ::rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr apriltag_pose_subscriber_;
+  void HandleInitPoseMsg(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
+  void HandleApriltagPoseMsg(const geometry_msgs::msg::PoseArray::SharedPtr msg);
+  cartographer::transform::Rigid3d init_pose;
+  bool flag_init_pose_received = false;
+  TrajectoryOptions trajectory_options;
+  cartographer::transform::Rigid3d apriltag_pose;
+  bool flag_apriltag_pose_received = false;
+  cartographer::transform::Rigid3d recorded_initial_pose;
+  bool flag_recorded_initial_pose_received = false;
+  cartographer::transform::Rigid3d recorded_apriltag_pose;
+  bool flag_recorded_apriltag_pose_received = false;
+  int miss_apriltag_detection_count = 0;
+  bool flag_finish_initial_localization = false; 
+  // new added by hz end
+
+
 
   struct TrajectorySensorSamplers {
-  TrajectorySensorSamplers(const double rangefinder_sampling_ratio,
-               const double odometry_sampling_ratio,
-               const double fixed_frame_pose_sampling_ratio,
-               const double imu_sampling_ratio,
-               const double landmark_sampling_ratio)
-    : rangefinder_sampler(rangefinder_sampling_ratio),
-      odometry_sampler(odometry_sampling_ratio),
-      fixed_frame_pose_sampler(fixed_frame_pose_sampling_ratio),
-      imu_sampler(imu_sampling_ratio),
-      landmark_sampler(landmark_sampling_ratio) {}
+    TrajectorySensorSamplers(const double rangefinder_sampling_ratio,
+                             const double odometry_sampling_ratio,
+                             const double fixed_frame_pose_sampling_ratio,
+                             const double imu_sampling_ratio,
+                             const double landmark_sampling_ratio)
+        : rangefinder_sampler(rangefinder_sampling_ratio),
+          odometry_sampler(odometry_sampling_ratio),
+          fixed_frame_pose_sampler(fixed_frame_pose_sampling_ratio),
+          imu_sampler(imu_sampling_ratio),
+          landmark_sampler(landmark_sampling_ratio) {}
 
-  ::cartographer::common::FixedRatioSampler rangefinder_sampler;
-  ::cartographer::common::FixedRatioSampler odometry_sampler;
-  ::cartographer::common::FixedRatioSampler fixed_frame_pose_sampler;
-  ::cartographer::common::FixedRatioSampler imu_sampler;
-  ::cartographer::common::FixedRatioSampler landmark_sampler;
+    ::cartographer::common::FixedRatioSampler rangefinder_sampler;
+    ::cartographer::common::FixedRatioSampler odometry_sampler;
+    ::cartographer::common::FixedRatioSampler fixed_frame_pose_sampler;
+    ::cartographer::common::FixedRatioSampler imu_sampler;
+    ::cartographer::common::FixedRatioSampler landmark_sampler;
   };
 
   // These are keyed with 'trajectory_id'.
   std::map<int, ::cartographer::mapping::PoseExtrapolator> extrapolators_;
-  std::map<int, ::ros::Time> last_published_tf_stamps_;
+  std::map<int, builtin_interfaces::msg::Time> last_published_tf_stamps_;
   std::unordered_map<int, TrajectorySensorSamplers> sensor_samplers_;
   std::unordered_map<int, std::vector<Subscriber>> subscribers_;
   std::unordered_set<std::string> subscribed_topics_;
   std::unordered_set<int> trajectories_scheduled_for_finish_;
 
-  // We have to keep the timer handles of ::ros::WallTimers around, otherwise
-  // they do not fire.
-  std::vector<::ros::WallTimer> wall_timers_;
-
   // The timer for publishing local trajectory data (i.e. pose transforms and
   // range data point clouds) is a regular timer which is not triggered when
   // simulation time is standing still. This prevents overflowing the transform
   // listener buffer by publishing the same transforms over and over again.
-  ::ros::Timer publish_local_trajectory_data_timer_;
+  ::rclcpp::TimerBase::SharedPtr submap_list_timer_;
+  ::rclcpp::TimerBase::SharedPtr local_trajectory_data_timer_;
+  ::rclcpp::TimerBase::SharedPtr trajectory_node_list_timer_;
+  ::rclcpp::TimerBase::SharedPtr landmark_pose_list_timer_;
+  ::rclcpp::TimerBase::SharedPtr constrain_list_timer_;
+  ::rclcpp::TimerBase::SharedPtr maybe_warn_about_topic_mismatch_timer_;
 
   // TODO：add by linfeng.guo
   std::shared_ptr<dcm::utility::PoseSaveTool> carto_pose_tool_;
+
+//   // added by hz
+//   std::map<int, geometry_msgs::msg::TransformStamped> map_to_local_buffer;
+//   std::map<int, geometry_msgs::msg::TransformStamped> local_to_published_buffer;
+//   int transform_id;
+//   // end
 };
 
 }  // namespace cartographer_ros

@@ -26,9 +26,10 @@
 #include "cartographer_ros/mapping/ros_map.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
+#include <rclcpp/rclcpp.hpp>
 
 DEFINE_string(pbstream_filename, "",
-        "Filename of a pbstream to draw a map from.");
+              "Filename of a pbstream to draw a map from.");
 DEFINE_string(map_filestem, "map", "Stem of the output files.");
 DEFINE_double(resolution, 0.05, "Resolution of a grid cell in the drawn map.");
 
@@ -43,23 +44,23 @@ namespace {
  * @param resolution 地图分辨率
  */
 void Run(const std::string& pbstream_filename, const std::string& map_filestem,
-     const double resolution) {
+         const double resolution) {
   ::cartographer::io::ProtoStreamReader reader(pbstream_filename);
   ::cartographer::io::ProtoStreamDeserializer deserializer(&reader);
 
   LOG(INFO) << "Loading submap slices from serialized data.";
   // 1. 逆序列化pbstream文件，并获取submap切片（submap_slices）
   std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>
-    submap_slices;
+      submap_slices;
   ::cartographer::mapping::ValueConversionTables conversion_tables;
   ::cartographer::io::DeserializeAndFillSubmapSlices(
-    &deserializer, &submap_slices, &conversion_tables);
+      &deserializer, &submap_slices, &conversion_tables);
   CHECK(reader.eof());
 
   LOG(INFO) << "Generating combined map image from submap slices.";
   // 2. 根据submap_slices生成PaintSubmapSlices
   auto result =
-    ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
+      ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
 
   ::cartographer::io::StreamFileWriter pgm_writer(map_filestem + ".pgm");
   // 3. 将PaintSubmapSlices转换为Image，并保存为pgm文件
@@ -67,8 +68,8 @@ void Run(const std::string& pbstream_filename, const std::string& map_filestem,
   WritePgm(image, resolution, &pgm_writer, 0.65, 0.196);
 
   const Eigen::Vector2d origin(
-    -result.origin.x() * resolution,
-    (result.origin.y() - image.height()) * resolution);
+      -result.origin.x() * resolution,
+      (result.origin.y() - image.height()) * resolution);
   // 4. 保存yaml文件
   ::cartographer::io::StreamFileWriter yaml_writer(map_filestem + ".yaml");
   WriteYaml(resolution, origin, pgm_writer.GetFilename(), &yaml_writer, 0.65, 0.196);
@@ -78,6 +79,10 @@ void Run(const std::string& pbstream_filename, const std::string& map_filestem,
 }  // namespace cartographer_ros
 
 int main(int argc, char** argv) {
+  // Init rclcpp first because gflags reorders command line flags in argv
+  rclcpp::init(argc, argv);
+
+  google::AllowCommandLineReparsing();
   FLAGS_alsologtostderr = true;
   google::InitGoogleLogging(argv[0]);
   google::ParseCommandLineFlags(&argc, &argv, true);
@@ -86,5 +91,6 @@ int main(int argc, char** argv) {
   CHECK(!FLAGS_map_filestem.empty()) << "-map_filestem is missing.";
 
   ::cartographer_ros::Run(FLAGS_pbstream_filename, FLAGS_map_filestem,
-              FLAGS_resolution);
+                          FLAGS_resolution);
+  rclcpp::shutdown();
 }

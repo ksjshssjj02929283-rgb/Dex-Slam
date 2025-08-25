@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "cartographer_ros/mapping/ros_log_sink.h"
+#include "cartographer_ros/ros_log_sink.h"
 
 #include <chrono>
 #include <cstring>
@@ -22,7 +22,6 @@
 #include <thread>
 
 #include "glog/log_severity.h"
-#include "ros/console.h"
 
 namespace cartographer_ros {
 
@@ -44,23 +43,25 @@ void ScopedRosLogSink::send(const ::google::LogSeverity severity,
                             const struct std::tm* const tm_time,
                             const char* const message,
                             const size_t message_len) {
+  (void) base_filename; // TODO: remove unused arg ?
+
   const std::string message_string = ::google::LogSink::ToString(
       severity, GetBasename(filename), line, tm_time, message, message_len);
   switch (severity) {
     case ::google::GLOG_INFO:
-      ROS_INFO_STREAM(message_string);
+      RCLCPP_INFO_STREAM(logger_, message_string);
       break;
 
     case ::google::GLOG_WARNING:
-      ROS_WARN_STREAM(message_string);
+      RCLCPP_WARN_STREAM(logger_, message_string);
       break;
 
     case ::google::GLOG_ERROR:
-      ROS_ERROR_STREAM(message_string);
+      RCLCPP_ERROR_STREAM(logger_, message_string);
       break;
 
     case ::google::GLOG_FATAL:
-      ROS_FATAL_STREAM(message_string);
+      RCLCPP_FATAL_STREAM(logger_, message_string);
       will_die_ = true;
       break;
   }
