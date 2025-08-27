@@ -85,8 +85,8 @@ using ::cartographer::sensor::LandmarkData;
 using ::cartographer::sensor::LandmarkObservation;
 using ::cartographer::sensor::PointCloudWithIntensities;
 using ::cartographer::transform::Rigid3d;
-using ::cartographer_ros_msgs::LandmarkEntry;
-using ::cartographer_ros_msgs::LandmarkList;
+using ::cartographer_ros_msgs::msg::LandmarkEntry;
+using ::cartographer_ros_msgs::msg::LandmarkList;
 
 sensor_msgs::msg::PointCloud2 PreparePointCloud2Message(const int64_t timestamp,
                                                    const std::string& frame_id,
@@ -193,27 +193,30 @@ sensor_msgs::msg::PointCloud2 ToPointCloud2Message(
     const int64_t timestamp, const std::string& frame_id,
     const ::cartographer::sensor::TimedPointCloud& point_cloud) {
   auto msg = PreparePointCloud2Message(timestamp, frame_id, point_cloud.size());
-  ::ros::serialization::OStream stream(msg.data.data(), msg.data.size());
-  for (const cartographer::sensor::TimedRangefinderPoint& point : point_cloud) {
-    stream.next(point.position.x());
-    stream.next(point.position.y());
-    stream.next(point.position.z());
-    stream.next(kPointCloudComponentFourMagic);
+  size_t offset = 0;
+  float * const data = reinterpret_cast<float*>(&msg.data[0]);
+  for (const auto& point : point_cloud) {
+    data[offset++] = point.position.x();
+    data[offset++] = point.position.y();
+    data[offset++] = point.position.z();
+    data[offset++] = kPointCloudComponentFourMagic;
   }
   return msg;
 }
+
 
 sensor_msgs::msg::PointCloud2 ToPointCloud2Message(
     int64_t timestamp, const std::string& frame_id,
     const ::cartographer::sensor::PointCloud& point_cloud)
 {
   auto msg = PreparePointCloud2Message(timestamp, frame_id, point_cloud.size());
-  ::ros::serialization::OStream stream(msg.data.data(), msg.data.size());
-  for (const cartographer::sensor::RangefinderPoint& point : point_cloud) {
-    stream.next(point.position.x());
-    stream.next(point.position.y());
-    stream.next(point.position.z());
-    stream.next(kPointCloudComponentFourMagic);
+  size_t offset = 0;
+  float * const data = reinterpret_cast<float*>(&msg.data[0]);
+  for (const auto& point : point_cloud) {
+    data[offset++] = point.position.x();
+    data[offset++] = point.position.y();
+    data[offset++] = point.position.z();
+    data[offset++] = kPointCloudComponentFourMagic;
   }
   return msg;
 }
@@ -515,7 +518,7 @@ visualization_msgs::msg::Marker CreateLineMsg(
 }
 
 std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> CreateLineMapMsg(
-    const ros::Time& time, const std::string& frame_id, int& marker_id,
+    const rclcpp::Time& time, const std::string& frame_id, int& marker_id,
     const std::shared_ptr<cartographer::sensor::LineMapData>
         line_map,
     COLOR pub_color, bool with_normal) {
@@ -610,7 +613,7 @@ std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> CreateLineMapMsg(
 
 
 std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> CreateReflectorMapMsg(
-    const ros::Time& time, const std::string& frame_id, int& marker_id,
+    const rclcpp::Time& time, const std::string& frame_id, int& marker_id,
     const std::shared_ptr<std::vector<Eigen::Vector2d>> reflector_map) {
   std::unique_ptr<std::vector<visualization_msgs::msg::Marker>>
       reflector_map_and_reflector_text =
@@ -629,7 +632,7 @@ std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> CreateReflectorMap
 
   visualization_msgs::msg::Marker reflector_text_marker;
   reflector_text_marker.header.frame_id = frame_id;
-  reflector_text_marker.header.stamp = ros::Time::now();
+  reflector_text_marker.header.stamp = time;
   reflector_text_marker.ns = "reflector map";
   reflector_text_marker.pose.orientation.w = 1.0;
   reflector_text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;

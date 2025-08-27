@@ -20,17 +20,25 @@
 
 #include "cartographer/common/time.h"
 #include "gtest/gtest.h"
-#include "ros/ros.h"
 
 namespace cartographer_ros {
 namespace {
 
-TEST(TimeConversion, testToRos) {
-  std::vector<int64_t> values = {0, 1469091375, 1466481821, 1462101382,
-                                 1468238899};
+static inline builtin_interfaces::msg::Time to_msg_time(int64_t sec_since_unix_epoch)
+{
+  rclcpp::Time t(sec_since_unix_epoch * 1000000000LL); // nanoseconds
+  builtin_interfaces::msg::Time msg;
+  msg.sec = static_cast<int32_t>(t.seconds());         // or t.nanoseconds()/1e9
+  msg.nanosec = static_cast<uint32_t>(t.nanoseconds() % 1000000000LL);
+  return msg;
+}
+
+
+TEST(TimeConversion, testToRos)
+{
+  std::vector<int64_t> values = {0, 1469091375, 1466481821, 1462101382, 1468238899};
   for (int64_t seconds_since_epoch : values) {
-    builtin_interfaces::msg::Time ros_now;
-    ros_now.fromSec(seconds_since_epoch);
+    builtin_interfaces::msg::Time ros_now = to_msg_time(seconds_since_epoch);
     ::cartographer::common::Time cartographer_now(
         ::cartographer::common::FromSeconds(
             seconds_since_epoch +

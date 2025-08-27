@@ -115,7 +115,7 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
       );
     bag_filenames = if_bag_filenames;
   }
-  cartographer_ros::NodeOptions node_options;
+  cartographer_ros::MappingNodeOptions node_options;
   std::vector<std::string> configuration_basenames(
     std::sregex_token_iterator(
       FLAGS_configuration_basenames.begin(), FLAGS_configuration_basenames.end(), regex, -1),

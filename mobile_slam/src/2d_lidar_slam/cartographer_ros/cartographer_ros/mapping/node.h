@@ -218,6 +218,10 @@ class Node
   ::rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr tracked_pose_publisher_;
   ::rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr tracked_path_publisher_;
   ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_matched_point_cloud_publisher_;
+  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr local_map_cloud_publisher_;
+  ::rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr matched_feature_publisher_;
+  ::rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr local_feature_map_publisher_;
+  
   ::nav_msgs::msg::Path tracked_path_msg_;
   // These ros service servers need to live for the lifetime of the node.
   ::rclcpp::Service<cartographer_ros_msgs::srv::SubmapQuery>::SharedPtr submap_query_server_;
@@ -227,10 +231,6 @@ class Node
   ::rclcpp::Service<cartographer_ros_msgs::srv::WriteState>::SharedPtr write_state_server_;
   ::rclcpp::Service<cartographer_ros_msgs::srv::GetTrajectoryStates>::SharedPtr get_trajectory_states_server_;
   ::rclcpp::Service<cartographer_ros_msgs::srv::ReadMetrics>::SharedPtr read_metrics_server_;
-
-  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr local_map_cloud_publisher_;
-  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr matched_feature_publisher_;
-  ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr local_feature_map_publisher_;
 
   // new added by hz:
   ::rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr local_pose_publisher_;
@@ -293,12 +293,6 @@ class Node
 
   // TODO：add by linfeng.guo
   std::shared_ptr<dcm::utility::PoseSaveTool> carto_pose_tool_;
-
-//   // added by hz
-//   std::map<int, geometry_msgs::msg::TransformStamped> map_to_local_buffer;
-//   std::map<int, geometry_msgs::msg::TransformStamped> local_to_published_buffer;
-//   int transform_id;
-//   // end
 };
 
 }  // namespace cartographer_ros

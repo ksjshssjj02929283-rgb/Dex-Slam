@@ -54,7 +54,7 @@ options = {
   mapping_free_thresh = 0.2,
 
   publish_tracked_pose = true,
-  save_tracked_pose = true,
+  save_tracked_pose = false,
   tracked_pose_format = "tum",
   tracked_pose_directory = "/home/ubt/data/",
   tracked_pose_filename = "carto_poses.txt",

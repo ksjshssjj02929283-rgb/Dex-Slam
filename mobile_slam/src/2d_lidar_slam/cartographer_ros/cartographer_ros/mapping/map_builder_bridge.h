@@ -102,9 +102,7 @@ class MapBuilderBridge {
   bool SaveLineMap(const std::string& map_filename);
 
   std::unique_ptr<::cartographer::io::SubmapTextures>
-  FetchSubmapTextures(
-    const ::cartographer::mapping::SubmapId& submap_id,
-    ::cartographer_ros_msgs::SubmapQuery & srv);
+  FetchSubmapTextures(const ::cartographer::mapping::SubmapId& submap_id);
 
   // noted by hz: 子地图查询 
   void HandleSubmapQuery(
@@ -128,10 +126,10 @@ class MapBuilderBridge {
     cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNodePose>
   GetTrajectoryPoses() const;
 
-  visualization_msgs::MarkerArray GetFeatureMap();
+  visualization_msgs::msg::MarkerArray GetFeatureMap();
   // std::vector<visualization_msgs::Marker> GetCodeMap(int& marker_id);
-  std::vector<visualization_msgs::Marker> GetLineMap(int& marker_id);
-  std::vector<visualization_msgs::Marker> GetReflectorMap(int& marker_id);
+  std::vector<visualization_msgs::msg::Marker> GetLineMap(int& marker_id);
+  std::vector<visualization_msgs::msg::Marker> GetReflectorMap(int& marker_id);
 
   // std::vector<Eigen::Vector2d> GetAllReflectors();
 
