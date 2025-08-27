@@ -158,6 +158,9 @@ Node::Node(
         node_->create_publisher<::geometry_msgs::msg::PoseStamped>(
             kTrackedPoseTopic, kLatestOnlyPublisherQueueSize);
   }
+  // tracked_path_publisher_ =
+  //     node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
+  //         kTrackedPathTopic, kLatestOnlyPublisherQueueSize);
 
   // // new added by hz: 
   // if (node_options_.publish_local_pose) {
@@ -166,10 +169,19 @@ Node::Node(
   //           node_options_.localPoseTopic, kLatestOnlyPublisherQueueSize);
   // }
 
-
   scan_matched_point_cloud_publisher_ =
       node_->create_publisher<sensor_msgs::msg::PointCloud2>(
         kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
+  local_map_cloud_publisher_ =
+      node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+          kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
+  matched_feature_publisher_ =
+      node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+          kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
+  local_feature_map_publisher_ =
+      node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+          kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+
   // Step: 2 注册服务
   submap_query_server_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
       kSubmapQueryServiceName,
@@ -244,6 +256,7 @@ Node::Node(
 
 Node::~Node() { FinishAllTrajectories(); }
 
+// TODO: linfeng.guo: 根据需要，判断这些是否需要删除掉
 // // added by hz
 // // step: 0 注册初始位姿订阅器
 // void Node::HandleInitPoseMsg(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
@@ -506,14 +519,14 @@ void Node::PublishLocalTrajectoryData() {
           local_map_cloud.push_back(carto::sensor::ToTimedRangefinderPoint(
               point, 0.f /* time */));
         }
-        local_map_cloud_publisher_.publish(ToPointCloud2Message(
+        local_map_cloud_publisher_->publish(ToPointCloud2Message(
             carto::common::ToUniversal(trajectory_data.local_slam_data->time),
             node_options_.map_frame,
             carto::sensor::TransformTimedPointCloud(
                 local_map_cloud, trajectory_data.local_to_map.cast<float>())));
       }
       if (matched_feature_publisher_->get_subscription_count() > 0) {
-        visualization_msgs::MarkerArray local_line_msg;
+        visualization_msgs::msg::MarkerArray local_line_msg;
         const auto& line_data = trajectory_data.local_slam_data->line_data_in_local;
         for (const auto& line_element : line_data) {
           for (const auto& line : line_element.second) {
@@ -527,10 +540,10 @@ void Node::PublishLocalTrajectoryData() {
                                               COLOR::green));
           }
         }
-        matched_feature_publisher_.publish(local_line_msg);
+        matched_feature_publisher_->publish(local_line_msg);
       }
       if (local_feature_map_publisher_->get_subscription_count() > 0) {
-        visualization_msgs::MarkerArray map_line_msg;
+        visualization_msgs::msg::MarkerArray map_line_msg;
         const auto& line_map_2d_list = trajectory_data.local_slam_data->line_map_2d_list->GetLineMapData2DList();
         for (const auto& line_map : line_map_2d_list) {
           std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen;
@@ -542,7 +555,7 @@ void Node::PublishLocalTrajectoryData() {
                                             line_eigen,
                                             COLOR::red));
         }
-        local_feature_map_publisher_.publish(map_line_msg);
+        local_feature_map_publisher_->publish(map_line_msg);
       }
       extrapolator.AddPose(trajectory_data.local_slam_data->time,
                            trajectory_data.local_slam_data->local_pose);
@@ -636,12 +649,14 @@ void Node::PublishLocalTrajectoryData() {
         // 发布map坐标系下的tracking frame位姿
         tracked_pose_publisher_->publish(pose_msg);
 
-        tracked_path_msg_.header.stamp = stamped_transform.header.stamp;
-        tracked_path_msg_.header.frame_id = node_options_.map_frame;
-        tracked_path_msg_.poses.push_back(pose_msg);
-        tracked_path_publisher_.publish(tracked_path_msg_);
+        // TODO: linfeng.guo: 根据需要，判断是否发布path
+        // tracked_path_msg_.header.stamp = stamped_transform.header.stamp;
+        // tracked_path_msg_.header.frame_id = node_options_.map_frame;
+        // tracked_path_msg_.poses.push_back(pose_msg);
+        // tracked_path_publisher_->publish(tracked_path_msg_);
       }
 
+        // TODO: linfeng.guo: 根据需要，判断是否需要保存位姿
       // if (node_options_.save_tracked_pose &&
       //   trajectory_data.trajectory_options.trajectory_builder_options.has_pure_localization_trimmer())
       // {
@@ -1001,29 +1016,29 @@ bool Node::HandleStartTrajectory(
   return true;
 }
 
-
-void Node::StartLocalizationWithInitialPose(cartographer::transform::Rigid3d initial_pose)
-{
-  // 将初始位姿转换为cartographer的proto格式
-  ::cartographer::mapping::proto::InitialTrajectoryPose initial_trajectory_pose;
-  // 设置 initial_trajectory_pose 的 to_trajectory_id
-  // 字段，一般设置为想对于轨迹0,即建图的轨迹
-  initial_trajectory_pose.set_to_trajectory_id(0);
-  // 将 pose 转换为 protobuf 格式的消息（对于消息字段，用mutable），设置为
-  // relative_pose 字段，表示想对于轨迹0的初始位姿
-  *initial_trajectory_pose.mutable_relative_pose() =
-      cartographer::transform::ToProto(initial_pose);
-  // 设置 timestamp 字段
-  initial_trajectory_pose.set_timestamp(cartographer::common::ToUniversal(
-      ::cartographer_ros::FromRos(rclcpp::Time(0))));
-  // 将 initial_trajectory_pose 赋值
-  // trajectory_options.trajectory_builder_options
-  // 的initial_trajectory_pose字段
-  *trajectory_options.trajectory_builder_options
-       .mutable_initial_trajectory_pose() = initial_trajectory_pose;
-  // end
-}
-// end
+// TODO: linfeng.guo: 判断是否需要删除
+// void Node::StartLocalizationWithInitialPose(cartographer::transform::Rigid3d initial_pose)
+// {
+//   // 将初始位姿转换为cartographer的proto格式
+//   ::cartographer::mapping::proto::InitialTrajectoryPose initial_trajectory_pose;
+//   // 设置 initial_trajectory_pose 的 to_trajectory_id
+//   // 字段，一般设置为想对于轨迹0,即建图的轨迹
+//   initial_trajectory_pose.set_to_trajectory_id(0);
+//   // 将 pose 转换为 protobuf 格式的消息（对于消息字段，用mutable），设置为
+//   // relative_pose 字段，表示想对于轨迹0的初始位姿
+//   *initial_trajectory_pose.mutable_relative_pose() =
+//       cartographer::transform::ToProto(initial_pose);
+//   // 设置 timestamp 字段
+//   initial_trajectory_pose.set_timestamp(cartographer::common::ToUniversal(
+//       ::cartographer_ros::FromRos(rclcpp::Time(0))));
+//   // 将 initial_trajectory_pose 赋值
+//   // trajectory_options.trajectory_builder_options
+//   // 的initial_trajectory_pose字段
+//   *trajectory_options.trajectory_builder_options
+//        .mutable_initial_trajectory_pose() = initial_trajectory_pose;
+//   // end
+// }
+// // end
 /**
  * @brief 创建轨迹优化器，订阅ros消息
  * 
@@ -1336,7 +1351,7 @@ void Node::SaveOptimizedPoses(const int & trajectory_id)
       continue;
     }
 
-    double time = ToRos(node_id_data.data.constant_pose_data.value().time).toSec();
+    double time = ToRos(node_id_data.data.constant_pose_data.value().time).seconds();
     Eigen::Vector3d t = node_id_data.data.global_pose.translation();
     Eigen::Quaterniond q = node_id_data.data.global_pose.rotation();
 
@@ -1463,36 +1478,36 @@ void Node::LoadState(const std::string& state_filename,
 
 // TODO: find ROS equivalent to ros::master::getTopics
 void Node::MaybeWarnAboutTopicMismatch() {
-  const auto topics_and_types = this->get_topic_names_and_types();
+  // const auto topics_and_types = node_->get_topic_names_and_types();
 
-  // 已是绝对全名
-  std::set<std::string> published_topics;
-  std::stringstream published_topics_ss;
-  for (const auto& kv : topics_and_types) {
-    const std::string& abs_name = kv.first;
-    if (published_topics.insert(abs_name).second) {
-      published_topics_ss << abs_name << ",";
-    }
-  }
+  // // 已是绝对全名
+  // std::set<std::string> published_topics;
+  // std::stringstream published_topics_ss;
+  // for (const auto& kv : topics_and_types) {
+  //   const std::string& abs_name = kv.first;
+  //   if (published_topics.insert(abs_name).second) {
+  //     published_topics_ss << abs_name << ",";
+  //   }
+  // }
 
-  bool print_topics = false;
-  for (const auto& entry : subscribers_) {
-    int trajectory_id = entry.first;
-    for (const auto& subscriber : entry.second) {
-      const std::string resolved_topic = this->resolve_name(subscriber.topic);
-      if (published_topics.count(resolved_topic) == 0) {
-        RCLCPP_WARN(this->get_logger(),
-          "Expected topic \"%s\" (trajectory %d) (resolved \"%s\") but no publisher is currently active.",
-          subscriber.topic.c_str(), trajectory_id, resolved_topic.c_str());
-        print_topics = true;
-      }
-    }
-  }
+  // bool print_topics = false;
+  // for (const auto& entry : subscribers_) {
+  //   int trajectory_id = entry.first;
+  //   for (const auto& subscriber : entry.second) {
+  //     const std::string resolved_topic = node_->resolve_name(subscriber.topic);
+  //     if (published_topics.count(resolved_topic) == 0) {
+  //       RCLCPP_WARN(node_->get_logger(),
+  //         "Expected topic \"%s\" (trajectory %d) (resolved \"%s\") but no publisher is currently active.",
+  //         subscriber.topic.c_str(), trajectory_id, resolved_topic.c_str());
+  //       print_topics = true;
+  //     }
+  //   }
+  // }
 
-  if (print_topics) {
-    RCLCPP_WARN(this->get_logger(), "Currently available topics are: %s",
-      published_topics_ss.str().c_str());
-  }
+  // if (print_topics) {
+  //   RCLCPP_WARN(node_->get_logger(), "Currently available topics are: %s",
+  //     published_topics_ss.str().c_str());
+  // }
 }
 
 }  // namespace cartographer_ros

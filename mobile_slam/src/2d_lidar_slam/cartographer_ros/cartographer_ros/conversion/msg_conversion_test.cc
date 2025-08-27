@@ -110,10 +110,10 @@ TEST(MsgConversion, LaserScanToPointCloudWithInfinityAndNaN) {
 }
 
 TEST(MsgConversion, LandmarkListToLandmarkData) {
-  cartographer_ros_msgs::LandmarkList message;
-  message.header.stamp.fromSec(10);
+  cartographer_ros_msgs::msg::LandmarkList message;
+  message.header.stamp = rclcpp::Time(10);
 
-  cartographer_ros_msgs::LandmarkEntry landmark_0;
+  cartographer_ros_msgs::msg::LandmarkEntry landmark_0;
   landmark_0.id = "landmark_0";
   landmark_0.tracking_from_landmark_transform.position.x = 1.0;
   landmark_0.tracking_from_landmark_transform.position.y = 2.0;

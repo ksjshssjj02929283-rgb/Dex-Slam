@@ -245,7 +245,7 @@ void SensorBridge::HandlePointCloud2Message(
   carto::sensor::PointCloudWithIntensities point_cloud;
   carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
-  HandleRangefinder(sensor_id, time, msg->header.frame_id, point_cloud.points);
+  HandleRangefinder(sensor_id, time, msg->header.frame_id, point_cloud);
 }
 
 const TfBridge& SensorBridge::tf_bridge() const { return tf_bridge_; }

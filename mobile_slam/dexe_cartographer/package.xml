@@ -49,7 +49,7 @@
   <depend>libgflags-dev</depend>
   <depend>libgoogle-glog-dev</depend>
   <depend>lua5.2-dev</depend>
-  <depend>protobuf-dev</depend>
+  <!-- <depend>protobuf-dev</depend> -->
 
   <export>
     <build_type>cmake</build_type>

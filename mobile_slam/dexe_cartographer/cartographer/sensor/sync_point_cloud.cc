@@ -138,10 +138,10 @@ proto::PointCloudWithOrigin ToProto(
 {
   proto::PointCloudWithOrigin proto;
   *proto.mutable_origin() = transform::ToProto(point_cloud_with_origin.origin);
-  for (const auto point : point_cloud_with_origin.sync_points_base_link) {
+  for (const auto & point : point_cloud_with_origin.sync_points_base_link) {
     *proto.add_sync_points_base_link() = transform::ToProto(point);
   }
-  for (const auto point : point_cloud_with_origin.origin_points_odom) {
+  for (const auto & point : point_cloud_with_origin.origin_points_odom) {
     *proto.add_origin_points_odom() = transform::ToProto(point);
   }
   for (const auto intensity : point_cloud_with_origin.intensities) {

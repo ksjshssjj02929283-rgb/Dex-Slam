@@ -24,6 +24,7 @@
 #include "cartographer/sensor/line_data.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer_ros_msgs/msg/landmark_list.hpp"
+#include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/transform.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
@@ -91,7 +92,7 @@ cartographer::transform::Rigid3d ComputeLocalFrameFromLatLong(double latitude,
 
 // Points to an occupancy grid message at a specific resolution from painted
 // submap slices obtained via ::cartographer::io::PaintSubmapSlices(...).
-std::unique_ptr<nav_msgs::OccupancyGrid> CreateOccupancyGridMsg(
+std::unique_ptr<nav_msgs::msg::OccupancyGrid> CreateOccupancyGridMsg(
     const cartographer::io::PaintSubmapSlicesResult& painted_slices,
     const double resolution, const std::string& frame_id,
     const rclcpp::Time& time);

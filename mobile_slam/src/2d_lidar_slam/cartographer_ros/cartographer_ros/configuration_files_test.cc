@@ -19,7 +19,7 @@
 
 #include "cartographer_ros/options/mapping_node_options.h"
 #include "gtest/gtest.h"
-#include "ros/package.h"
+#include "ament_index_cpp/get_package_share_directory.hpp"
 
 namespace cartographer_ros {
 namespace {
@@ -28,13 +28,18 @@ class ConfigurationFilesTest : public ::testing::TestWithParam<const char*> {};
 
 TEST_P(ConfigurationFilesTest, ValidateNodeOptions) {
   EXPECT_NO_FATAL_FAILURE({
-    LoadMappingOptions(
-        ::ros::package::getPath("cartographer_ros") + "/configuration_files",
-        GetParam());
+    // 获取安装后的共享目录，例如：
+    // <install>/share/cartographer_ros/configuration_files
+    const std::string share_dir =
+        ament_index_cpp::get_package_share_directory("cartographer_ros");
+    const std::string config_dir = share_dir + "/configuration_files";
+
+    LoadMappingOptions(config_dir, GetParam());
   });
 }
 
-INSTANTIATE_TEST_CASE_P(
+// GTest 现代 API：INSTANTIATE_TEST_SUITE_P
+INSTANTIATE_TEST_SUITE_P(
     ValidateAllNodeOptions, ConfigurationFilesTest,
     ::testing::Values("backpack_2d.lua", "backpack_2d_localization.lua",
                       "backpack_3d.lua", "backpack_3d_localization.lua",

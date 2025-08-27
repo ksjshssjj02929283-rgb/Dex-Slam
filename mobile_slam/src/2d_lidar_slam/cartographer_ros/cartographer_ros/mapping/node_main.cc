@@ -16,6 +16,7 @@
 
 #include <iostream>
 #include <memory>
+#include <filesystem>
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -29,7 +30,6 @@
 #include "cartographer_ros/mapping/ros_log_sink.h"
 #include "gflags/gflags.h"
 #include "tf2_ros/transform_listener.h"
-#include "boost/filesystem.hpp"
 
 DEFINE_bool(collect_metrics, false,
             "Activates the collection of runtime metrics. If activated, the "
@@ -82,29 +82,26 @@ namespace {
 class MappingNode : public rclcpp::Node
 {
 public:
-  MappingNode()
+  explicit MappingNode()
   : rclcpp::Node("mapping_node")
   {
     // Publisher
     mapping_status_pub_ = this->create_publisher<std_msgs::msg::Int16>("mapping_status", 10);
 
-
-
-    // Services (在节点命名空间下暴露，与 ROS1 "~" 私有等价)
     start_mapping_srv_ = this->create_service<std_srvs::srv::Trigger>(
-      "start_mapping",
+      "~/start_mapping",
       std::bind(&MappingNode::StartMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
 
     finish_mapping_srv_ = this->create_service<std_srvs::srv::Trigger>(
-      "finish_mapping",
+      "~/finish_mapping",
       std::bind(&MappingNode::FinishMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
 
     set_map_name_srv_ = this->create_service<dcm_srvs::srv::SetMapName>(
-      "set_map_name",
+      "~/set_map_name",
       std::bind(&MappingNode::SetMapName, this, std::placeholders::_1, std::placeholders::_2));
 
     get_mapping_status_srv_ = this->create_service<dcm_srvs::srv::GetString>(
-      "get_mapping_status",
+      "~/get_mapping_status",
       std::bind(&MappingNode::GetMappingStatus, this, std::placeholders::_1, std::placeholders::_2));
 
     // Clients for show map control (使用全路径，等价于 ROS1 版本)
@@ -119,7 +116,7 @@ public:
       std::bind(&MappingNode::Publish, this));
   }
 
-  ~MappingNode() override
+  ~MappingNode()
   {
     if (is_mapping_) {
       FinishMapping();
@@ -183,16 +180,18 @@ private:
     auto map_builder =
       cartographer::mapping::CreateMapBuilder(node_options_->map_builder_options);
     // 3. 创建 Cartographer ROS Node（节点发布的topic、服务等在其中定义）
-    node_ = std::make_unique<Node>(*node_options_, std::move(map_builder), tf_buffer_.get(),
-                                   FLAGS_collect_metrics);
+    mapping_node_ =
+          std::make_unique<cartographer_ros::Node>(*node_options_, std::move(map_builder),
+                                                    tf_buffer_, this->shared_from_this(),
+                                                    FLAGS_collect_metrics);
     // 4. 读取pstream文件（子图、约束、轨迹等信息）
     // TODO： 扩建模式下，才需要 load_state_filename
     if (!FLAGS_load_state_filename.empty()) {
-      node_->LoadState(FLAGS_load_state_filename, FLAGS_load_frozen_state);
+      mapping_node_->LoadState(FLAGS_load_state_filename, FLAGS_load_frozen_state);
     }
     // 5. 创建轨迹优化器，订阅ros消息
     if (FLAGS_start_trajectory_with_default_topics) {
-      node_->StartTrajectoryWithDefaultTopics(*trajectory_options_);
+      mapping_node_->StartTrajectoryWithDefaultTopics(*trajectory_options_);
     }
 
     is_mapping_ = true;
@@ -220,12 +219,10 @@ private:
 
   // ---- Helpers ----
   bool EnsureDirectoryExists(const std::string& path) {
-    // 建议在 ROS2 中改用 std::filesystem（C++17）
-    namespace fs = std::filesystem;
     try {
       if (path.empty()) return false;
-      if (fs::exists(path)) return true;
-      return fs::create_directories(path);
+      if (std::filesystem::exists(path)) return true;
+      return std::filesystem::create_directories(path);
     } catch (const std::exception& e) {
       LOG(ERROR) << "Filesystem error for path '" << path << "': " << e.what();
       return false;
@@ -271,23 +268,23 @@ private:
 
   void FinishMapping() {
     // 结束优化与保存
-    node_->FinishAllTrajectories();
-    node_->RunFinalOptimization();
+    mapping_node_->FinishAllTrajectories();
+    mapping_node_->RunFinalOptimization();
 
     if (node_options_->save_tracked_pose) {
-      node_->SaveOptimizedPoses(int(0));
+      mapping_node_->SaveOptimizedPoses(int(0));
     }
 
     const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/map.pbstream";
     if (!state_filename.empty()) {
-      node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
+      mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
       LOG(INFO) << "State saved to '" << state_filename << "'.";
     }
 
     const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/map";
-    node_->SaveMap(map_filestream, FLAGS_resolution);
+    mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
 
-    node_.reset();
+    mapping_node_.reset();
     node_options_.reset();
     trajectory_options_.reset();
     tf_listener_.reset();
@@ -333,7 +330,7 @@ private:
   bool is_mapping_{false};
 
   // Cartographer 持有
-  std::unique_ptr<Node> node_;
+  std::unique_ptr<cartographer_ros::Node> mapping_node_;
   std::unique_ptr<MappingNodeOptions> node_options_;
   std::unique_ptr<TrajectoryOptions> trajectory_options_;
 
@@ -358,15 +355,20 @@ private:
 }  // namespace cartographer_ros
 
 int main(int argc, char** argv) {
+  rclcpp::init(argc, argv);  // 在ros2中，要优先初始化rclcpp，否则无法识别launch中的变量
+
+  google::AllowCommandLineReparsing();
   google::InitGoogleLogging(argv[0]);
   google::ParseCommandLineFlags(&argc, &argv, true);
 
   CHECK(!FLAGS_configuration_directory.empty())
     << "-configuration_directory is missing.";
-  CHECK(!FLAGS_configuration_basename.empty()) << "-configuration_basename is missing.";
+  CHECK(!FLAGS_configuration_basename.empty())
+    << "-configuration_basename is missing.";
 
-  rclcpp::init(argc, argv);
+  cartographer_ros::ScopedRosLogSink ros_log_sink;
   auto node = std::make_shared<cartographer_ros::MappingNode>();
+
   rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;

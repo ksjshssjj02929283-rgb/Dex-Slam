@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
-#include "cartographer_ros/map_builder_bridge.h"
+#include "cartographer_ros/mapping/map_builder_bridge.h"
+
+#include <fstream>
+
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+#include <jsoncpp/json/json.h>
 
 #include "absl/memory/memory.h"
 #include "cartographer/io/color.h"
@@ -195,7 +201,7 @@ void MapBuilderBridge::RunFinalOptimization() {
 
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
-  SaveGridMap(map_filename, resolution);
+  // SaveGridMap(map_filename, resolution);
   SaveCloudMap(map_filename, resolution);
   SaveLineMap(map_filename);
   return true;
@@ -407,90 +413,90 @@ bool MapBuilderBridge::SaveCloudMap(
 }
 
 
-bool MapBuilderBridge::SaveGridMap(
-  const std::string& map_filename, const double resolution)
-{
-  // 1. 获取所有的子图信息
-  cartographer_ros_msgs::SubmapList submap_list;
-  submap_list.header.stamp = ::ros::Time::now();
-  submap_list.header.frame_id = node_options_.map_frame;
-  for (const auto& submap_id_pose :
-       map_builder_->pose_graph()->GetAllSubmapPoses()) {
-    cartographer_ros_msgs::SubmapEntry submap_entry;
-    submap_entry.trajectory_id = submap_id_pose.id.trajectory_id;
-    submap_entry.submap_index = submap_id_pose.id.submap_index;
-    submap_entry.submap_version = submap_id_pose.data.version;
-    submap_entry.pose = ToGeometryMsgPose(submap_id_pose.data.pose);
-    submap_list.submap.push_back(submap_entry);
-  }
+// bool MapBuilderBridge::SaveGridMap(
+//   const std::string& map_filename, const double resolution)
+// {
+//   // 1. 获取所有的子图信息
+//   cartographer_ros_msgs::msg::SubmapList submap_list;
+//   submap_list.header.stamp = rclcpp::Time();
+//   submap_list.header.frame_id = node_options_.map_frame;
+//   for (const auto& submap_id_pose :
+//        map_builder_->pose_graph()->GetAllSubmapPoses()) {
+//     cartographer_ros_msgs::msg::SubmapEntry submap_entry;
+//     submap_entry.trajectory_id = submap_id_pose.id.trajectory_id;
+//     submap_entry.submap_index = submap_id_pose.id.submap_index;
+//     submap_entry.submap_version = submap_id_pose.data.version;
+//     submap_entry.pose = ToGeometryMsgPose(submap_id_pose.data.pose);
+//     submap_list.submap.push_back(submap_entry);
+//   }
 
-  std::unique_ptr<
-    std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>
-  submap_slices
-    = absl::make_unique<
-      std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>();
+//   std::unique_ptr<
+//     std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>
+//   submap_slices
+//     = absl::make_unique<
+//       std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>();
 
-  for (const auto & submap_entry : submap_list.submap) {
-    const ::cartographer::mapping::SubmapId
-      id{submap_entry.trajectory_id, submap_entry.submap_index};
+//   for (const auto & submap_entry : submap_list.submap) {
+//     const ::cartographer::mapping::SubmapId
+//       id{submap_entry.trajectory_id, submap_entry.submap_index};
 
-    ::cartographer::io::SubmapSlice& submap_slice = (*submap_slices)[id];
-    submap_slice.pose = ToRigid3d(submap_entry.pose);
-    submap_slice.metadata_version = submap_entry.submap_version;
-    if (submap_slice.surface != nullptr &&
-        submap_slice.version == submap_entry.submap_version) {
-      continue;
-    }
+//     ::cartographer::io::SubmapSlice& submap_slice = (*submap_slices)[id];
+//     submap_slice.pose = ToRigid3d(submap_entry.pose);
+//     submap_slice.metadata_version = submap_entry.submap_version;
+//     if (submap_slice.surface != nullptr &&
+//         submap_slice.version == submap_entry.submap_version) {
+//       continue;
+//     }
 
-    ::cartographer_ros_msgs::SubmapQuery srv;
-    srv.request.trajectory_id = submap_entry.trajectory_id;
-    srv.request.submap_index = submap_entry.submap_index;
+//     ::cartographer_ros_msgs::msg::SubmapQuery srv;
+//     srv.Request.trajectory_id = submap_entry.trajectory_id;
+//     srv.Request.submap_index = submap_entry.submap_index;
 
-    auto fetched_textures = FetchSubmapTextures(id, srv);
-    if (fetched_textures == nullptr) {
-      continue;
-    }
-    CHECK(!fetched_textures->textures.empty());
-    submap_slice.version = fetched_textures->version;
+//     auto fetched_textures = FetchSubmapTextures(id, srv);
+//     if (fetched_textures == nullptr) {
+//       continue;
+//     }
+//     CHECK(!fetched_textures->textures.empty());
+//     submap_slice.version = fetched_textures->version;
 
-    const auto fetched_texture = fetched_textures->textures.begin();
-    submap_slice.width = fetched_texture->width;
-    submap_slice.height = fetched_texture->height;
-    submap_slice.slice_pose = fetched_texture->slice_pose;
-    submap_slice.resolution = fetched_texture->resolution;
-    submap_slice.cairo_data.clear();
+//     const auto fetched_texture = fetched_textures->textures.begin();
+//     submap_slice.width = fetched_texture->width;
+//     submap_slice.height = fetched_texture->height;
+//     submap_slice.slice_pose = fetched_texture->slice_pose;
+//     submap_slice.resolution = fetched_texture->resolution;
+//     submap_slice.cairo_data.clear();
 
-    submap_slice.surface = ::cartographer::io::DrawTexture(
-        fetched_texture->pixels.intensity, fetched_texture->pixels.alpha,
-        fetched_texture->width, fetched_texture->height,
-        &submap_slice.cairo_data);
-  }
+//     submap_slice.surface = ::cartographer::io::DrawTexture(
+//         fetched_texture->pixels.intensity, fetched_texture->pixels.alpha,
+//         fetched_texture->width, fetched_texture->height,
+//         &submap_slice.cairo_data);
+//   }
 
-  // 2. 根据submap_slices生成PaintSubmapSlices
-  auto result =
-    ::cartographer::io::PaintSubmapSlices(*submap_slices, resolution);
-  // 3. 将PaintSubmapSlices转换为Image，并保存为pgm文件
-  ::cartographer::io::Image image(std::move(result.surface));
-  ::cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
-  WritePgm(image, resolution, &pgm_writer,
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
-  WritePng(image, map_filename + ".png",
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
-  const Eigen::Vector2d origin(
-    -result.origin.x() * resolution,
-    (result.origin.y() - image.height()) * resolution);
-  // 4. 保存yaml文件
-  ::cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
-  WriteYaml(resolution, origin,
-            map_filename, &yaml_writer,
-            node_options_.mapping_occ_thresh,
-            node_options_.mapping_free_thresh);
-  LOG(INFO) << "Saving Grid Map Success." << std::endl;
+//   // 2. 根据submap_slices生成PaintSubmapSlices
+//   auto result =
+//     ::cartographer::io::PaintSubmapSlices(*submap_slices, resolution);
+//   // 3. 将PaintSubmapSlices转换为Image，并保存为pgm文件
+//   ::cartographer::io::Image image(std::move(result.surface));
+//   ::cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
+//   WritePgm(image, resolution, &pgm_writer,
+//            node_options_.mapping_occ_thresh,
+//            node_options_.mapping_free_thresh);
+//   WritePng(image, map_filename + ".png",
+//            node_options_.mapping_occ_thresh,
+//            node_options_.mapping_free_thresh);
+//   const Eigen::Vector2d origin(
+//     -result.origin.x() * resolution,
+//     (result.origin.y() - image.height()) * resolution);
+//   // 4. 保存yaml文件
+//   ::cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
+//   WriteYaml(resolution, origin,
+//             map_filename, &yaml_writer,
+//             node_options_.mapping_occ_thresh,
+//             node_options_.mapping_free_thresh);
+//   LOG(INFO) << "Saving Grid Map Success." << std::endl;
 
-  return true;
-}
+//   return true;
+// }
 
 /**
  * @brief 获取指定id的submap的texture（内容信息）
@@ -499,30 +505,30 @@ bool MapBuilderBridge::SaveGridMap(
  * @param srv 
  * @return std::unique_ptr<::cartographer::io::SubmapTextures> 
  */
-std::unique_ptr<::cartographer::io::SubmapTextures>
-MapBuilderBridge::FetchSubmapTextures(
-    const ::cartographer::mapping::SubmapId& submap_id,
-    ::cartographer_ros_msgs::SubmapQuery & srv)
-{
-  srv.request.trajectory_id = submap_id.trajectory_id;
-  srv.request.submap_index = submap_id.submap_index;
-  this->HandleSubmapQuery(srv.request, srv.response);
-  if (srv.response.textures.empty()) {
-    return nullptr;
-  }
-  auto response = absl::make_unique<::cartographer::io::SubmapTextures>();
-  response->version = srv.response.submap_version;
-  for (const auto& texture : srv.response.textures) {
-    const std::string compressed_cells(texture.cells.begin(),
-                                       texture.cells.end());
-    response->textures.emplace_back(::cartographer::io::SubmapTexture{
-        ::cartographer::io::UnpackTextureData(compressed_cells, texture.width,
-                                              texture.height),
-        texture.width, texture.height, texture.resolution,
-        ToRigid3d(texture.slice_pose)});
-  }
-  return response;
-}
+// std::unique_ptr<::cartographer::io::SubmapTextures>
+// MapBuilderBridge::FetchSubmapTextures(
+//     const ::cartographer::mapping::SubmapId& submap_id,
+//     ::cartographer_ros_msgs::srv::SubmapQuery & srv)
+// {
+//   srv.Request.trajectory_id = submap_id.trajectory_id;
+//   srv.Request.submap_index = submap_id.submap_index;
+//   this->HandleSubmapQuery(srv.Request, srv.Response);
+//   if (srv.Response.textures.empty()) {
+//     return nullptr;
+//   }
+//   auto Response = absl::make_unique<::cartographer::io::SubmapTextures>();
+//   Response->version = srv.Response.submap_version;
+//   for (const auto& texture : srv.Response.textures) {
+//     const std::string compressed_cells(texture.cells.begin(),
+//                                        texture.cells.end());
+//     Response->textures.emplace_back(::cartographer::io::SubmapTexture{
+//         ::cartographer::io::UnpackTextureData(compressed_cells, texture.width,
+//                                               texture.height),
+//         texture.width, texture.height, texture.resolution,
+//         ToRigid3d(texture.slice_pose)});
+//   }
+//   return Response;
+// }
 
 bool MapBuilderBridge::SerializeState(const std::string& filename,
                                       const bool include_unfinished_submaps) {
@@ -533,28 +539,28 @@ bool MapBuilderBridge::SerializeState(const std::string& filename,
 /**
  * @brief 获取某个轨迹下某个id的子图信息
  * 
- * @param request 
- * @param response 
+ * @param Request 
+ * @param Response 
  */
 void MapBuilderBridge::HandleSubmapQuery(
-    const cartographer_ros_msgs::srv::SubmapQuery::Request::SharedPtr request,
-    cartographer_ros_msgs::srv::SubmapQuery::Response::SharedPtr response) {
+    const cartographer_ros_msgs::srv::SubmapQuery::Request::SharedPtr Request,
+    cartographer_ros_msgs::srv::SubmapQuery::Response::SharedPtr Response) {
   cartographer::mapping::proto::SubmapQuery::Response response_proto;
-  cartographer::mapping::SubmapId submap_id{request->trajectory_id,
-                                            request->submap_index};
+  cartographer::mapping::SubmapId submap_id{Request->trajectory_id,
+                                            Request->submap_index};
   const std::string error =
       map_builder_->SubmapToProto(submap_id, &response_proto);
   if (!error.empty()) {
     LOG(ERROR) << error;
-    response->status.code = cartographer_ros_msgs::msg::StatusCode::NOT_FOUND;
-    response->status.message = error;
+    Response->status.code = cartographer_ros_msgs::msg::StatusCode::NOT_FOUND;
+    Response->status.message = error;
     return;
   }
-  response->submap_version = response_proto.submap_version();
+  Response->submap_version = response_proto.submap_version();
   for (const auto& texture_proto : response_proto.textures()) {
     // 向textures中添加一个texture
-    response->textures.emplace_back();
-    auto& texture = response->textures.back();
+    Response->textures.emplace_back();
+    auto& texture = Response->textures.back();
     texture.cells.insert(texture.cells.begin(), texture_proto.cells().begin(),
                          texture_proto.cells().end());
     texture.width = texture_proto.width();
@@ -563,8 +569,8 @@ void MapBuilderBridge::HandleSubmapQuery(
     texture.slice_pose = ToGeometryMsgPose(
         cartographer::transform::ToRigid3(texture_proto.slice_pose()));
   }
-  response->status.message = "Success.";
-  response->status.code = cartographer_ros_msgs::msg::StatusCode::OK;
+  Response->status.message = "Success.";
+  Response->status.code = cartographer_ros_msgs::msg::StatusCode::OK;
 }
 
 std::map<int, ::cartographer::mapping::PoseGraphInterface::TrajectoryState>
@@ -605,8 +611,8 @@ cartographer_ros_msgs::msg::SubmapList MapBuilderBridge::GetSubmapList(rclcpp::T
 }
 
 
-visualization_msgs::MarkerArray MapBuilderBridge::GetFeatureMap(){
-  static visualization_msgs::MarkerArray map_list;
+visualization_msgs::msg::MarkerArray MapBuilderBridge::GetFeatureMap(){
+  static visualization_msgs::msg::MarkerArray map_list;
   if(!map_list.markers.empty())
     return map_list;
   int marker_id = 0;
@@ -620,10 +626,10 @@ visualization_msgs::MarkerArray MapBuilderBridge::GetFeatureMap(){
 }
 
 
-std::vector<visualization_msgs::Marker>
+std::vector<visualization_msgs::msg::Marker>
       MapBuilderBridge::GetLineMap(int& marker_id){
-  std::unique_ptr<std::vector<visualization_msgs::Marker>> line_map = 
-      CreateLineMapMsg(ros::Time::now(), node_options_.map_frame, 
+  std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> line_map = 
+      CreateLineMapMsg(rclcpp::Time(), node_options_.map_frame, 
                       marker_id, map_builder_->GetLineMap());
   if(line_map == nullptr)
     return {};
@@ -642,10 +648,10 @@ std::vector<visualization_msgs::Marker>
 // }
 
 
-std::vector<visualization_msgs::Marker> MapBuilderBridge::GetReflectorMap(int& marker_id)
+std::vector<visualization_msgs::msg::Marker> MapBuilderBridge::GetReflectorMap(int& marker_id)
 {
-  std::unique_ptr<std::vector<visualization_msgs::Marker>> reflector_map = 
-      CreateReflectorMapMsg(ros::Time::now(), node_options_.map_frame, 
+  std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> reflector_map = 
+      CreateReflectorMapMsg(rclcpp::Time(), node_options_.map_frame, 
                         marker_id, map_builder_->GetReflectorMap());
   if(reflector_map == nullptr)
     return {};
@@ -697,13 +703,13 @@ MapBuilderBridge::GetLocalTrajectoryData() {
 }
 
 void MapBuilderBridge::HandleTrajectoryQuery(
-    const cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr request,
-    cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr response) {
+    const cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr Request,
+    cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr Response) {
   // This query is safe if the trajectory doesn't exist (returns 0 poses).
   // However, we can filter unwanted states at the higher level in the node.
   const auto node_poses = map_builder_->pose_graph()->GetTrajectoryNodePoses();
   for (const auto& node_id_data :
-       node_poses.trajectory(request->trajectory_id)) {
+       node_poses.trajectory(Request->trajectory_id)) {
     if (!node_id_data.data.constant_pose_data.has_value()) {
       continue;
     }
@@ -712,12 +718,12 @@ void MapBuilderBridge::HandleTrajectoryQuery(
     pose_stamped.header.stamp =
         ToRos(node_id_data.data.constant_pose_data.value().time);
     pose_stamped.pose = ToGeometryMsgPose(node_id_data.data.global_pose);
-    response->trajectory.push_back(pose_stamped);
+    Response->trajectory.push_back(pose_stamped);
   }
-  response->status.code = cartographer_ros_msgs::msg::StatusCode::OK;
-  response->status.message =
-      "Retrieved " + std::to_string(response->trajectory.size()) +
-      " trajectory nodes from trajectory " + std::to_string(request->trajectory_id) + ".";
+  Response->status.code = cartographer_ros_msgs::msg::StatusCode::OK;
+  Response->status.message =
+      "Retrieved " + std::to_string(Response->trajectory.size()) +
+      " trajectory nodes from trajectory " + std::to_string(Request->trajectory_id) + ".";
 }
 
 cartographer::mapping::MapById<
