@@ -96,6 +96,10 @@ public:
       "~/finish_mapping",
       std::bind(&MappingNode::FinishMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
 
+    save_map_srv_ = this->create_service<std_srvs::srv::Trigger>(
+      "~/save_map",
+      std::bind(&MappingNode::SaveMapCallback, this, std::placeholders::_1, std::placeholders::_2));
+
     set_map_name_srv_ = this->create_service<dcm_srvs::srv::SetMapName>(
       "~/set_map_name",
       std::bind(&MappingNode::SetMapName, this, std::placeholders::_1, std::placeholders::_2));
@@ -205,7 +209,36 @@ private:
   {
     if (!is_mapping_) {
       LOG(INFO) << "Mapping node is not running.";
-      res->success = true;
+      res->success = false;
+      res->message = "Already idle";
+      return;
+    }
+    mapping_node_->FinishAllTrajectories();
+    mapping_node_->RunFinalOptimization();
+
+    if (node_options_->save_tracked_pose) {
+      mapping_node_->SaveOptimizedPoses(int(0));
+    }
+
+    const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/map.pbstream";
+    if (!state_filename.empty()) {
+      mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
+      LOG(INFO) << "State saved to '" << state_filename << "'.";
+    }
+
+    const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/map";
+    mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
+
+    res->success = true;
+    res->message = "OK";
+  }
+
+  void SaveMapCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
+                       std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    if (!is_mapping_) {
+      LOG(INFO) << "Mapping node is not running.";
+      res->success = false;
       res->message = "Already idle";
       return;
     }
@@ -215,7 +248,6 @@ private:
     res->success = true;
     res->message = "OK";
   }
-
 
   // ---- Helpers ----
   bool EnsureDirectoryExists(const std::string& path) {
@@ -340,6 +372,7 @@ private:
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
   rclcpp::Service<dcm_srvs::srv::SetMapName>::SharedPtr set_map_name_srv_;
   rclcpp::Service<dcm_srvs::srv::GetString>::SharedPtr get_mapping_status_srv_;
 

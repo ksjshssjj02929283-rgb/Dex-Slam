@@ -201,7 +201,7 @@ void MapBuilderBridge::RunFinalOptimization() {
 
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
-  // SaveGridMap(map_filename, resolution);
+  SaveGridMap(map_filename, resolution);
   SaveCloudMap(map_filename, resolution);
   SaveLineMap(map_filename);
   return true;
@@ -413,90 +413,85 @@ bool MapBuilderBridge::SaveCloudMap(
 }
 
 
-// bool MapBuilderBridge::SaveGridMap(
-//   const std::string& map_filename, const double resolution)
-// {
-//   // 1. 获取所有的子图信息
-//   cartographer_ros_msgs::msg::SubmapList submap_list;
-//   submap_list.header.stamp = rclcpp::Time();
-//   submap_list.header.frame_id = node_options_.map_frame;
-//   for (const auto& submap_id_pose :
-//        map_builder_->pose_graph()->GetAllSubmapPoses()) {
-//     cartographer_ros_msgs::msg::SubmapEntry submap_entry;
-//     submap_entry.trajectory_id = submap_id_pose.id.trajectory_id;
-//     submap_entry.submap_index = submap_id_pose.id.submap_index;
-//     submap_entry.submap_version = submap_id_pose.data.version;
-//     submap_entry.pose = ToGeometryMsgPose(submap_id_pose.data.pose);
-//     submap_list.submap.push_back(submap_entry);
-//   }
+bool MapBuilderBridge::SaveGridMap(
+  const std::string& map_filename, const double resolution)
+{
+  // 1. 获取所有的子图信息
+  cartographer_ros_msgs::msg::SubmapList submap_list;
+  submap_list.header.stamp = rclcpp::Time();
+  submap_list.header.frame_id = node_options_.map_frame;
+  for (const auto& submap_id_pose :
+       map_builder_->pose_graph()->GetAllSubmapPoses()) {
+    cartographer_ros_msgs::msg::SubmapEntry submap_entry;
+    submap_entry.trajectory_id = submap_id_pose.id.trajectory_id;
+    submap_entry.submap_index = submap_id_pose.id.submap_index;
+    submap_entry.submap_version = submap_id_pose.data.version;
+    submap_entry.pose = ToGeometryMsgPose(submap_id_pose.data.pose);
+    submap_list.submap.push_back(submap_entry);
+  }
 
-//   std::unique_ptr<
-//     std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>
-//   submap_slices
-//     = absl::make_unique<
-//       std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>();
+  std::unique_ptr<
+    std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>
+  submap_slices
+    = absl::make_unique<
+      std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>>();
 
-//   for (const auto & submap_entry : submap_list.submap) {
-//     const ::cartographer::mapping::SubmapId
-//       id{submap_entry.trajectory_id, submap_entry.submap_index};
+  for (const auto & submap_entry : submap_list.submap) {
+    const ::cartographer::mapping::SubmapId
+      id{submap_entry.trajectory_id, submap_entry.submap_index};
 
-//     ::cartographer::io::SubmapSlice& submap_slice = (*submap_slices)[id];
-//     submap_slice.pose = ToRigid3d(submap_entry.pose);
-//     submap_slice.metadata_version = submap_entry.submap_version;
-//     if (submap_slice.surface != nullptr &&
-//         submap_slice.version == submap_entry.submap_version) {
-//       continue;
-//     }
+    ::cartographer::io::SubmapSlice& submap_slice = (*submap_slices)[id];
+    submap_slice.pose = ToRigid3d(submap_entry.pose);
+    submap_slice.metadata_version = submap_entry.submap_version;
+    if (submap_slice.surface != nullptr &&
+        submap_slice.version == submap_entry.submap_version) {
+      continue;
+    }
+    auto fetched_textures = FetchSubmapTextures(id);
+    if (fetched_textures == nullptr) {
+      continue;
+    }
+    CHECK(!fetched_textures->textures.empty());
+    submap_slice.version = fetched_textures->version;
 
-//     ::cartographer_ros_msgs::msg::SubmapQuery srv;
-//     srv.Request.trajectory_id = submap_entry.trajectory_id;
-//     srv.Request.submap_index = submap_entry.submap_index;
+    const auto fetched_texture = fetched_textures->textures.begin();
+    submap_slice.width = fetched_texture->width;
+    submap_slice.height = fetched_texture->height;
+    submap_slice.slice_pose = fetched_texture->slice_pose;
+    submap_slice.resolution = fetched_texture->resolution;
+    submap_slice.cairo_data.clear();
 
-//     auto fetched_textures = FetchSubmapTextures(id, srv);
-//     if (fetched_textures == nullptr) {
-//       continue;
-//     }
-//     CHECK(!fetched_textures->textures.empty());
-//     submap_slice.version = fetched_textures->version;
+    submap_slice.surface = ::cartographer::io::DrawTexture(
+        fetched_texture->pixels.intensity, fetched_texture->pixels.alpha,
+        fetched_texture->width, fetched_texture->height,
+        &submap_slice.cairo_data);
+  }
 
-//     const auto fetched_texture = fetched_textures->textures.begin();
-//     submap_slice.width = fetched_texture->width;
-//     submap_slice.height = fetched_texture->height;
-//     submap_slice.slice_pose = fetched_texture->slice_pose;
-//     submap_slice.resolution = fetched_texture->resolution;
-//     submap_slice.cairo_data.clear();
+  // 2. 根据submap_slices生成PaintSubmapSlices
+  auto result =
+    ::cartographer::io::PaintSubmapSlices(*submap_slices, resolution);
+  // 3. 将PaintSubmapSlices转换为Image，并保存为pgm文件
+  ::cartographer::io::Image image(std::move(result.surface));
+  ::cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
+  WritePgm(image, resolution, &pgm_writer,
+           node_options_.mapping_occ_thresh,
+           node_options_.mapping_free_thresh);
+  WritePng(image, map_filename + ".png",
+           node_options_.mapping_occ_thresh,
+           node_options_.mapping_free_thresh);
+  const Eigen::Vector2d origin(
+    -result.origin.x() * resolution,
+    (result.origin.y() - image.height()) * resolution);
+  // 4. 保存yaml文件
+  ::cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
+  WriteYaml(resolution, origin,
+            map_filename, &yaml_writer,
+            node_options_.mapping_occ_thresh,
+            node_options_.mapping_free_thresh);
+  LOG(INFO) << "Saving Grid Map Success." << std::endl;
 
-//     submap_slice.surface = ::cartographer::io::DrawTexture(
-//         fetched_texture->pixels.intensity, fetched_texture->pixels.alpha,
-//         fetched_texture->width, fetched_texture->height,
-//         &submap_slice.cairo_data);
-//   }
-
-//   // 2. 根据submap_slices生成PaintSubmapSlices
-//   auto result =
-//     ::cartographer::io::PaintSubmapSlices(*submap_slices, resolution);
-//   // 3. 将PaintSubmapSlices转换为Image，并保存为pgm文件
-//   ::cartographer::io::Image image(std::move(result.surface));
-//   ::cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
-//   WritePgm(image, resolution, &pgm_writer,
-//            node_options_.mapping_occ_thresh,
-//            node_options_.mapping_free_thresh);
-//   WritePng(image, map_filename + ".png",
-//            node_options_.mapping_occ_thresh,
-//            node_options_.mapping_free_thresh);
-//   const Eigen::Vector2d origin(
-//     -result.origin.x() * resolution,
-//     (result.origin.y() - image.height()) * resolution);
-//   // 4. 保存yaml文件
-//   ::cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
-//   WriteYaml(resolution, origin,
-//             map_filename, &yaml_writer,
-//             node_options_.mapping_occ_thresh,
-//             node_options_.mapping_free_thresh);
-//   LOG(INFO) << "Saving Grid Map Success." << std::endl;
-
-//   return true;
-// }
+  return true;
+}
 
 /**
  * @brief 获取指定id的submap的texture（内容信息）
@@ -505,30 +500,39 @@ bool MapBuilderBridge::SaveCloudMap(
  * @param srv 
  * @return std::unique_ptr<::cartographer::io::SubmapTextures> 
  */
-// std::unique_ptr<::cartographer::io::SubmapTextures>
-// MapBuilderBridge::FetchSubmapTextures(
-//     const ::cartographer::mapping::SubmapId& submap_id,
-//     ::cartographer_ros_msgs::srv::SubmapQuery & srv)
-// {
-//   srv.Request.trajectory_id = submap_id.trajectory_id;
-//   srv.Request.submap_index = submap_id.submap_index;
-//   this->HandleSubmapQuery(srv.Request, srv.Response);
-//   if (srv.Response.textures.empty()) {
-//     return nullptr;
-//   }
-//   auto Response = absl::make_unique<::cartographer::io::SubmapTextures>();
-//   Response->version = srv.Response.submap_version;
-//   for (const auto& texture : srv.Response.textures) {
-//     const std::string compressed_cells(texture.cells.begin(),
-//                                        texture.cells.end());
-//     Response->textures.emplace_back(::cartographer::io::SubmapTexture{
-//         ::cartographer::io::UnpackTextureData(compressed_cells, texture.width,
-//                                               texture.height),
-//         texture.width, texture.height, texture.resolution,
-//         ToRigid3d(texture.slice_pose)});
-//   }
-//   return Response;
-// }
+std::unique_ptr<::cartographer::io::SubmapTextures>
+MapBuilderBridge::FetchSubmapTextures(const ::cartographer::mapping::SubmapId& submap_id)
+{
+  using ServiceT = cartographer_ros_msgs::srv::SubmapQuery;
+  auto req = std::make_shared<ServiceT::Request>();
+  auto resp = std::make_shared<ServiceT::Response>();
+
+  req->trajectory_id = submap_id.trajectory_id;
+  req->submap_index = submap_id.submap_index;
+
+  // 直接调用本节点内部处理函数
+  this->HandleSubmapQuery(req, resp);
+
+  if (resp->textures.empty() ||
+      resp->status.code != cartographer_ros_msgs::msg::StatusCode::OK) {
+    // 失败则返回 nullptr
+    return nullptr;
+  }
+
+  auto result = absl::make_unique<::cartographer::io::SubmapTextures>();
+  result->version = resp->submap_version;
+
+  for (const auto& texture : resp->textures) {
+    const std::string compressed_cells(texture.cells.begin(), texture.cells.end());
+    result->textures.emplace_back(::cartographer::io::SubmapTexture{
+        ::cartographer::io::UnpackTextureData(
+            compressed_cells, texture.width, texture.height),
+        texture.width, texture.height, texture.resolution,
+        ToRigid3d(texture.slice_pose)});
+  }
+
+  return result;
+}
 
 bool MapBuilderBridge::SerializeState(const std::string& filename,
                                       const bool include_unfinished_submaps) {
