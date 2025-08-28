@@ -1,6 +1,0 @@
-image: b1_indoor_20231106_empty.pgm
-resolution: 0.050000
-origin: [-4.961422, -8.839051, 0.0]
-negate: 0
-occupied_thresh: 0.65
-free_thresh: 0.196
