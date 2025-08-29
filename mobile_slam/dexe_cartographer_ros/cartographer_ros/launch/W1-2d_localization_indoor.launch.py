@@ -10,6 +10,8 @@ from launch_ros.actions import Node, SetRemap
 from launch_ros.substitutions import FindPackageShare
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.actions import Shutdown
+from ament_index_python.packages import get_package_share_directory
+import json
 import os
 import subprocess
 
@@ -25,7 +27,7 @@ def is_node_running(context, *args, **kwargs):
         else:
             print(f"Node '{node_name}' is not running. Starting node...")
             return [Node(
-                package='b1_perception',
+                package='mobile_perception',
                 executable='detect_apriltags.py',
                 name='detect_apriltags',
                 output='screen'
@@ -35,6 +37,38 @@ def is_node_running(context, *args, **kwargs):
         return []
 # end
 
+
+json_file = os.path.join(
+    get_package_share_directory('w1_nav2'),
+    'json',
+    'config.json'
+)
+
+with open(json_file, 'r') as f:
+    config_data = json.load(f)
+
+# 从 json 读取 Time
+map_folder = config_data.get("map_filename", "default")
+
+load_state_filename = os.path.join(
+    get_package_share_directory('w1_nav2'),
+    'maps',
+    map_folder,
+    'map.pbstream'
+)
+
+initial_poses_filepath = os.path.join(
+    get_package_share_directory('cartographer_ros'),
+    'configuration_files',
+    'initial_poses.yaml'
+)
+
+apriltag_poses_filepath = os.path.join(
+    get_package_share_directory('cartographer_ros'),
+    'configuration_files',
+    'apriltag_poses.yaml'
+)
+
 def generate_launch_description():
     ## ***** Launch arguments *****
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -43,13 +77,13 @@ def generate_launch_description():
         default_value='false',
         description='Use simulation/Gazebo clock')
     load_state_filename_arg = DeclareLaunchArgument('load_state_filename',
-                                                    default_value='/home/hz/hz/Work/Grabotics/B1-Project-new/b1_devel/b1_map/maps/2d_lidar_loc_maps/b1_indoor_20240205.pbstream',
+                                                    default_value=load_state_filename,
                                                     description='Load pbstream file')
     initial_poses_filename_arg = DeclareLaunchArgument('initial_poses_filename',
-                                                    default_value='/home/grabotics/b1_main_v1/b1_devel/b1_slam/src/2d_lidar_slam/b1_cartographer_ros/cartographer_ros/configuration_files/initial_poses.yaml',
+                                                    default_value=initial_poses_filepath,
                                                     description='Load pbstream file')
     apriltag_poses_filename_arg = DeclareLaunchArgument('apriltag_poses_filename',
-                                                    default_value='/home/grabotics/b1_main_v1/b1_devel/b1_slam/src/2d_lidar_slam/b1_cartographer_ros/cartographer_ros/configuration_files/apriltag_poses.yaml',
+                                                    default_value=apriltag_poses_filepath,
                                                     description='Load pbstream file')
     location_name_arg = DeclareLaunchArgument('location_name',
                                         default_value='shenzhen',
@@ -100,7 +134,7 @@ def generate_launch_description():
         parameters = [{'use_sim_time': use_sim_time}],
         arguments = [
             '-configuration_directory', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files',
-            '-configuration_basename', 'B1-2d_localization_indoor.lua',
+            '-configuration_basename', 'W1-2d_localization_indoor.lua',
             '-load_state_filename', LaunchConfiguration('load_state_filename'),
             '-initial_poses_filename', LaunchConfiguration('initial_poses_filename'),
             '-location_name', LaunchConfiguration('location_name'),
