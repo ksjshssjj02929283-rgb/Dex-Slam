@@ -69,9 +69,10 @@ def generate_launch_description():
             '-configuration_directory', FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files',
             '-configuration_basename', 'W1-2d_mapping_indoor.lua'],
         remappings = [
-            ('scan', 'scan'),
+            ('scan_1', 'laser_scan/front'),
+            ('scan_2', 'laser_scan/rear'),
             ('odom', 'odom'),
-            ('imu', 'imu')],
+            ('imu', 'imu/chassis')],
         output = 'screen'
         )
     ## ***** 构建2D栅格地图 *****

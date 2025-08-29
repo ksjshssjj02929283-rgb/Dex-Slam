@@ -734,7 +734,7 @@ void Node::LaunchSubscribers(const TrajectoryOptions& options,
              &Node::HandleLaserScanMessage, trajectory_id, topic, node_, this),
          topic});
     // added by hz for test
-    std::cout << "\033[92;1m[hz test LaunchSubscribers]\033[0m Topic: " << topic <<std::endl;
+    // std::cout << "\033[92;1m[hz test LaunchSubscribers]\033[0m Topic: " << topic <<std::endl;
     // end
   }
   for (const std::string& topic : ComputeRepeatedTopicNames(
@@ -759,7 +759,7 @@ void Node::LaunchSubscribers(const TrajectoryOptions& options,
        options.trajectory_builder_options.trajectory_builder_2d_options()
            .use_imu_data())) {
     // added by hz for test
-    std::cout << "\033[92;1m[hz test LaunchSubscribers]\033[0m kImuTopic: " << kImuTopic <<std::endl;
+    // std::cout << "\033[92;1m[hz test LaunchSubscribers]\033[0m kImuTopic: " << kImuTopic <<std::endl;
     // end
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<sensor_msgs::msg::Imu>(&Node::HandleImuMessage,

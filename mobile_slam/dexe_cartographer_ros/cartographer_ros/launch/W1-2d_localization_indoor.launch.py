@@ -40,7 +40,7 @@ def is_node_running(context, *args, **kwargs):
 
 json_file = os.path.join(
     get_package_share_directory('w1_nav2'),
-    'json',
+    'config',
     'config.json'
 )
 
@@ -51,7 +51,7 @@ with open(json_file, 'r') as f:
 map_folder = config_data.get("map_filename", "default")
 
 load_state_filename = os.path.join(
-    get_package_share_directory('w1_nav2'),
+    '/home/Projects/chassis_workspace/dexe_mobile_application/mobile_simulation/w1_nav2',
     'maps',
     map_folder,
     'map.pbstream'
@@ -140,9 +140,10 @@ def generate_launch_description():
             '-location_name', LaunchConfiguration('location_name'),
             '-apriltag_poses_filename', LaunchConfiguration('apriltag_poses_filename')],
         remappings = [
-            ('scan', 'scan'),
+            ('scan_1', 'laser_scan/front'),
+            ('scan_2', 'laser_scan/rear'),
             ('odom', 'odom'),
-            ('imu', 'imu')], # 实际未起作用，需要在node_constants.h中修改topic名
+            ('imu', 'imu/chassis')], # 实际未起作用，需要在node_constants.h中修改topic名
         output = 'screen'
         )
     ### 此节点用于启动栅格地图更新

@@ -40,8 +40,8 @@ ros2 service call /write_state cartographer_ros_msgs/srv/WriteState "{filename: 
 # pbstream to map
 # 先把地图保存在b1_slam下
 ros2 run cartographer_ros cartographer_pbstream_to_ros_map \
--pbstream_filename=$map_dir/$map.pbstream \
--map_filestem=$map_dir/$map
+-pbstream_filename=$map_dir/map.pbstream \
+-map_filestem=$map_dir/map
 
 
 # json_file="$script_path/../../../dexe_mobile_application/mobile_simulation/w1_nav2/config/config.json"
