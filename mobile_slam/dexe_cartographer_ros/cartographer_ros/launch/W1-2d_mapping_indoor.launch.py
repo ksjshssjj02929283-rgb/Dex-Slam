@@ -23,21 +23,7 @@ def generate_launch_description():
 
     ## ***** urdf File paths ******
     ## ***** 通过urdf发布静态tf *****
-    pkg_share = FindPackageShare('cartographer_ros').find('cartographer_ros')
-    urdf_dir = os.path.join(pkg_share, 'urdf')
-    urdf_file = os.path.join(urdf_dir, 'b1_startup_v1.1.urdf')
-    with open(urdf_file, 'r') as infp:
-        robot_desc = infp.read()
 
-    ## ***** Nodes *****
-    robot_state_publisher_node = Node(
-        package = 'robot_state_publisher',
-        executable = 'robot_state_publisher',
-        parameters=[
-            {'robot_description': robot_desc},
-            {'use_sim_time': use_sim_time}],
-        output = 'screen'
-        )
     
     ## ***** 发布静态tf,如果有urdf，则不需要 *****
     # static_tf_publisher_1_node = Node(

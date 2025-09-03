@@ -49,9 +49,9 @@ with open(json_file, 'r') as f:
 
 # 从 json 读取 Time
 map_folder = config_data.get("map_filename", "default")
-
+print(map_folder)
 load_state_filename = os.path.join(
-    '/home/Projects/chassis_workspace/dexe_mobile_application/mobile_simulation/w1_nav2',
+    '/home/grabotics/workspace/dexe_mobile_application/mobile_simulation/w1_nav2',
     'maps',
     map_folder,
     'map.pbstream'
