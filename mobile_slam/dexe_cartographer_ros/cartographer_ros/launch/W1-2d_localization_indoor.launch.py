@@ -16,30 +16,30 @@ import os
 import subprocess
 
 # added by hz for launching detect_apriltags.py
-def is_node_running(context, *args, **kwargs):
-    node_name = 'detect_apriltags'
-    try:
-        result = subprocess.run(['ros2', 'node', 'list'], stdout=subprocess.PIPE, text=True)
-        nodes = result.stdout.split('\n')
-        if node_name in nodes:
-            print(f"Node '{node_name}' is already running.")
-            return []
-        else:
-            print(f"Node '{node_name}' is not running. Starting node...")
-            return [Node(
-                package='mobile_perception',
-                executable='detect_apriltags.py',
-                name='detect_apriltags',
-                output='screen'
-            )]
-    except Exception as e:
-        print(f"Error checking node status: {e}")
-        return []
+# def is_node_running(context, *args, **kwargs):
+#     node_name = 'detect_apriltags'
+#     try:
+#         result = subprocess.run(['ros2', 'node', 'list'], stdout=subprocess.PIPE, text=True)
+#         nodes = result.stdout.split('\n')
+#         if node_name in nodes:
+#             print(f"Node '{node_name}' is already running.")
+#             return []
+#         else:
+#             print(f"Node '{node_name}' is not running. Starting node...")
+#             return [Node(
+#                 package='mobile_perception',
+#                 executable='detect_apriltags.py',
+#                 name='detect_apriltags',
+#                 output='screen'
+#             )]
+#     except Exception as e:
+#         print(f"Error checking node status: {e}")
+#         return []
 # end
 
 
 json_file = os.path.join(
-    get_package_share_directory('w1_nav2'),
+    '/home/dexforce/w1/dexe_mobile_application/mobile_simulation/w1_nav2/',
     'config',
     'config.json'
 )
@@ -51,7 +51,7 @@ with open(json_file, 'r') as f:
 map_folder = config_data.get("map_filename", "default")
 print(map_folder)
 load_state_filename = os.path.join(
-    '/home/grabotics/workspace/dexe_mobile_application/mobile_simulation/w1_nav2',
+    '/home/dexforce/w1/dexe_mobile_application/mobile_simulation/w1_nav2',
     'maps',
     map_folder,
     'map.pbstream'
@@ -165,7 +165,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         # Launch arguments
-        OpaqueFunction(function=is_node_running), # added by hz
+        # OpaqueFunction(function=is_node_running), # added by hz
         use_sim_time_arg,
         load_state_filename_arg,
         initial_poses_filename_arg,
