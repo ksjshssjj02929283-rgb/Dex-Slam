@@ -18,11 +18,28 @@ def generate_launch_description():
         'resolution',
         default_value='0.04',
         description='Occupancy grid resolution in meters')
+    config_file_arg = DeclareLaunchArgument(
+        'config_file',
+        default_value='dcm_slam_2d.lua',
+        description='Configuration file name')
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation (Gazebo) clock if true')
+    
+    # 话题重映射
+    topic_remappings = [
+        ('scan', 'scan_1'),
+        ('imu', 'imu'),
+        ('odom', 'feedback/odom')
+    ]
 
     # LaunchConfiguration handles
     map_folder = LaunchConfiguration('map_folder')
     map_name = LaunchConfiguration('map_name')
     resolution = LaunchConfiguration('resolution')
+    config_file = LaunchConfiguration('config_file')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     # Locate cartographer_ros share directory to replace $(find cartographer_ros)
     carto_share = get_package_share_directory('cartographer_ros')
@@ -34,18 +51,17 @@ def generate_launch_description():
         executable='cartographer_node',
         name='mapping_node',
         output='screen',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],  # 修复: 使用LaunchConfiguration
+        respawn=True,
         arguments=[
             '-configuration_directory', configuration_directory,
-            '-configuration_basename', 'dcm_slam_2d.lua',
+            '-configuration_basename', config_file,  # 修复: 使用LaunchConfiguration而不是DeclareLaunchArgument
             '-map_folder', map_folder,
             '-map_name', map_name,
             '-resolution', resolution,
             '-collect_metrics', 'false',
         ],
-        remappings=[
-            ('scan', 'scan_1'),
-            ('imu', 'imu'),
-        ],
+        remappings=topic_remappings,
         # prefix=['gdb -ex run --args'],
     )
 
@@ -54,10 +70,12 @@ def generate_launch_description():
         package='cartographer_ros',
         executable='cartographer_occupancy_grid_node',
         name='cartographer_occupancy_grid_node',
-        arguments=[
-            '-resolution', '0.04',   # or use resolution LaunchConfiguration
-        ],
         output='screen',
+        respawn=True,
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],  # 修复: 使用LaunchConfiguration
+        arguments=[
+            '-resolution', resolution,   # 修复: 使用LaunchConfiguration而不是硬编码
+        ],
     )
 
     # Optionally enable robot_state_publisher with URDF (commented out in ROS 1)
@@ -83,8 +101,9 @@ def generate_launch_description():
         map_folder_arg,
         map_name_arg,
         resolution_arg,
+        config_file_arg,  # 修复: 添加缺失的config_file_arg
+        use_sim_time_arg,
         cartographer_node,
         occupancy_grid_node,
         # robot_state_publisher,  # uncomment if enabled above
-        # use_sim_time_arg,       # if you add simulated time
     ])

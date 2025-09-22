@@ -33,6 +33,7 @@ set(PACKAGE_DEPENDENCIES
   tf2
   tf2_eigen
   tf2_ros
+  tf2_geometry_msgs
   urdf
   visualization_msgs
   dcm_msgs
@@ -69,7 +70,6 @@ ament_auto_find_build_dependencies()
 # find_package(visualization_msgs REQUIRED)
 # find_package(dcm_msgs REQUIRED)
 # find_package(dcm_srvs REQUIRED)
-# find_package(cartographer_ros_msgs REQUIRED)
 
 find_package(Boost REQUIRED COMPONENTS system iostreams)
 find_package(PCL REQUIRED)
