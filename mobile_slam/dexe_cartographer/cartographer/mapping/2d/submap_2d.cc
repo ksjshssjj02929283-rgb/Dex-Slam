@@ -218,6 +218,7 @@ void Submap2D::InsertRangeData(
 void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
                                const sensor::PointCloud & highlight_cloud_data)
 {
+  is_dirty_cloud_ = true;
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
   PointCloudToPCL(cloud_data, cloud_pcl);
 
@@ -244,32 +245,6 @@ void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
 
   // cloud_->InsertCloud(cloud_data);
   // highlight_cloud_->InsertCloud(highlight_cloud_data);
-
-  cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
-                          cloud_ikdtree_->PCL_Storage,
-                          ikd_tree::NOT_RECORD);
-
-  cloud_ = std::make_unique<sensor::PointCloud>();
-  for (const auto& point : cloud_ikdtree_->PCL_Storage) {
-    sensor::PointCloud::PointType p;
-    p.position.x() = point.x;
-    p.position.y() = point.y;
-    p.position.z() = 0.0;
-    cloud_->push_back(p);
-  }
-
-  highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
-                                    highlight_cloud_ikdtree_->PCL_Storage,
-                                    ikd_tree::NOT_RECORD);
-
-  highlight_cloud_ = std::make_unique<sensor::PointCloud>();
-  for (const auto& point : highlight_cloud_ikdtree_->PCL_Storage) {
-    sensor::PointCloud::PointType p;
-    p.position.x() = point.x;
-    p.position.y() = point.y;
-    p.position.z() = 0.0;
-    highlight_cloud_->push_back(p);
-  }
 
   cloud_culling_count_++;
   // 当cloud_culling_prob = 0.1时，不进行culling操作
@@ -333,6 +308,10 @@ void Submap2D::CloudDataCulling()
   }
   cloud_ikdtree_->Delete_Points(points_to_delete);
 
+  cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
+                          cloud_ikdtree_->PCL_Storage,
+                          ikd_tree::NOT_RECORD);
+
   points_to_delete.clear();
   for (auto iter = highlight_cloud_ikdtree_->PCL_Storage.begin(); iter != highlight_cloud_ikdtree_->PCL_Storage.end(); iter++) {
     Eigen::Vector2f p_vec(iter->x, iter->y);
@@ -343,6 +322,43 @@ void Submap2D::CloudDataCulling()
     }
   }
   highlight_cloud_ikdtree_->Delete_Points(points_to_delete);
+
+  highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
+                                    highlight_cloud_ikdtree_->PCL_Storage,
+                                    ikd_tree::NOT_RECORD);
+  // FreshCloudData();
+}
+
+void Submap2D::FreshCloudData() const
+{
+  ikd_tree::iKdTree<pcl::PointXYZ>::PointVector().swap(cloud_ikdtree_->PCL_Storage);
+  cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
+                          cloud_ikdtree_->PCL_Storage,
+                          ikd_tree::NOT_RECORD);
+
+  cloud_ = std::make_unique<sensor::PointCloud>();
+  for (const auto& point : cloud_ikdtree_->PCL_Storage) {
+    sensor::PointCloud::PointType p;
+    p.position.x() = point.x;
+    p.position.y() = point.y;
+    p.position.z() = 0.0;
+    cloud_->push_back(p);
+  }
+
+  ikd_tree::iKdTree<pcl::PointXYZ>::PointVector().swap(highlight_cloud_ikdtree_->PCL_Storage);
+  highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
+                                    highlight_cloud_ikdtree_->PCL_Storage,
+                                    ikd_tree::NOT_RECORD);
+
+  highlight_cloud_ = std::make_unique<sensor::PointCloud>();
+  for (const auto& point : highlight_cloud_ikdtree_->PCL_Storage) {
+    sensor::PointCloud::PointType p;
+    p.position.x() = point.x;
+    p.position.y() = point.y;
+    p.position.z() = 0.0;
+    highlight_cloud_->push_back(p);
+  }
+  is_dirty_cloud_ = false;
 }
 
 void Submap2D::PointCloudToPCL(const sensor::PointCloud & cloud_data,
@@ -400,6 +416,7 @@ void Submap2D::Finish() {
   CHECK(!insertion_finished());
   grid_ = grid_->ComputeCroppedGrid();
   line_map_2d_list_->LineDataCulling();
+  // LOG(WARNING) << "Finishing submap...";
   CloudDataCulling();
   set_insertion_finished(true);
 }

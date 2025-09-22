@@ -68,7 +68,12 @@ class Submap2D : public Submap {
                        proto::SubmapQuery::Response* response) const override;
 
   const Grid2D* grid() const { return grid_.get(); }
-  const sensor::PointCloud* cloud() const { return cloud_.get(); }
+  const sensor::PointCloud* cloud() const {
+    if (is_dirty_cloud_) {
+      FreshCloudData();
+    }
+    return cloud_.get();
+  }
   const sensor::PointCloud* highlight_cloud() const { return highlight_cloud_.get(); }
 
   ikd_tree::iKdTree<pcl::PointXYZ>* cloud_ikdtree() const { return cloud_ikdtree_.get(); }
@@ -104,6 +109,8 @@ class Submap2D : public Submap {
                            const double& max_line_length,
                            const int& culling_obs);
   void SetCullingInterval(const int& interval) { culling_interval_ = interval; }
+
+  void FreshCloudData() const;
  private:
   void CloudDataCulling();
   // void GenerateCloudKdTree();
@@ -112,8 +119,8 @@ class Submap2D : public Submap {
 
  private:
   std::unique_ptr<Grid2D> grid_;
-  std::unique_ptr<sensor::PointCloud> cloud_;
-  std::unique_ptr<sensor::PointCloud> highlight_cloud_;
+  mutable std::unique_ptr<sensor::PointCloud> cloud_;
+  mutable std::unique_ptr<sensor::PointCloud> highlight_cloud_;
   std::unique_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> cloud_ikdtree_;
   std::unique_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> highlight_cloud_ikdtree_;
 
@@ -125,6 +132,9 @@ class Submap2D : public Submap {
   int line_culling_count_ = 0;
   int cloud_culling_count_ = 0;
   int culling_interval_ = 5;
+
+  // TODO: linfeng.guo: 这个标志位是否需要推及到所有的地图类型
+  mutable bool is_dirty_cloud_ = false;
 };
 
 // The first active submap will be created on the insertion of the first range
