@@ -26,17 +26,16 @@ install(TARGETS cartographer_assets_writer
 
 )
 
-# google_binary(localization_node
-#   SRCS
-#     localization/loc_node_main.cc
-# )
-#
-# install(TARGETS localization_node
-#   ARCHIVE DESTINATION lib
-#   LIBRARY DESTINATION lib
-#   RUNTIME DESTINATION lib/${PROJECT_NAME}
+google_binary(localization_node
+  SRCS
+    localization/loc_node_main.cc
+)
 
-# )
+install(TARGETS localization_node
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
 
 google_binary(cartographer_node
   SRCS
@@ -47,7 +46,6 @@ install(TARGETS cartographer_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
-
 )
 
 google_binary(cartographer_offline_node
@@ -59,7 +57,6 @@ install(TARGETS cartographer_offline_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
-
 )
 
 google_binary(cartographer_occupancy_grid_node
@@ -71,7 +68,6 @@ install(TARGETS cartographer_occupancy_grid_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
-
 )
 
 google_binary(cartographer_rosbag_validate
@@ -83,7 +79,6 @@ install(TARGETS cartographer_rosbag_validate
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
-
 )
 
 google_binary(cartographer_pbstream_to_ros_map
@@ -95,7 +90,6 @@ install(TARGETS cartographer_pbstream_to_ros_map
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
-
 )
 
 google_binary(cartographer_pbstream_map_publisher
@@ -107,7 +101,6 @@ install(TARGETS cartographer_pbstream_map_publisher
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
-
 )
 
 # TODO(cschuet): Add support for shared library case.
@@ -121,7 +114,6 @@ if (${BUILD_GRPC})
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION lib/${PROJECT_NAME}
-
   )
 
   google_binary(cartographer_grpc_offline_node
@@ -133,7 +125,6 @@ if (${BUILD_GRPC})
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION lib/${PROJECT_NAME}
-
   )
 
   install(PROGRAMS

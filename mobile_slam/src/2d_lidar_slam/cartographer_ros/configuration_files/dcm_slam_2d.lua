@@ -66,7 +66,7 @@ TRAJECTORY_BUILDER_2D.data_preprocessor.num_accumulated_range_data = 1
 TRAJECTORY_BUILDER_2D.data_preprocessor.min_range = 0.2
 TRAJECTORY_BUILDER_2D.data_preprocessor.max_range = 15.
 TRAJECTORY_BUILDER_2D.data_preprocessor.missing_data_ray_length = 5.
-TRAJECTORY_BUILDER_2D.data_preprocessor.use_deskew = false
+TRAJECTORY_BUILDER_2D.data_preprocessor.use_deskew = true
 TRAJECTORY_BUILDER_2D.use_imu_data = false
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 

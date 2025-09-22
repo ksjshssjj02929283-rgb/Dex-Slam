@@ -82,6 +82,16 @@ void DataPreprocessor::AddSyncedPointCloud(const sensor::TimedPointCloudOriginDa
     // a 获取该点观测数据
     const sensor::TimedRangefinderPoint& hit =
         curr_cloud.ranges[i].point_time;
+    if (hit.position.x() > -0.3 && hit.position.x() < 0.3 &&
+        hit.position.y() > -0.3 && hit.position.y() < 0.3)
+    {
+      continue;
+    }
+    bool is_miss = false;
+    const float range = hit.position.head<2>().norm();
+    if (range > options_.max_range()) {
+      is_miss = true;
+    }
     // b 获取该点在odom坐标系下的位姿
     const Eigen::Vector3f origin_in_odom =
         range_data_poses[i] *
@@ -93,24 +103,18 @@ void DataPreprocessor::AddSyncedPointCloud(const sensor::TimedPointCloudOriginDa
     } else {
       hit_in_odom = range_data_poses.back() * sensor::ToRangefinderPoint(hit);
     }
-    // d 保留在min_range和max_range之间的点，并计算器位姿，添加到accumulated_range_data_中
-    const Eigen::Vector3f delta = hit_in_odom.position - origin_in_odom;
-    if (delta.x() > -0.3 && delta.x() < 0.3 &&
-        delta.y() > -0.3 && delta.y() < 0.3)
-    {
+
+    if (is_miss) {
+      const Eigen::Vector3f delta = hit_in_odom.position - origin_in_odom;
+      hit_in_odom.position =
+          origin_in_odom +
+          options_.missing_data_ray_length() / delta.norm() * delta;
+      undistort_range_data.data.misses.push_back(hit_in_odom);
       continue;
     }
-    const float range = delta.norm();
-    if (range >= options_.min_range()) {
-      if (range <= options_.max_range()) {
-        undistort_range_data.data.returns.push_back(hit_in_odom, curr_cloud.ranges[i].intensity);
-      } else {
-        // FIXME: 解决这个bug
-        // hit_in_odom.position =
-        //     options_.missing_data_ray_length() / range * hit_in_odom.position;
-        undistort_range_data.data.misses.push_back(hit_in_odom);
-      }
-    }
+    // d 保留在min_range和max_range之间的点，并计算器位姿，添加到accumulated_range_data_中
+
+    undistort_range_data.data.returns.push_back(hit_in_odom, curr_cloud.ranges[i].intensity);
   }
   undistort_range_data.time = time;
   undistort_range_data.data.origin = range_data_poses.back().translation();
@@ -164,61 +168,68 @@ transform::Rigid3f DataPreprocessor::GetPointPose(
   const common::Time& time,
   const std::deque<sensor::OdometryData>& odom_data_buff) const
 {
-  transform::Rigid3f cached_pose = transform::Rigid3f::Identity();
-  common::Time latest_odom_time = odom_data_buff.back().time;
+  // 健壮性检查
+  if (odom_data_buff.empty()) {
+    return transform::Rigid3f::Identity();
+  }
+  if (odom_data_buff.size() == 1) {
+    return odom_data_buff.back().pose.cast<float>();
+  }
+
+  const common::Time latest_odom_time = odom_data_buff.back().time;
+
+  // 命中最新时刻
   if (time == latest_odom_time) {
-    cached_pose = odom_data_buff.back().pose.cast<float>();
+    return odom_data_buff.back().pose.cast<float>();
   }
-  if (time < latest_odom_time) {  // 内插
-    sensor::OdometryData p0 = odom_data_buff.at(odom_data_buff.size() - 2);
-    sensor::OdometryData p1 = odom_data_buff.at(odom_data_buff.size() - 1);
-    for (int i = odom_data_buff.size() - 2; i >= 0; --i) {
-      if (odom_data_buff[i].time <= time) {
-        p0 = odom_data_buff[i];
-        p1 = odom_data_buff[i + 1];
-        break;
-      }
-      
+
+  // 内插
+  if (time < latest_odom_time) {
+    // 查找 p0, p1
+    size_t i1 = 1;
+    for (; i1 < odom_data_buff.size(); ++i1) {
+      if (odom_data_buff[i1].time >= time) break;
     }
+    // 若 time 早于最早样本，则走外插到最早（或直接返回最早姿态）
+    if (i1 == 0) {
+      return odom_data_buff.front().pose.cast<float>();
+    }
+    const auto& p0 = odom_data_buff[i1 - 1];
+    const auto& p1 = odom_data_buff[i1];
 
-    const double ratio = common::ToSeconds(time - p0.time) /
-                         common::ToSeconds(p1.time - p0.time);
+    const double denom = std::max(common::ToSeconds(p1.time - p0.time), 1e-9);
+    double ratio = common::ToSeconds(time - p0.time) / denom;
+    ratio = std::clamp(ratio, 0.0, 1.0);
 
-    auto delta_pose = p0.pose.inverse() * p1.pose;
-    const Eigen::Vector3d translation =
-      p0.pose.translation() + delta_pose.translation() * ratio;
-    const Eigen::Quaterniond rotation =
-      p0.pose.rotation() * Eigen::Quaterniond::Identity().slerp(ratio, delta_pose.rotation());
-    cached_pose = transform::Rigid3d(translation, rotation).cast<float>();
-  } else if (time > latest_odom_time) {  // 外插
-    sensor::Twist odometry_twist = odom_data_buff.back().twist;
-    transform::Rigid3d latest_odometry_pose = odom_data_buff.back().pose;
-    const Eigen::Quaterniond orientation_at_newest_odometry_time =
-        latest_odometry_pose.rotation();
-    // 角速度
-    const Eigen::Vector3d angular_velocity_from_odometry =
-        odometry_twist.angular;
-    // 线速度
-    const Eigen::Vector3d linear_velocity_from_odometry =
-        orientation_at_newest_odometry_time * odometry_twist.linear;
-    // 外插计算位移
-    const double delta_t = common::ToSeconds(time - latest_odom_time);
-    // 外插计算旋转
-    const Eigen::Vector3d extrapolate_trans =
-        delta_t * linear_velocity_from_odometry;
-    const Eigen::Quaterniond extrapolate_rot =
-        transform::AngleAxisVectorToRotationQuaternion(
-          Eigen::Vector3d(angular_velocity_from_odometry * delta_t));
+    // 平移线性插值
+    const Eigen::Vector3d t =
+        (1.0 - ratio) * p0.pose.translation() + ratio * p1.pose.translation();
+    // 旋转球面线性插值
+    Eigen::Quaterniond q = p0.pose.rotation().slerp(ratio, p1.pose.rotation());
+    q.normalize();
 
-    const Eigen::Vector3d translation =
-        latest_odometry_pose.translation() + extrapolate_trans;
-    const Eigen::Quaterniond rotation =
-        latest_odometry_pose.rotation() * extrapolate_rot;
-
-    cached_pose = transform::Rigid3d(translation, rotation).cast<float>();
+    return transform::Rigid3d(t, q).cast<float>();
   }
 
-  return cached_pose;
+  // 外插（time > latest_time）
+  {
+    const auto& last = odom_data_buff.back();
+    const double dt = common::ToSeconds(time - last.time);
+
+    const Eigen::Vector3d w = last.twist.angular; // 角速度
+    // 确认线速度是在哪个坐标系：如是机体系，需左乘姿态；如是世界系，直接用
+    Eigen::Vector3d v = last.twist.linear;
+    v = last.pose.rotation() * v;  // 如线速度在机体系，保留；否则去掉
+
+    const Eigen::Vector3d t = last.pose.translation() + dt * v;
+    const Eigen::Quaterniond dq =
+        transform::AngleAxisVectorToRotationQuaternion(
+          Eigen::Vector3d(w * dt));
+    Eigen::Quaterniond q = last.pose.rotation() * dq;
+    q.normalize();
+
+    return transform::Rigid3d(t, q).cast<float>();
+  }
 }
 
 void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data)

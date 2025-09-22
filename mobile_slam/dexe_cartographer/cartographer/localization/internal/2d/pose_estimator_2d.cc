@@ -72,7 +72,7 @@ PoseEstimator2D::PoseEstimator2D(
   local_map_updater_ =
       std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options());
 
-  loc_state_ = LocalizationState::NOT_INITAILIED;
+  loc_state_ = LocalizationState::NOT_INITIALIZED;
 
   time_file_.open("/home/ubt/data/time.txt", std::ios::out);
 }

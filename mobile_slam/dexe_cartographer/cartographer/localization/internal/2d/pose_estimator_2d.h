@@ -58,8 +58,8 @@ enum class LocalizationState
 {
   LOCALIZATION_FAILED = -2,  // 定位失败
   INITIALIZATION_FAILED = -1,  // 系统初始化中
-  NOT_INITAILIED = 0,  // 系统初始化中
-  INITIALIZATING = 1,  // 系统初始化中
+  NOT_INITIALIZED = 0,  // 系统初始化中
+  INITIALIZING = 1,  // 系统初始化中
   INITIALIZED  = 2,  // 系统初始化完成
   RELOCALIZING = 3,  // 重定位中
   LOCALIZED    = 4  // 重定位成功
@@ -181,7 +181,7 @@ private:
 	  real_time_correlative_scan_matcher_;
   mapping::scan_matching::CeresScanMatcher2D ceres_scan_matcher_;
 
-  LocalizationState loc_state_ = LocalizationState::NOT_INITAILIED;
+  LocalizationState loc_state_ = LocalizationState::NOT_INITIALIZED;
 
   std::unique_ptr<PoseInitializer> pose_initializer_;
 
