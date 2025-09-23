@@ -20,6 +20,7 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <deque>
 
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/2d/submap_2d.h"
@@ -27,7 +28,7 @@
 #include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
-#include "cartographer/mapping/internal/range_data_collator.h"
+#include "cartographer/mapping/internal/laser_synchronizer.h"
 #include "cartographer/mapping/pose_extrapolator.h"
 #include "cartographer/mapping/proto/local_trajectory_builder_options_2d.pb.h"
 #include "cartographer/localization/internal/2d/pose_estimator_2d.h"
@@ -68,6 +69,13 @@ class LocalTrajectoryBuilder2D {
     std::unique_ptr<const InsertionResult> insertion_result;    // 插入结果
   };
 
+  struct SensorRawData {
+    std::string sensor_id;
+    sensor::RangeData range_data_in_local;
+    sensor::PointCloud filtered_gravity_aligned_point_cloud;
+    sensor::PointCloud highlight_point_cloud;
+  };
+
   explicit LocalTrajectoryBuilder2D(
 	  const proto::LocalTrajectoryBuilderOptions2D& options,
 	  const std::vector<std::string>& expected_range_sensor_ids);
@@ -94,11 +102,13 @@ class LocalTrajectoryBuilder2D {
 
  private:
   std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
+	  const std::string& sensor_id,
 	  common::Time time, const sensor::RangeData& gravity_aligned_range_data,
     const std::vector<sensor::LineData> & line_data,
     const std::vector<sensor::LandmarkPointData> & reflector_data,
 	  const transform::Rigid3d& gravity_alignment,
-	  const absl::optional<common::Duration>& sensor_duration);
+	  const absl::optional<common::Duration>& sensor_duration,
+    const std::vector<SensorRawData>& sensor_raw_data_list);
 
   sensor::FeatureData GetFeatureData(
     const common::Time & time,
@@ -119,7 +129,8 @@ class LocalTrajectoryBuilder2D {
     const Eigen::Quaterniond& gravity_alignment,
     const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
     const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data);
+    const std::vector<sensor::LandmarkPointData> & reflector_data,
+    const std::vector<SensorRawData>& sensor_raw_data_list);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
   // observed pose, or nullptr on failure.
@@ -133,6 +144,33 @@ class LocalTrajectoryBuilder2D {
   // Lazily constructs a PoseExtrapolator.
   bool is_exptrapolator_initialized_ = false;
   void InitializeExtrapolator(common::Time time);
+
+  // 获取指定sensor_id的数据预处理器
+  preprocess::DataPreprocessor* GetDataPreprocessor(const std::string& sensor_id);
+
+  // 处理同步后的激光数据
+  std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
+      const LaserSynchronizer::SynchronizedLaserData& synchronized_data);
+
+  // 处理单个传感器的激光数据，返回处理后的数据结构
+  struct ProcessedSensorData {
+    std::string sensor_id;
+    sensor::RangeData undistorted_range_data;
+    sensor::FeatureData feature_data;
+    sensor::PointCloud filtered_gravity_aligned_point_cloud;
+    sensor::PointCloud highlight_point_cloud;
+  };
+
+  absl::optional<ProcessedSensorData> ProcessSingleSensorData(
+      const std::string& sensor_id,
+      const sensor::TimedPointCloudData& laser_data,
+      const common::Time& sync_time);
+
+  // 里程计缓冲区管理方法
+  void AddOdometryToBuffer(const sensor::OdometryData& odometry_data);
+  absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
+  transform::Rigid3d GetOdomDeltaPose(const common::Time& laser_time);
+  void UpdateLastOdomForDelta(const common::Time& laser_time);
 
   const proto::LocalTrajectoryBuilderOptions2D options_;
   ActiveSubmaps2D active_submaps_;
@@ -154,15 +192,24 @@ class LocalTrajectoryBuilder2D {
   absl::optional<double> last_thread_cpu_time_seconds_;
   absl::optional<common::Time> last_sensor_time_;
 
-  RangeDataCollator range_data_collator_;
+  LaserSynchronizer laser_synchronizer_;
 
-  std::unique_ptr<preprocess::DataPreprocessor> data_preprocessor_;
+  // 多雷达数据预处理器管理，每个sensor_id对应一个预处理器
+  const std::vector<std::string> expected_range_sensor_ids_;  // 预期的传感器ID列表
+  std::map<std::string, std::unique_ptr<preprocess::DataPreprocessor>> data_preprocessors_;
   bool is_sensor_to_tracking_set_ = false;
   transform::Rigid3d sensor_to_tracking_ = transform::Rigid3d::Identity();
 
   transform::Rigid3d local_pose_ = transform::Rigid3d::Identity();
   transform::Rigid3d temp_pose_ = transform::Rigid3d::Identity();
   sensor::OdometryData curr_odom_data_;
+
+  // 里程计数据缓冲区
+  mutable std::mutex odom_buffer_mutex_;
+  std::deque<sensor::OdometryData> odom_buffer_;
+  absl::optional<sensor::OdometryData> last_odom_for_delta_;  // 用于计算delta pose的上次里程计数据
+  static constexpr size_t kMaxOdomBufferSize = 1000;  // 最大缓冲区大小
+  static constexpr double kMaxOdomBufferDuration = 10.0;  // 最大缓冲时间(秒)
 
   std::unique_ptr<laser_perception::LaserPerception> laser_perception_;
 

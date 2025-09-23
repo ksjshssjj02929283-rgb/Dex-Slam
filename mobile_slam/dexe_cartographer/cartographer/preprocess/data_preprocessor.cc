@@ -247,7 +247,7 @@ void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data
 void DataPreprocessor::TrimOdomData()
 {
   // 最少需要保留上一帧激光到这一帧激光之间的odom数据
-  while (odom_data_buff_.front().time < (last_laser_time_ - common::FromSeconds(0.05))) {
+  while (odom_data_buff_.front().time < (last_laser_time_ - common::FromSeconds(0.1))) {
     odom_data_buff_.pop_front();
   }
 }
