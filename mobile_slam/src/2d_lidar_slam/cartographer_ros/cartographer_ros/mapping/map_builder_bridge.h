@@ -98,6 +98,7 @@ class MapBuilderBridge {
 
   bool SaveMap(const std::string& map_filename, const double resolution);
   bool SaveGridMap(const std::string& map_filename, const double resolution);
+  bool SaveGridMapFromRange(const std::string& map_filename, const double resolution);
   bool SaveCloudMap(const std::string& map_filename, const double resolution);
   bool SaveLineMap(const std::string& map_filename);
 
