@@ -16,6 +16,7 @@
 
 #include "cartographer_ros/localization/localization_updater_bridge.h"
 #include <fstream>
+#include <filesystem>
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
@@ -159,7 +160,11 @@ void LocalizationUpdaterBridge::LoadMapData(const std::string& map_filename)
 
   std::shared_ptr<carto::localization::CloudMap2D> highlight_cloud_map;
   if (!map_data_info.highlight_cloud_filename.empty()) {
-    map_loader_.LoadCloudMap(map_data_info.highlight_cloud_filename, highlight_cloud_map);
+    if (std::filesystem::exists(map_data_info.highlight_cloud_filename)) {
+      map_loader_.LoadCloudMap(map_data_info.highlight_cloud_filename, highlight_cloud_map);
+    } else {
+      LOG(WARNING) << "Highlight cloud file does not exist: " << map_data_info.highlight_cloud_filename;
+    }
   }
 
   localization_updater_->InitGlobalGridMap(grid_map);
@@ -497,7 +502,7 @@ LocalizationUpdaterBridge::GetLocalTrajectoryData()
 
     // LOG(INFO) << localization_updater_->pose_graph()->GetLocalToGlobalTransform(trajectory_id);
   }
-
+  std::cout << "local_trajectory_data size: " << local_trajectory_data.size() << std::endl;
   return local_trajectory_data;
 }
 

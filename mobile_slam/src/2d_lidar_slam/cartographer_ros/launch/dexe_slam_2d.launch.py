@@ -29,7 +29,8 @@ def generate_launch_description():
     
     # 话题重映射
     topic_remappings = [
-        ('scan', 'scan_1'),
+        ('scan_1', 'scan_1_refined'),
+        ('scan_2', 'scan_2_refined'),
         ('imu', 'imu'),
         ('odom', 'feedback/odom')
     ]

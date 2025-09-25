@@ -71,13 +71,14 @@ inline std::string StripSlash(const std::string& in)
   return out;
 }
 
-class LocalizationNode : public rclcpp::Node
+class LocalizationNode
 {
 public:
   LocalizationNode(const LocalizationNodeOptions& node_options,
                    std::unique_ptr<cartographer::localization::LocalizationUpdater> localization_updater,
-                   tf2_ros::Buffer* tf_buffer);
-  ~LocalizationNode() override = default;
+                   std::shared_ptr<tf2_ros::Buffer> tf_buffer,
+                   rclcpp::Node::SharedPtr node);
+  ~LocalizationNode() = default;
 
   LocalizationNode(const LocalizationNode&) = delete;
   LocalizationNode& operator=(const LocalizationNode&) = delete;
@@ -181,6 +182,9 @@ private:
 
   // const LocalizationNodeOptions node_options_;
   const LocalizationNodeOptions node_options_;
+
+  // ROS2 Node handle
+  rclcpp::Node::SharedPtr node_;
 
   // TF broadcaster (ROS2)
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;

@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 
 # Copyright 2016 The Cartographer Authors
@@ -18,7 +17,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetParameter
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -27,13 +26,13 @@ def generate_launch_description():
     # Declare launch arguments
     map_folder_arg = DeclareLaunchArgument(
         'map_folder',
-        default_value='/home/fengbro/dexforce/0_slam/data/maps',
+        default_value='/home/fengbro/dexforce/0_slam/data/maps/',
         description='Path to the folder containing maps'
     )
     
     map_name_arg = DeclareLaunchArgument(
         'map_name',
-        default_value='dex_map_test',
+        default_value='map_2',
         description='Name of the map to load'
     )
     
@@ -55,21 +54,15 @@ def generate_launch_description():
         'configuration_files'
     ])
 
-    # Set use_sim_time parameter globally
-    use_sim_time_param = SetParameter(
-        name='use_sim_time',
-        value=False
-    )
-
     # Localization node
     localization_node = Node(
         package='cartographer_ros',
-        executable='localization_node',  # ROS2中使用executable而不是type
+        executable='localization_node',
         name='localization_node',
         output='screen',
-        respawn=True,
+        respawn=False,
         parameters=[
-            {'use_sim_time': False}  # 也可以在节点级别设置参数
+            {'use_sim_time': False}
         ],
         arguments=[
             '-configuration_directory', configuration_directory,
@@ -91,7 +84,7 @@ def generate_launch_description():
         executable='cartographer_occupancy_grid_node',
         name='cartographer_occupancy_grid_node',
         output='screen',
-        respawn=True,
+        respawn=False,
         arguments=[
             '-resolution', resolution
         ]
@@ -102,9 +95,6 @@ def generate_launch_description():
         map_folder_arg,
         map_name_arg,
         resolution_arg,
-        
-        # Global parameters
-        use_sim_time_param,
         
         # Nodes
         localization_node,
