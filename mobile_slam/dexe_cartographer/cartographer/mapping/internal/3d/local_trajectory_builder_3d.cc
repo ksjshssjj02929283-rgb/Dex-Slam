@@ -419,10 +419,11 @@ LocalTrajectoryBuilder3D::InsertIntoSubmap(
                           mapping::TrajectoryNode::Data{
                               time,
                               gravity_alignment,
-                              {},
-                              {},
-                              {},  // 'filtered_point_cloud' is only used in 2D.
-                              {},
+                              {},  // filtered_gravity_aligned_point_cloud - empty for 3D
+                              {},  // highlight_point_cloud - empty for 3D
+                              {},  // range_datas - empty for 3D
+                              {},  // lines - empty for 3D
+                              {},  // reflectors - empty for 3D
                               high_resolution_point_cloud_in_tracking,
                               low_resolution_point_cloud_in_tracking,
                               rotational_scan_matcher_histogram_in_gravity,

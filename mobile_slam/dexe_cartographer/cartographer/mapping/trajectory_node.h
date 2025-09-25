@@ -55,6 +55,7 @@ struct TrajectoryNode {
     // 'gravity_alignment' frame.
     sensor::PointCloud filtered_gravity_aligned_point_cloud;
     sensor::PointCloud highlight_point_cloud;
+    std::vector<sensor::RangeData> range_datas;
 
     std::map<int, std::vector<sensor::LineData>> lines;  // line data with id
     std::vector<sensor::LandmarkPointData> reflectors;

@@ -61,7 +61,7 @@ public:
   const int global_id() const {return global_id_;}
   int lose_time() const {return lose_time_;}
 
-  const inliers() const {return inliers_;}
+  const int inliers() const {return inliers_;}
 
   void SetLoseTime(int lose_time) {lose_time_ = lose_time;}
 

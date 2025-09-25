@@ -288,6 +288,12 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
     }
   }
 
+  // 保存原始去畸变数据（用于TrajectoryNode）
+  std::vector<sensor::RangeData> original_undistorted_range_datas;
+  for (const auto& raw_data : sensor_raw_data_list) {
+    original_undistorted_range_datas.push_back(raw_data.range_data_in_local);
+  }
+
   // 将传感器原始数据转换到local坐标系
   std::vector<SensorRawData> sensor_raw_data_in_local = sensor_raw_data_list;
   for (auto& raw_data : sensor_raw_data_in_local) {
@@ -301,7 +307,8 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
       *laser_perception_->getLessFlatCloud(),
       *laser_perception_->getHighlightCloud(),
       pose_estimate, gravity_alignment.rotation(),
-      lines_in_local, tracked_lane_data, reflector_data, sensor_raw_data_in_local);
+      lines_in_local, tracked_lane_data, reflector_data, sensor_raw_data_in_local,
+      original_undistorted_range_datas);
 
   // 7. 计算local slam的频率
   const auto wall_time = std::chrono::steady_clock::now();
@@ -591,7 +598,8 @@ LocalTrajectoryBuilder2D::InsertIntoSubmap(
     const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
     const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
     const std::vector<sensor::LandmarkPointData> & reflector_data,
-    const std::vector<SensorRawData>& sensor_raw_data_list)
+    const std::vector<SensorRawData>& sensor_raw_data_list,
+    const std::vector<sensor::RangeData>& original_undistorted_range_datas)
 {
   // 1. 判断是否是关键帧
   if (map_insertion_motion_filter_.IsSimilar(time, pose_estimate)) {
@@ -636,14 +644,44 @@ LocalTrajectoryBuilder2D::InsertIntoSubmap(
     active_submaps_.InsertCloudData(sensor_cloud_in_local, sensor_highlight_cloud_in_local);
   }
 
-  // 3. 返回插入结果
-  // TODO: 后面再加上TrajectoryNode中的line和reflector信息
+  // 3. 准备TrajectoryNode::Data所需的数据
+  
+  // 合并所有传感器的滤波点云为单个点云
+  sensor::PointCloud merged_filtered_cloud;
+  for (const auto& sensor_raw_data : sensor_raw_data_list) {
+    for (const auto& point : sensor_raw_data.filtered_gravity_aligned_point_cloud) {
+      merged_filtered_cloud.push_back(point);
+    }
+  }
+  
+  // 对合并后的滤波点云进行voxel filter降采样
+  merged_filtered_cloud = sensor::VoxelFilter(merged_filtered_cloud, options_.voxel_filter_size());
+  
+  // 合并所有传感器的highlight点云为单个点云
+  sensor::PointCloud merged_highlight_cloud;
+  for (const auto& sensor_raw_data : sensor_raw_data_list) {
+    for (const auto& point : sensor_raw_data.highlight_point_cloud) {
+      merged_highlight_cloud.push_back(point);
+    }
+  }
+  
+  // 对合并后的highlight点云进行voxel filter降采样
+  merged_highlight_cloud = sensor::VoxelFilter(merged_highlight_cloud, options_.voxel_filter_size());
+  
+  // 提取所有传感器的原始去畸变range data
+  std::vector<sensor::RangeData> all_sensors_range_datas;
+  for (const auto& original_range_data : original_undistorted_range_datas) {
+    all_sensors_range_datas.push_back(original_range_data);
+  }
+
+  // 4. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{
       std::make_shared<const TrajectoryNode::Data>(TrajectoryNode::Data{
           time,
           gravity_alignment,
-          filtered_gravity_aligned_point_cloud,
-          highlight_point_cloud,
+          merged_filtered_cloud,  // 合并后的滤波点云
+          merged_highlight_cloud, // 合并后的highlight点云
+          all_sensors_range_datas, // 各个传感器的原始去畸变range data
           tracked_lane_data,
           reflector_data,
           {},  // 'high_resolution_point_cloud' is only used in 3D.

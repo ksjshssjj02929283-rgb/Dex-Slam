@@ -282,20 +282,20 @@ void CeresScanMatcher2D::Match(
           pcl::PointXYZ query_point(p_transformed.x(),
                                     p_transformed.y(),
                                     p_transformed.z());
-        
-          std::vector<float> squared_distances(5, -1);
+
+          std::vector<float> squared_distances(10, -1);
           ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-          local_cloud_ikdtree.Nearest_Search(query_point, 5, points_near, squared_distances);
+          local_cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
 
           // 如果最近点不是地图点，则跳过
-          double distance = std::sqrt(squared_distances[4]);
+          double distance = std::sqrt(squared_distances[19]);
           if (distance > 0.15) {
             continue;
           }
 
           std::vector<Eigen::Vector3f> nearCorners;
           Eigen::Vector3f center(0, 0, 0);
-          for (int j = 0; j < 5; j++) {          
+          for (int j = 0; j < 10; j++) {
             sensor::PointCloud::PointType p_tmp;
             p_tmp.position.x() = points_near[j].x;
             p_tmp.position.y() = points_near[j].y;
@@ -304,10 +304,10 @@ void CeresScanMatcher2D::Match(
             center = center + p_tmp.position;
             nearCorners.push_back(p_tmp.position);
           }
-          center = center / 5.0;
+          center = center / 10.0;
 
           Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-          for (int j = 0; j < 5; j++) {
+          for (int j = 0; j < 10; j++) {
             Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
             covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
           }
@@ -369,18 +369,18 @@ void CeresScanMatcher2D::Match(
                                   p_transformed.y(),
                                   p_transformed.z());
       
-        std::vector<float> squared_distances(5, -1);
+        std::vector<float> squared_distances(10, -1);
         ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        global_cloud_ikdtree.Nearest_Search(query_point, 5, points_near, squared_distances);
+        global_cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
 
         // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[4]);
+        double distance = std::sqrt(squared_distances[19]);
         if (distance > 0.15) {
           continue;
         }
         std::vector<Eigen::Vector3f> nearCorners;
         Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           sensor::PointCloud::PointType p_tmp;
           p_tmp.position.x() = points_near[j].x;
           p_tmp.position.y() = points_near[j].y;
@@ -389,10 +389,10 @@ void CeresScanMatcher2D::Match(
           center = center + p_tmp.position;
           nearCorners.push_back(p_tmp.position);
         }
-        center = center / 5.0;
+        center = center / 10.0;
 
         Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
           covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
         }
@@ -652,19 +652,19 @@ void CeresScanMatcher2D::Match(
         pcl::PointXYZ query_point(p_transformed.x(),
                                   p_transformed.y(),
                                   p_transformed.z());
-      
-        std::vector<float> squared_distances(5, -1);
+
+        std::vector<float> squared_distances(10, -1);
         ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        cloud_ikdtree.Nearest_Search(query_point, 5, points_near, squared_distances);
+        cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
 
         // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[4]);
+        double distance = std::sqrt(squared_distances[19]);
         if (distance > 0.15) {
           continue;
         }
         std::vector<Eigen::Vector3f> nearCorners;
         Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           sensor::PointCloud::PointType p_tmp;
           p_tmp.position.x() = points_near[j].x;
           p_tmp.position.y() = points_near[j].y;
@@ -673,10 +673,10 @@ void CeresScanMatcher2D::Match(
           center = center + p_tmp.position;
           nearCorners.push_back(p_tmp.position);
         }
-        center = center / 5.0;
+        center = center / 10.0;
 
         Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
           covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
         }
@@ -842,18 +842,18 @@ void CeresScanMatcher2D::Match(
                                   p_transformed.y(),
                                   p_transformed.z());
       
-        std::vector<float> squared_distances(5, -1);
+        std::vector<float> squared_distances(10, -1);
         ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        cloud_ikdtree.Nearest_Search(query_point, 5, points_near, squared_distances);
+        cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
 
         // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[4]);
+        double distance = std::sqrt(squared_distances[19]);
         if (distance > 0.15) {
           continue;
         }
         std::vector<Eigen::Vector3f> nearCorners;
         Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           sensor::PointCloud::PointType p_tmp;
           p_tmp.position.x() = points_near[j].x;
           p_tmp.position.y() = points_near[j].y;
@@ -862,10 +862,10 @@ void CeresScanMatcher2D::Match(
           center = center + p_tmp.position;
           nearCorners.push_back(p_tmp.position);
         }
-        center = center / 5.0;
+        center = center / 10.0;
 
         Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
           covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
         }
@@ -1050,18 +1050,18 @@ void CeresScanMatcher2D::Match(
                                   p_transformed.y(),
                                   p_transformed.z());
       
-        std::vector<float> squared_distances(5, -1);
+        std::vector<float> squared_distances(10, -1);
         ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        cloud_ikdtree.Nearest_Search(query_point, 5, points_near, squared_distances);
+        cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
 
         // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[4]);
+        double distance = std::sqrt(squared_distances[19]);
         if (distance > 0.15) {
           continue;
         }
         std::vector<Eigen::Vector3f> nearCorners;
         Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           sensor::PointCloud::PointType p_tmp;
           p_tmp.position.x() = points_near[j].x;
           p_tmp.position.y() = points_near[j].y;
@@ -1070,10 +1070,10 @@ void CeresScanMatcher2D::Match(
           center = center + p_tmp.position;
           nearCorners.push_back(p_tmp.position);
         }
-        center = center / 5.0;
+        center = center / 10.0;
 
         Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 5; j++) {
+        for (int j = 0; j < 10; j++) {
           Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
           covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
         }
