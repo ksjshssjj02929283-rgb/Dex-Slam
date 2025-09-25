@@ -130,7 +130,8 @@ class LocalTrajectoryBuilder2D {
     const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
     const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
     const std::vector<sensor::LandmarkPointData> & reflector_data,
-    const std::vector<SensorRawData>& sensor_raw_data_list);
+    const std::vector<SensorRawData>& sensor_raw_data_list,
+    const std::vector<sensor::RangeData>& original_undistorted_range_datas);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
   // observed pose, or nullptr on failure.

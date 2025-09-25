@@ -369,28 +369,20 @@ bool MapBuilderBridge::SaveCloudMap(
   for (const auto& node : nodes) {
     // LOG(ERROR) << "node id: " << node.id << " pose global_pose: " << node.data.global_pose;
 
-    // 处理多传感器点云数据
-    cartographer::sensor::PointCloud merged_filtered_cloud;
-    for (const auto& sensor_point_cloud : node.data.constant_data->filtered_gravity_aligned_point_cloud) {
-      auto transformed_cloud = cartographer::sensor::TransformPointCloud(
-                                  sensor_point_cloud,
-                                  node.data.global_pose.cast<float>());
-      merged_filtered_cloud.InsertCloud(transformed_cloud);
-    }
+    // 处理点云数据（现在filtered_gravity_aligned_point_cloud是单一点云）
+    auto transformed_cloud = cartographer::sensor::TransformPointCloud(
+                                node.data.constant_data->filtered_gravity_aligned_point_cloud,
+                                node.data.global_pose.cast<float>());
 
-    cartographer::sensor::PointCloud merged_highlight_cloud;
-    for (const auto& sensor_point_cloud : node.data.constant_data->highlight_point_cloud) {
-      auto transformed_highlight_cloud = cartographer::sensor::TransformPointCloud(
-                                            sensor_point_cloud,
-                                            node.data.global_pose.cast<float>());
-      merged_highlight_cloud.InsertCloud(transformed_highlight_cloud);
-    }
+    auto transformed_highlight_cloud = cartographer::sensor::TransformPointCloud(
+                                        node.data.constant_data->highlight_point_cloud,
+                                        node.data.global_pose.cast<float>());
 
     cartographer::sensor::RangeData range_data;
     range_data.origin = node.data.global_pose.translation().cast<float>();
-    range_data.returns.InsertCloud(merged_filtered_cloud);
+    range_data.returns.InsertCloud(transformed_cloud);
     submap->InsertRangeData(range_data, range_data_inserter.get());
-    submap->InsertCloudData(merged_filtered_cloud, merged_highlight_cloud);
+    submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
   }
   submap->Finish();
 
@@ -480,21 +472,32 @@ bool MapBuilderBridge::SaveGridMapFromRange(
 
   // 2. 逐帧处理激光数据并插入到栅格地图中
   for (const auto& node : nodes) {
-    // 处理多传感器点云数据
-    for (const auto& sensor_point_cloud : node.data.constant_data->filtered_gravity_aligned_point_cloud) {
-      // 将点云转换到global坐标系下
-      auto transformed_cloud = cartographer::sensor::TransformPointCloud(
-                                  sensor_point_cloud,
-                                  node.data.global_pose.cast<float>());
-
-      // 构造RangeData
-      cartographer::sensor::RangeData range_data;
-      range_data.origin = node.data.global_pose.translation().cast<float>();
-      range_data.returns = transformed_cloud;
-      range_data.misses = {};  // 使用空的miss数据
-
+    std::cout << "Processing node id: " << node.id << std::endl;
+    std::cout <<"range_Data size: " << node.data.constant_data->range_datas.size() << std::endl;
+    // 使用新的range_datas字段，包含了各个传感器的原始去畸变range data
+    for (const auto& range_data : node.data.constant_data->range_datas) {
+      // 将range data转换到global坐标系下
+      cartographer::sensor::RangeData global_range_data;
+      
+      // 转换origin到global坐标系
+      const Eigen::Vector3f global_origin = (node.data.global_pose * 
+                                             range_data.origin.cast<double>()).cast<float>();
+      global_range_data.origin = global_origin;
+      
+      // 转换returns点云到global坐标系
+      global_range_data.returns = cartographer::sensor::TransformPointCloud(
+                                    range_data.returns,
+                                    node.data.global_pose.cast<float>());
+      
+      // 转换misses点云到global坐标系（如果有的话）
+      global_range_data.misses = cartographer::sensor::TransformPointCloud(
+                                   range_data.misses,
+                                   node.data.global_pose.cast<float>());
+        LOG(INFO) << "node id: " << node.id << " range_data returns size: " 
+                  << range_data.returns.size() 
+                  << " misses size: " << range_data.misses.size() << std::endl;
       // 插入到概率栅格地图中
-      accumulated_submap->InsertRangeData(range_data, range_data_inserter.get());
+      accumulated_submap->InsertRangeData(global_range_data, range_data_inserter.get());
     }
   }
 

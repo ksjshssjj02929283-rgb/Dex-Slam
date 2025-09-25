@@ -120,13 +120,15 @@ class FastCorrelativeScanMatcher3DTest : public ::testing::Test {
       const sensor::PointCloud& low_resolution_point_cloud) {
     return TrajectoryNode::Data{common::FromUniversal(0),
                                 Eigen::Quaterniond::Identity(),
-                                {},
-                                {},
-                                {},
-                                {},
-                                point_cloud_,
+                                {},  // filtered_gravity_aligned_point_cloud
+                                {},  // highlight_point_cloud
+                                {},  // range_datas
+                                {},  // lines
+                                {},  // reflectors
+                                point_cloud_,  // high_resolution_point_cloud
                                 low_resolution_point_cloud,
-                                GetRotationalScanMatcherHistogram()};
+                                GetRotationalScanMatcherHistogram(),
+                                transform::Rigid3d::Identity()};  // local_pose
   }
 
   const Eigen::VectorXf& GetRotationalScanMatcherHistogram() {

@@ -677,8 +677,9 @@ PoseEstimator2D::InsertIntoSubmap(
       std::make_shared<const mapping::TrajectoryNode::Data>(mapping::TrajectoryNode::Data{
           time,
           gravity_alignment,
-          filtered_gravity_aligned_point_cloud,
-          highlight_point_cloud,
+          filtered_gravity_aligned_point_cloud,  // 单个合并后的点云
+          highlight_point_cloud,  // 单个合并后的点云
+          {},  // range_datas - 空的range data vector
           tracked_lane_data,
           reflector_data,
           {},  // 'high_resolution_point_cloud' is only used in 3D.

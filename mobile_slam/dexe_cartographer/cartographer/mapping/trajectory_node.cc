@@ -29,10 +29,10 @@ proto::TrajectoryNodeData ToProto(const TrajectoryNode::Data& constant_data) {
   proto.set_timestamp(common::ToUniversal(constant_data.time));
   *proto.mutable_gravity_alignment() =
     transform::ToProto(constant_data.gravity_alignment);
+  
+  // 直接使用合并后的点云进行序列化
   *proto.mutable_filtered_gravity_aligned_point_cloud() =
-    sensor::CompressedPointCloud(
-      constant_data.filtered_gravity_aligned_point_cloud)
-      .ToProto();
+    sensor::CompressedPointCloud(constant_data.filtered_gravity_aligned_point_cloud).ToProto();
   for (const auto & lines : constant_data.lines) {
     for (int i = 0; i < static_cast<int>(lines.second.size()); i++) {
       auto * item = proto.add_lines();
@@ -77,13 +77,17 @@ TrajectoryNode::Data FromProto(const proto::TrajectoryNodeData& proto) {
     reflectors.push_back(reflector);
   }
 
+  // 创建空的range_datas，因为protobuf中没有保存这个信息
+  std::vector<sensor::RangeData> range_datas;
+
   return TrajectoryNode::Data{
     common::FromUniversal(proto.timestamp()),
     transform::ToEigen(proto.gravity_alignment()),
     sensor::CompressedPointCloud(proto.filtered_gravity_aligned_point_cloud())
-      .Decompress(),
+      .Decompress(),  // 直接使用单个点云
     sensor::CompressedPointCloud(proto.highlight_point_cloud())
-      .Decompress(),
+      .Decompress(),  // 直接使用单个点云
+    range_datas,
     lines,
     reflectors,
     sensor::CompressedPointCloud(proto.high_resolution_point_cloud())

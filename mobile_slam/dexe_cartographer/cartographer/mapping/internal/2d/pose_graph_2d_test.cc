@@ -190,14 +190,15 @@ class PoseGraph2DTest : public ::testing::Test {
         std::make_shared<const TrajectoryNode::Data>(
             TrajectoryNode::Data{common::FromUniversal(0),
                                  Eigen::Quaterniond::Identity(),
-                                 range_data.returns,
-                                 {},
-                                 {},
-                                 {},
-                                 {},
-                                 {},
-                                 {},
-                                 transform::Embed3D(pose_estimate)}),
+                                 range_data.returns,  // filtered_gravity_aligned_point_cloud
+                                 {},  // highlight_point_cloud
+                                 {range_data},  // range_datas - 将range_data放入vector中
+                                 {},  // lines
+                                 {},  // reflectors
+                                 {},  // high_resolution_point_cloud
+                                 {},  // low_resolution_point_cloud
+                                 {},  // rotational_scan_matcher_histogram
+                                 transform::Embed3D(pose_estimate)}),  // local_pose
         kTrajectoryId, insertion_submaps);
   }
 
