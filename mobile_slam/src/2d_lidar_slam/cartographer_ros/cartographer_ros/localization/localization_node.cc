@@ -115,15 +115,16 @@ std::string TrajectoryStateToString(const TrajectoryState trajectory_state) {
 LocalizationNode::LocalizationNode(
     const LocalizationNodeOptions& node_options,
     std::unique_ptr<cartographer::localization::LocalizationUpdater> localization_updater,
-    tf2_ros::Buffer* const tf_buffer)  
-  : rclcpp::Node("localization_node"),
-    node_options_(node_options),
-    localization_updater_bridge_(node_options_, std::move(localization_updater), tf_buffer)
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer,
+    rclcpp::Node::SharedPtr node)  
+  : node_options_(node_options),
+    node_(node),
+    localization_updater_bridge_(node_options_, std::move(localization_updater), tf_buffer.get())
 {
   absl::MutexLock lock(&mutex_);
 
   // TF 广播器  
-  tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+  tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
 
   // QoS  
   auto qos_latest = rclcpp::QoS(rclcpp::KeepLast(kLatestOnlyPublisherQueueSize)).best_effort();
@@ -131,106 +132,108 @@ LocalizationNode::LocalizationNode(
   auto qos_sensor = rclcpp::SensorDataQoS();
 
   // 发布者  
-  submap_list_publisher_ = this->create_publisher<cartographer_ros_msgs::msg::SubmapList>(
-      kSubmapListTopic, qos_latest);
-  trajectory_node_list_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kTrajectoryNodeListTopic, qos_latest);
-  landmark_poses_list_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kLandmarkPosesListTopic, qos_latest);
-  constraint_list_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kConstraintListTopic, qos_latest);
-  particle_poses_publisher_ = this->create_publisher<geometry_msgs::msg::PoseArray>(
-      kParticlePosesTopic, qos_latest);
+  submap_list_publisher_ = node_->create_publisher<cartographer_ros_msgs::msg::SubmapList>(
+      kSubmapListTopic, kLatestOnlyPublisherQueueSize);
+  trajectory_node_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kTrajectoryNodeListTopic, kLatestOnlyPublisherQueueSize);
+  landmark_poses_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
+  constraint_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kConstraintListTopic, kLatestOnlyPublisherQueueSize);
+  particle_poses_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseArray>(
+      kParticlePosesTopic, kLatestOnlyPublisherQueueSize);
 
   // 发布跟踪的位姿
   if (node_options_.publish_tracked_pose) {
-    loc_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        kLocaliztionPoseTopic, qos_latest);
-    tracked_path_publisher_ = this->create_publisher<nav_msgs::msg::Path>(
-        kTrackedPathTopic, qos_latest);
+    loc_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        kLocaliztionPoseTopic, kLatestOnlyPublisherQueueSize);
+    tracked_path_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
+        kTrackedPathTopic, kLatestOnlyPublisherQueueSize);
   }
 
-  global_map_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+  global_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
       kGlobalPointCloudTopic, qos_latched);
-  global_feature_map_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kGlobalFeatureMapTopic, qos_latched);
-  local_map_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kLocalPointCloudTopic, qos_latest);
-  local_feature_map_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kLocalFeatureMapTopic, qos_latest);
-  matched_feature_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kMatchedFeatureTopic, qos_latest);
-  scan_matched_point_cloud_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kScanMatchedPointCloudTopic, qos_latest);
-  localization_state_publisher_ = this->create_publisher<dcm_msgs::msg::LocalizationState>(
-      kLocalizationStateTopic, qos_latest);
+  global_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kGlobalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+  local_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+      kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
+  local_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+  matched_feature_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
+  scan_matched_point_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+      kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
+  localization_state_publisher_ = node_->create_publisher<dcm_msgs::msg::LocalizationState>(
+      kLocalizationStateTopic, kLatestOnlyPublisherQueueSize);
 
   // 服务  
-  submap_query_service_ = this->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
+  submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
       kSubmapQueryServiceName,
       std::bind(&LocalizationNode::HandleSubmapQuery, this, 
                 std::placeholders::_1, std::placeholders::_2));
 
-  trajectory_query_service_ = this->create_service<cartographer_ros_msgs::srv::TrajectoryQuery>(
+  trajectory_query_service_ = node_->create_service<cartographer_ros_msgs::srv::TrajectoryQuery>(
       kTrajectoryQueryServiceName,
       std::bind(&LocalizationNode::HandleTrajectoryQuery, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  start_trajectory_service_ = this->create_service<cartographer_ros_msgs::srv::StartTrajectory>(
+  start_trajectory_service_ = node_->create_service<cartographer_ros_msgs::srv::StartTrajectory>(
       kStartTrajectoryServiceName,
       std::bind(&LocalizationNode::HandleStartTrajectory, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  finish_trajectory_service_ = this->create_service<cartographer_ros_msgs::srv::FinishTrajectory>(
+  finish_trajectory_service_ = node_->create_service<cartographer_ros_msgs::srv::FinishTrajectory>(
       kFinishTrajectoryServiceName,
       std::bind(&LocalizationNode::HandleFinishTrajectory, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  write_state_service_ = this->create_service<cartographer_ros_msgs::srv::WriteState>(
+  write_state_service_ = node_->create_service<cartographer_ros_msgs::srv::WriteState>(
       kWriteStateServiceName,
       std::bind(&LocalizationNode::HandleWriteState, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  get_trajectory_states_service_ = this->create_service<cartographer_ros_msgs::srv::GetTrajectoryStates>(
+  get_trajectory_states_service_ = node_->create_service<cartographer_ros_msgs::srv::GetTrajectoryStates>(
       kGetTrajectoryStatesServiceName,
       std::bind(&LocalizationNode::HandleGetTrajectoryStates, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  relocalization_service_ = this->create_service<dcm_srvs::srv::SetPose>(
+  relocalization_service_ = node_->create_service<dcm_srvs::srv::SetPose>(
       kHandleRelocalizationServiceName,
       std::bind(&LocalizationNode::HandleRelocalization, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  set_map_changed_service_ = this->create_service<std_srvs::srv::Trigger>(
+  set_map_changed_service_ = node_->create_service<std_srvs::srv::Trigger>(
       kHandleSetMapChangedServiceName,
       std::bind(&LocalizationNode::HandleSetMapChanged, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   // 定时器（Wall timers 与 regular timer）
   using namespace std::chrono_literals;
-  publish_submap_list_timer_ = this->create_wall_timer(
+  publish_submap_list_timer_ = node_->create_wall_timer(
       std::chrono::duration<double>(node_options_.submap_publish_period_sec),
       std::bind(&LocalizationNode::PublishSubmapList, this));
 
   if (node_options_.pose_publish_period_sec > 0.) {
-    publish_local_trajectory_data_timer_ = this->create_wall_timer(
+    std::cout << "Creating pose publish timer with period: "
+              << node_options_.pose_publish_period_sec << " seconds." << std::endl;
+    publish_local_trajectory_data_timer_ = node_->create_wall_timer(
         std::chrono::duration<double>(node_options_.pose_publish_period_sec),
         std::bind(&LocalizationNode::PublishLocalTrajectoryData, this));
   }
 
-  publish_trajectory_node_list_timer_ = this->create_wall_timer(
+  publish_trajectory_node_list_timer_ = node_->create_wall_timer(
       std::chrono::duration<double>(node_options_.trajectory_publish_period_sec),
       std::bind(&LocalizationNode::PublishTrajectoryNodeList, this));
 
-  publish_landmark_poses_list_timer_ = this->create_wall_timer(
+  publish_landmark_poses_list_timer_ = node_->create_wall_timer(
       std::chrono::duration<double>(node_options_.trajectory_publish_period_sec),
       std::bind(&LocalizationNode::PublishLandmarkPosesList, this));
 
-  publish_constraint_list_timer_ = this->create_wall_timer(
+  publish_constraint_list_timer_ = node_->create_wall_timer(
       std::chrono::duration<double>(kConstraintPublishPeriodSec),
       std::bind(&LocalizationNode::PublishConstraintList, this));
 
-  maybe_warn_about_topic_mismatch_timer_ = this->create_wall_timer(
+  maybe_warn_about_topic_mismatch_timer_ = node_->create_wall_timer(
       100ms, std::bind(&LocalizationNode::PublishLocalizationState, this));
 
   // TODO: linfeng.guo 按需保存跟踪位姿
@@ -261,7 +264,7 @@ void LocalizationNode::HandleSubmapQuery(
   
   // 调用bridge处理请求
   localization_updater_bridge_.HandleSubmapQuery(*request, *response);
-  RCLCPP_DEBUG(this->get_logger(), "Handled submap query for submap_index: %d, trajectory_id: %d",
+  RCLCPP_DEBUG(node_->get_logger(), "Handled submap query for submap_index: %d, trajectory_id: %d",
                request->submap_index, request->trajectory_id);
 }
 
@@ -276,12 +279,12 @@ void LocalizationNode::HandleTrajectoryQuery(
       {TrajectoryState::ACTIVE, TrajectoryState::FINISHED, TrajectoryState::FROZEN});
   
   if (response->status.code != cartographer_ros_msgs::msg::StatusCode::OK) {
-    RCLCPP_ERROR(this->get_logger(), "Can't query trajectory from pose graph: %s",
+    RCLCPP_ERROR(node_->get_logger(), "Can't query trajectory from pose graph: %s",
                  response->status.message.c_str());
     return;
   }
   localization_updater_bridge_.HandleTrajectoryQuery(*request, *response);
-  RCLCPP_DEBUG(this->get_logger(), "Handled trajectory query for trajectory_id: %d",
+  RCLCPP_DEBUG(node_->get_logger(), "Handled trajectory query for trajectory_id: %d",
                request->trajectory_id);
 }
 
@@ -337,7 +340,7 @@ void LocalizationNode::PublishLocalizationState()
         default:
           // 兜底处理，防止未来新增状态导致未设置
           loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_FAILED;
-          RCLCPP_WARN(this->get_logger(),
+          RCLCPP_WARN(node_->get_logger(),
                       "Unknown localization state value: %d",
                       static_cast<int>(*loc_state));
           break;
@@ -351,6 +354,23 @@ void LocalizationNode::PublishLocalizationState()
 void LocalizationNode::PublishLocalTrajectoryData()
 {
   absl::MutexLock lock(&mutex_);
+
+      // 首次发布全局地图及全局特征  
+    static bool first_publish_map = true;
+    if (first_publish_map) {
+      std::cout << "First publish global map and feature map." << std::endl;
+      global_map_cloud_publisher_->publish(localization_updater_bridge_.GetCloudMap());
+
+      visualization_msgs::msg::MarkerArray feature_map_msg;
+      int marker_id = 0;
+      const auto line_map_msg = localization_updater_bridge_.GetLineMap(marker_id);
+      feature_map_msg.markers.insert(feature_map_msg.markers.end(),
+                                     line_map_msg.begin(), line_map_msg.end());
+      global_feature_map_publisher_->publish(feature_map_msg);
+
+      first_publish_map = false;
+    }
+
   // 获得不同轨迹的数据，并进行插值
   for (const auto& entry : localization_updater_bridge_.GetLocalTrajectoryData()) {
     const auto& trajectory_data = entry.second;
@@ -424,20 +444,7 @@ void LocalizationNode::PublishLocalTrajectoryData()
               local_map_cloud, carto::transform::Rigid3f::Identity())));
     }
 
-    // 首次发布全局地图及全局特征  
-    static bool first_publish_map = true;
-    if (first_publish_map) {
-      global_map_cloud_publisher_->publish(localization_updater_bridge_.GetCloudMap());
 
-      visualization_msgs::msg::MarkerArray feature_map_msg;
-      int marker_id = 0;
-      const auto line_map_msg = localization_updater_bridge_.GetLineMap(marker_id);
-      feature_map_msg.markers.insert(feature_map_msg.markers.end(),
-                                     line_map_msg.begin(), line_map_msg.end());
-      global_feature_map_publisher_->publish(feature_map_msg);
-
-      first_publish_map = false;
-    }
 
     // TF 与追踪位姿
     geometry_msgs::msg::TransformStamped stamped_transform;
@@ -445,7 +452,7 @@ void LocalizationNode::PublishLocalTrajectoryData()
     // published poses to advance. If we already know a newer pose, we use its
     // time instead. Since tf knows how to interpolate, providing newer
     // information is better.
-    const ::cartographer::common::Time now = FromRos(this->get_clock()->now());
+    const ::cartographer::common::Time now = FromRos(node_->get_clock()->now());
     stamped_transform.header.stamp = ToRos(trajectory_data.local_slam_data->time);
 
     // Suppress publishing if we already published a transform at this time.
@@ -645,7 +652,7 @@ LocalizationNode::ComputeExpectedSensorIds(const TrajectoryOptions& options) con
   // required.
   if (options.trajectory_builder_options.
                 trajectory_builder_2d_options().use_imu_data()) {
-    RCLCPP_WARN(this->get_logger(), "Subscribe to IMU topic.");
+    RCLCPP_WARN(node_->get_logger(), "Subscribe to IMU topic.");
     expected_topics.insert(SensorId{SensorType::IMU, kImuTopic});
   }
   // Odometry is optional.
@@ -678,7 +685,7 @@ int LocalizationNode::AddTrajectory(const TrajectoryOptions& options)
   // 6. 每kTopicMismatchCheckDelaySec秒检查一次topic是否匹配
   // 一次性延迟检查 Topic 匹配
   using namespace std::chrono_literals;
-  this->create_wall_timer(
+  node_->create_wall_timer(
       std::chrono::duration<double>(kTopicMismatchCheckDelaySec),
       std::bind(&LocalizationNode::MaybeWarnAboutTopicMismatch, this));
   // 7. 订阅的topic以及与之对应的传感器id
@@ -690,9 +697,8 @@ int LocalizationNode::AddTrajectory(const TrajectoryOptions& options)
 
 void LocalizationNode::LaunchSubscribers(const TrajectoryOptions& options,  
                                          const int trajectory_id) {  
-  // 获取node的SharedPtr，假设LocalizationNode继承自rclcpp::Node  
-  // 如果LocalizationNode不直接继承自Node，需要调整这里  
-  auto node_handle = shared_from_this();  
+  // 使用传入的node_成员变量  
+  auto node_handle = node_;  
 
   // LaserScan  
   for (const std::string& topic :  
@@ -868,7 +874,7 @@ void LocalizationNode::HandleStartTrajectory(
     if (!pose.IsValid()) {
       response->status.message =
           "Invalid pose argument. Orientation quaternion must be normalized.";
-      RCLCPP_ERROR(get_logger(), "%s", response->status.message.c_str());
+      RCLCPP_ERROR(node_->get_logger(), "%s", response->status.message.c_str());
       response->status.code =
           cartographer_ros_msgs::msg::StatusCode::INVALID_ARGUMENT;
       return;
@@ -880,7 +886,7 @@ void LocalizationNode::HandleStartTrajectory(
         {TrajectoryState::ACTIVE, TrajectoryState::FROZEN,
          TrajectoryState::FINISHED} /* valid states */);
     if (response->status.code != cartographer_ros_msgs::msg::StatusCode::OK) {
-      RCLCPP_ERROR(this->get_logger(),
+      RCLCPP_ERROR(node_->get_logger(),
                    "Can't start a trajectory with initial pose: %s",
                    response->status.message.c_str());
       return;
@@ -901,11 +907,11 @@ void LocalizationNode::HandleStartTrajectory(
 
   if (!ValidateTrajectoryOptions(trajectory_options)) {
     response->status.message = "Invalid trajectory options.";
-    RCLCPP_ERROR(this->get_logger(), "%s", response->status.message.c_str());
+    RCLCPP_ERROR(node_->get_logger(), "%s", response->status.message.c_str());
     response->status.code = cartographer_ros_msgs::msg::StatusCode::INVALID_ARGUMENT;
   } else if (!ValidateTopicNames(trajectory_options)) {
     response->status.message = "Topics are already used by another trajectory.";
-    RCLCPP_ERROR(this->get_logger(), "%s", response->status.message.c_str());
+    RCLCPP_ERROR(node_->get_logger(), "%s", response->status.message.c_str());
     response->status.code = cartographer_ros_msgs::msg::StatusCode::INVALID_ARGUMENT;
   } else {
     response->status.message = "Success.";
@@ -944,7 +950,7 @@ void LocalizationNode::HandleGetTrajectoryStates(
       ::cartographer::mapping::PoseGraphInterface::TrajectoryState;
   absl::MutexLock lock(&mutex_);
   response->status.code = ::cartographer_ros_msgs::msg::StatusCode::OK;
-  response->trajectory_states.header.stamp = this->get_clock()->now();
+  response->trajectory_states.header.stamp = node_->get_clock()->now();
   for (const auto& entry : localization_updater_bridge_.GetTrajectoryStates()) {
     response->trajectory_states.trajectory_id.push_back(entry.first);
     switch (entry.second) {
@@ -999,12 +1005,12 @@ void LocalizationNode::HandleRelocalization(
 {
   if (request->pose.header.frame_id == "") {
     // This should be removed at some point
-    RCLCPP_WARN(this->get_logger(),
+    RCLCPP_WARN(node_->get_logger(),
                 "Received initial pose with empty frame_id. Using default frame_id = map.");
   }
   // We only accept initial pose estimates in the global frame, #5148.
   else if (StripSlash(request->pose.header.frame_id) != node_options_.map_frame) {
-    RCLCPP_WARN(this->get_logger(),
+    RCLCPP_WARN(node_->get_logger(),
                 "Ignoring initial pose in frame \"%s\"; initial poses must be in the global frame, \"%s\"",
                 StripSlash(request->pose.header.frame_id).c_str(),
                 node_options_.map_frame.c_str());
@@ -1016,7 +1022,7 @@ void LocalizationNode::HandleRelocalization(
 
   need_set_pose_in_filter_ = true;
   auto initial_pose_2d = carto::transform::Project2D(initial_pose);
-  RCLCPP_WARN(this->get_logger(),
+  RCLCPP_WARN(node_->get_logger(),
               "Set initial pose: %f, %f, %f",
               initial_pose_2d.translation().x(),
               initial_pose_2d.translation().y(),
@@ -1035,16 +1041,16 @@ void LocalizationNode::HandleSetMapChanged(
 bool LocalizationNode::SetInitialPoseInFilter(
     const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg)
 {
-  RCLCPP_INFO(this->get_logger(), "Setting initial pose in filter");
+  RCLCPP_INFO(node_->get_logger(), "Setting initial pose in filter");
   // Create service client (should be created in constructor for better practice)
-  auto set_pose_client = this->create_client<dcm_srvs::srv::SetPose>("/robot_localization/set_pose");
+  auto set_pose_client = node_->create_client<dcm_srvs::srv::SetPose>("/robot_localization/set_pose");
   if (!set_pose_client) {
-    RCLCPP_ERROR(this->get_logger(), "SetPose client not initialized");
+    RCLCPP_ERROR(node_->get_logger(), "SetPose client not initialized");
     return false;
   }
   // Wait for service to be available
   if (!set_pose_client->wait_for_service(std::chrono::seconds(3))) {
-    RCLCPP_ERROR(this->get_logger(), "Timed out waiting for SetPose service");
+    RCLCPP_ERROR(node_->get_logger(), "Timed out waiting for SetPose service");
     need_set_pose_in_filter_ = false;
     return false;
   }
@@ -1058,18 +1064,18 @@ bool LocalizationNode::SetInitialPoseInFilter(
   // Wait for response with timeout
   auto status = future.wait_for(std::chrono::seconds(5));
   if (status != std::future_status::ready) {
-    RCLCPP_ERROR(get_logger(), "Failed to call service set_pose - timeout");
+    RCLCPP_ERROR(node_->get_logger(), "Failed to call service set_pose - timeout");
     return false;
   }
 
   auto result = future.get();
   if (!result) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to call service set_pose - no response");
+    RCLCPP_ERROR(node_->get_logger(), "Failed to call service set_pose - no response");
     return false;
   }
 
   need_set_pose_in_filter_ = false;
-  RCLCPP_WARN(this->get_logger(), "SetPose service called successfully");
+  RCLCPP_WARN(node_->get_logger(), "SetPose service called successfully");
   return result->success;
 }
 
@@ -1078,15 +1084,15 @@ bool LocalizationNode::SetInitialPoseInFilter(
 // bool LocalizationNode::SetInitialPoseInFilterSync(
 //     const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg) {
   
-//   RCLCPP_INFO(this->get_logger(), "Setting initial pose in filter");
+//   RCLCPP_INFO(node_->get_logger(), "Setting initial pose in filter");
   
 //   if (!set_pose_client_) {
-//     RCLCPP_ERROR(this->get_logger(), "SetPose client not initialized");
+//     RCLCPP_ERROR(node_->get_logger(), "SetPose client not initialized");
 //     return false;
 //   }
   
 //   if (!set_pose_client_->wait_for_service(std::chrono::seconds(3))) {
-//     RCLCPP_ERROR(this->get_logger(), "Timed out waiting for SetPose service");
+//     RCLCPP_ERROR(node_->get_logger(), "Timed out waiting for SetPose service");
 //     need_set_pose_in_filter_ = false;
 //     return false;
 //   }
@@ -1097,10 +1103,10 @@ bool LocalizationNode::SetInitialPoseInFilter(
 //   try {
 //     auto result = set_pose_client_->async_send_request(pose_cmd).get();
 //     need_set_pose_in_filter_ = false;
-//     RCLCPP_WARN(this->get_logger(), "SetPose service called successfully");
+//     RCLCPP_WARN(node_->get_logger(), "SetPose service called successfully");
 //     return result->success;
 //   } catch (const std::exception& e) {
-//     RCLCPP_ERROR(this->get_logger(), "Failed to call service set_pose: %s", e.what());
+//     RCLCPP_ERROR(node_->get_logger(), "Failed to call service set_pose: %s", e.what());
 //     return false;
 //   }
 // }
@@ -1123,10 +1129,10 @@ void LocalizationNode::HandleInitialPoseMessage(
   const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr& msg)
 {
   if (msg->header.frame_id == "") {
-    RCLCPP_WARN(this->get_logger(),
+    RCLCPP_WARN(node_->get_logger(),
                 "Received initial pose with empty frame_id. Using default: map.");
   } else if (StripSlash(msg->header.frame_id) != node_options_.map_frame) {
-    RCLCPP_WARN(this->get_logger(),
+    RCLCPP_WARN(node_->get_logger(),
                 "Ignoring initial pose in frame '%s'; must be in global frame '%s'",
                 StripSlash(msg->header.frame_id).c_str(), node_options_.map_frame.c_str());
     return;
@@ -1138,7 +1144,7 @@ void LocalizationNode::HandleInitialPoseMessage(
     return;
   }
   auto initial_pose_2d = carto::transform::Project2D(initial_pose);
-  RCLCPP_WARN(this->get_logger(),
+  RCLCPP_WARN(node_->get_logger(),
               "Set initial pose: %.3f, %.3f, %.3f",
               initial_pose_2d.translation().x(),
               initial_pose_2d.translation().y(),
@@ -1265,7 +1271,7 @@ void LocalizationNode::LoadMapData(const std::string& map_filename)
 void LocalizationNode::MaybeWarnAboutTopicMismatch()
 {
   // 获取当前可用 topic 名称及类型
-  const auto topics_and_types = this->get_topic_names_and_types();
+  const auto topics_and_types = node_->get_topic_names_and_types();
   std::set<std::string> published_topics;
   std::stringstream published_topics_string;
   for (const auto& kv : topics_and_types) {

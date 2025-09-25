@@ -67,8 +67,8 @@ namespace cartographer_ros {
  */
 class LocalizationManagerNode : public rclcpp::Node {
 public:
-  explicit LocalizationManagerNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
-      : Node("localization_manager", options), 
+  explicit LocalizationManagerNode()
+      : Node("localization_node"), 
         state_(LocalizationState::STOPPED) {
     
     RCLCPP_INFO(get_logger(), "Initializing LocalizationManager Node");
@@ -76,11 +76,7 @@ public:
     // 按依赖顺序初始化组件
     InitializeTfComponents();
     InitializeServices();
-    
-    // 如果配置允许，自动启动定位
-    if (FLAGS_start_trajectory_with_default_topics) {
-      StartLocalization();
-    }
+
 
     // 启动健康检查定时器
     health_check_timer_ = create_wall_timer(
@@ -175,11 +171,11 @@ private:
       return;
     }
 
-    if (!StartFilter()) {
-      response->success = false;
-      response->message = "Failed to start robot localization filter";
-      return;
-    }
+    // if (!StartFilter()) {
+    //   response->success = false;
+    //   response->message = "Failed to start robot localization filter";
+    //   return;
+    // }
 
     response->success = StartLocalization();
     response->message = response->success ? 
@@ -208,7 +204,7 @@ private:
     RCLCPP_INFO(get_logger(), "Resetting localization");
     
     StopLocalization();
-    ResetFilter();
+    // ResetFilter();
     
     response->success = StartLocalization();
     response->message = response->success ? 
@@ -241,23 +237,27 @@ private:
       // 创建定位更新器
       auto localization_updater = cartographer::localization::CreateLocalizationUpdater(
           node_options_->localization_updater_options);
+        std::cout <<1122 << std::endl;
 
       // 创建定位节点
       localization_node_ = std::make_unique<localization::LocalizationNode>(
-          *node_options_, std::move(localization_updater), tf_buffer_.get());
-
+          *node_options_, std::move(localization_updater), tf_buffer_, shared_from_this());
+        std::cout <<11 << std::endl;
       // 加载状态文件
       std::string state_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
       localization_node_->LoadState(state_filename, FLAGS_load_frozen_state);
+        std::cout <<22 << std::endl;
 
       // 加载地图数据
       std::string yaml_filepath = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.yaml";
       localization_node_->LoadMapData(yaml_filepath);
+        std::cout <<33 << std::endl;
 
       // 启动轨迹
       if (FLAGS_start_trajectory_with_default_topics) {
         localization_node_->StartTrajectoryWithDefaultTopics(*trajectory_options_);
       }
+        std::cout <<44 << std::endl;
 
       state_ = LocalizationState::RUNNING;
       RCLCPP_INFO(get_logger(), "Localization started successfully");
@@ -394,23 +394,24 @@ private:
 } // namespace cartographer_ros
 
 int main(int argc, char** argv) {
-  // 初始化Google logging和gflags
+  rclcpp::init(argc, argv);
+
+  google::AllowCommandLineReparsing();
   google::InitGoogleLogging(argv[0]);
   google::ParseCommandLineFlags(&argc, &argv, true);
 
   // 验证必需参数
   if (FLAGS_configuration_directory.empty()) {
     std::cerr << "-configuration_directory is missing." << std::endl;
+    rclcpp::shutdown();
     return 1;
   }
   if (FLAGS_configuration_basename.empty()) {
     std::cerr << "-configuration_basename is missing." << std::endl;
+    rclcpp::shutdown();
     return 1;
   }
 
-  // 初始化ROS2
-  rclcpp::init(argc, argv);
-  
   cartographer_ros::ScopedRosLogSink ros_log_sink;
   
   auto node = std::make_shared<cartographer_ros::LocalizationManagerNode>();
