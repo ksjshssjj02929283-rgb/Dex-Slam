@@ -1,0 +1,32 @@
+<launch>
+  <!-- 设置地图的配置文件 -->
+  <arg name="map" default="/home/ubt/data/maps/CWDT@20240919_104055/map.yaml" />
+  <arg name="use_map_server" default="true" />
+  <arg name="use_rviz" default="true" />
+
+  <param name="map_manager/map_folder" value="/home/ubt/data/maps" />
+  <param name="map_manager/map_name" value="CWDT@20240919_104055" />
+
+  <!-- 运行地图服务器，并且加载设置的地图-->
+  <node name="amcl_map_server" pkg="map_server" type="map_server"
+    args="$(arg map)" output="screen" if="$(arg use_map_server)">
+    <param name="map_topic" value="map" />
+  </node>
+  <!-- 启动AMCL节点 -->
+  <arg name="initial_pose_x" default="0.0"/>
+  <arg name="initial_pose_y" default="0.0"/>
+  <arg name="initial_pose_a" default="0.0"/>
+  <include file="$(find amcl)/launch/dcm_amcl_diff.launch" >
+    <arg name="initial_pose_x" value="$(arg initial_pose_x)"/>
+    <arg name="initial_pose_y" value="$(arg initial_pose_y)"/>
+    <arg name="initial_pose_a" value="$(arg initial_pose_a)"/>
+  </include>
+  <!-- 运行rviz -->
+  <node name="rviz" pkg="rviz" type="rviz" required="false" if="$(arg use_rviz)"
+      args="-d /home/fengbro/dcm360/0_dcm_ws/src/rviz/default.rviz" />
+</launch>
+
+<!-- 
+  examples:
+  roslaunch amcl demo_dcm_amcl.launch map:='/home/ubt/data/map.yaml' use_map_server:=true
+-->
