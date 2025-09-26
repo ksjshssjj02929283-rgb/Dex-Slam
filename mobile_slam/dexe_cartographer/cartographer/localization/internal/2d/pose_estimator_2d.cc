@@ -74,7 +74,7 @@ PoseEstimator2D::PoseEstimator2D(
 
   loc_state_ = LocalizationState::NOT_INITIALIZED;
 
-  time_file_.open("/home/ubt/data/time.txt", std::ios::out);
+  // time_file_.open("/home/ubt/data/time.txt", std::ios::out);
 }
 
 PoseEstimator2D::~PoseEstimator2D() {}
@@ -279,7 +279,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                           &summary);
   double match_time = tic_toc.toc();
   LOG(INFO) << "ceres scan matcher cost time: " << match_time << " ms";
-  time_file_ << match_time << std::endl;
+  // time_file_ << match_time << std::endl;
 
   // ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
   //                           filtered_gravity_aligned_point_cloud,

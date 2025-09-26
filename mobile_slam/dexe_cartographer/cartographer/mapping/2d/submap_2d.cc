@@ -444,7 +444,7 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
     submaps_.front()->Finish();
 
     // static int submap_count = 0;
-    // std::string folder = "/home/ubt/data/submaps/";
+    // std::string folder = "/home/fengbro/dexforce/0_slam/data/submaps/";
     // std::string filename = "submap_" + std::to_string(submap_count++) + ".pcd";
     // submaps_.front()->SaveSubmapCloud(folder, filename);
     // submaps_.front()->grid()->DrawAsImage(folder, filename);

@@ -72,7 +72,7 @@ def generate_launch_description():
             '-collect_metrics', 'false'
         ],
         remappings=[
-            ('scan', 'scan'),
+            ('scan', 'scan_1'),
             ('imu', 'imu_raw_data'),
             ('odom', 'feedback/odom')
         ]
