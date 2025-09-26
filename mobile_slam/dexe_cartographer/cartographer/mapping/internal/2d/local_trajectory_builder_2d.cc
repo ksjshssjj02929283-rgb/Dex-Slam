@@ -18,6 +18,9 @@
 
 #include <limits>
 #include <memory>
+#include <thread>
+#include <future>
+#include <vector>
 
 #include "pcl/common/transforms.h"
 #include "pcl/io/pcd_io.h"
@@ -245,14 +248,44 @@ LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
   // 存储处理后的传感器数据
   std::vector<ProcessedSensorData> processed_sensors;
   
-  // 对每个雷达数据进行单独的预处理和特征检测
-  for (const auto& sensor_pair : synchronized_data.laser_data_map) {
-    const std::string& sensor_id = sensor_pair.first;
-    const sensor::TimedPointCloudData& laser_data = sensor_pair.second;    
-    // 处理单个传感器数据
-    auto processed_data = ProcessSingleSensorData(sensor_id, laser_data, sync_time);
-    if (processed_data.has_value()) {
-      processed_sensors.push_back(processed_data.value());
+  // 使用多线程并行处理每个雷达数据
+  const size_t num_sensors = synchronized_data.laser_data_map.size();
+  LOG(INFO) << "Processing " << num_sensors << " sensors using C++ standard library multithreading";
+  
+  if (num_sensors == 1) {
+    // 单个传感器时直接处理，避免线程开销
+    for (const auto& sensor_pair : synchronized_data.laser_data_map) {
+      const std::string& sensor_id = sensor_pair.first;
+      const sensor::TimedPointCloudData& laser_data = sensor_pair.second;    
+      auto processed_data = ProcessSingleSensorData(sensor_id, laser_data, sync_time);
+      if (processed_data.has_value()) {
+        processed_sensors.push_back(processed_data.value());
+      }
+    }
+  } else {
+    // 多传感器时使用C++标准库多线程并行处理
+    std::vector<std::future<absl::optional<ProcessedSensorData>>> futures;
+    futures.reserve(num_sensors);
+    
+    // 为每个传感器启动异步任务
+    for (const auto& sensor_pair : synchronized_data.laser_data_map) {
+      const std::string& sensor_id = sensor_pair.first;
+      const sensor::TimedPointCloudData& laser_data = sensor_pair.second;
+      
+      // 使用std::async启动异步任务
+      auto future = std::async(std::launch::async, [this, sensor_id, laser_data, sync_time]() {
+        return ProcessSingleSensorData(sensor_id, laser_data, sync_time);
+      });
+      
+      futures.push_back(std::move(future));
+    }
+    
+    // 等待所有任务完成并收集结果
+    for (auto& future : futures) {
+      auto processed_data = future.get();  // 等待任务完成
+      if (processed_data.has_value()) {
+        processed_sensors.push_back(processed_data.value());
+      }
     }
   }
   
