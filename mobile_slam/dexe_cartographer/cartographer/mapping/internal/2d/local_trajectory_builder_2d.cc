@@ -70,9 +70,12 @@ LocalTrajectoryBuilder2D::LocalTrajectoryBuilder2D(
         options_.data_preprocessor_options());
   }
 
-  laser_perception_ =
-      std::make_unique<laser_perception::LaserPerception>(
-          options_.laser_perception_options());
+  // 根据expected_range_sensor_ids预先创建所有激光感知器
+  for (const std::string& sensor_id : expected_range_sensor_ids) {
+    LOG(INFO) << "Pre-creating laser perception for expected sensor: " << sensor_id;
+    laser_perceptions_[sensor_id] = std::make_unique<laser_perception::LaserPerception>(
+        options_.laser_perception_options());
+  }
 
   line_matcher_ =
       std::make_unique<scan_matching::LineMatcher2D>(
@@ -110,11 +113,16 @@ LocalTrajectoryBuilder2D::FilterRangeData(
  * @param time 时间
  * @param pose_prediction 预测的位姿 
  * @param filtered_gravity_aligned_point_cloud 重力对齐的激光点云
+ * @param highlight_point_cloud 高亮点云
+ * @param line_data 线数据
+ * @param tracked_lane_data 跟踪的车道线数据
+ * @param cov 协方差矩阵
  * @return std::unique_ptr<transform::Rigid2d> 位姿估计结果
  */
 std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
     const common::Time time, const transform::Rigid2d& pose_prediction,
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
     Eigen::Matrix3d & cov)
@@ -155,7 +163,7 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
   ceres::Solver::Summary summary;
   ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
                             filtered_gravity_aligned_point_cloud,
-                            *laser_perception_->getHighlightCloud(),
+                            highlight_point_cloud,
                             tracked_lane_data,
                             *matching_submap->grid(), *matching_submap->line_map_2d_list(),
                             *matching_submap->cloud_ikdtree(),
@@ -192,13 +200,6 @@ std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
 LocalTrajectoryBuilder2D::AddRangeData(
     const std::string& sensor_id,
     const sensor::TimedPointCloudData& unsynchronized_data) {
-  if (!is_sensor_to_tracking_set_) {
-    sensor_to_tracking_ = unsynchronized_data.sensor_to_tracking;
-    is_sensor_to_tracking_set_ = true;
-  }
-  
-  std::cout << "sensor_id: " << sensor_id << std::endl;
-  
   // 1. 将激光雷达数据添加到同步器
   if (!laser_synchronizer_.AddLaserData(sensor_id, unsynchronized_data)) {
     LOG(ERROR) << "Failed to add laser data for sensor: " << sensor_id;
@@ -217,58 +218,126 @@ LocalTrajectoryBuilder2D::AddRangeData(
 }
 
 /**
- * @brief 对积累的激光数据进行位姿估计
+ * @brief 处理同步后的激光数据
  * 
- * @param sensor_id 传感器ID
- * @param time 
- * @param gravity_aligned_range_data 
- * @param gravity_alignment 
- * @param sensor_duration 
+ * @param synchronized_data 同步后的激光数据
+ * @return std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult> 处理结果
+ */
+std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
+LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
+    const LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
+  
+  const common::Time& sync_time = synchronized_data.sync_time;
+  
+  // 从里程计缓冲区获取同步时间对应的里程计数据
+  auto odom_at_sync_time = GetOdometryAtTime(sync_time);
+  if (!odom_at_sync_time.has_value()) {
+    LOG(WARNING) << "No odometry data available for sync time: " << sync_time;
+    return nullptr;
+  }
+  
+  // 关键帧策略检查 - 移到同步数据处理之前
+  if (keyframe_motion_filter_.IsSimilar(sync_time, odom_at_sync_time->pose)) {
+    LOG(INFO) << "Skipping frame due to keyframe motion filter at time: " << sync_time;
+    return nullptr;
+  }
+  
+  // 存储处理后的传感器数据
+  std::vector<ProcessedSensorData> processed_sensors;
+  
+  // 对每个雷达数据进行单独的预处理和特征检测
+  for (const auto& sensor_pair : synchronized_data.laser_data_map) {
+    const std::string& sensor_id = sensor_pair.first;
+    const sensor::TimedPointCloudData& laser_data = sensor_pair.second;    
+    // 处理单个传感器数据
+    auto processed_data = ProcessSingleSensorData(sensor_id, laser_data, sync_time);
+    if (processed_data.has_value()) {
+      processed_sensors.push_back(processed_data.value());
+    }
+  }
+  
+  if (processed_sensors.empty()) {
+    LOG(WARNING) << "No valid sensor data processed";
+    return nullptr;
+  }
+  
+  // 使用GetMergedData方法获取融合后的数据
+  MergedData merged_data = GetMergedData(processed_sensors);
+  
+  if (merged_data.IsEmpty()) {
+    LOG(WARNING) << "Merged data is empty";
+    return nullptr;
+  }
+  
+  // 更新传感器时间信息
+  const common::Time current_sensor_time = sync_time;
+  absl::optional<common::Duration> sensor_duration;
+  if (last_sensor_time_.has_value()) {
+    sensor_duration = current_sensor_time - last_sensor_time_.value();
+  }
+  last_sensor_time_ = current_sensor_time;
+  
+  // 使用融合后的数据调用 AddAccumulatedRangeData
+  return AddAccumulatedRangeData(
+      "merged_sensors",  // 使用一个标识来表示这是合并的传感器数据
+      current_sensor_time,
+      merged_data,
+      transform::Rigid3d::Identity(), 
+      sensor_duration);
+}
+
+
+/**
+ * @brief 使用MergedData进行位姿估计的重载版本
+ * 
+ * @param sensor_id 传感器ID标识符
+ * @param time 时间戳
+ * @param merged_data 融合后的传感器数据
+ * @param gravity_alignment 重力对齐变换
+ * @param sensor_duration 传感器持续时间
  * @return std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult> 
  */
 std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
 LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
     const std::string& sensor_id,
-    const common::Time time,
-    const sensor::RangeData& gravity_aligned_range_data,
-    const std::vector<sensor::LineData> & line_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data,
+    const common::Time& time,
+    const MergedData& merged_data,
     const transform::Rigid3d& gravity_alignment,
-    const absl::optional<common::Duration>& sensor_duration,
-    const std::vector<SensorRawData>& sensor_raw_data_list) {
-  if (gravity_aligned_range_data.returns.empty()) {
-    LOG(WARNING) << "Dropped empty horizontal range data.";
+    const absl::optional<common::Duration>& sensor_duration) {
+  
+  if (merged_data.merged_range_data.returns.empty()) {
+    LOG(WARNING) << "Dropped empty merged range data.";
     return nullptr;
   }
-  std::cout << "sensor_id: " << sensor_id << std::endl;
+
   // 根据激光雷达时间戳从里程计缓冲区获取delta pose
   const transform::Rigid3d odom_delta_pose = GetOdomDeltaPose(time);
 
   const transform::Rigid2d pose_prediction = transform::Project2D(
     local_pose_ * odom_delta_pose);
-  // 3. 对积累的激光数据进行滤波
-  const sensor::PointCloud& filtered_gravity_aligned_point_cloud =
-      sensor::AdaptiveVoxelFilter(gravity_aligned_range_data.returns,
-                                  options_.adaptive_voxel_filter_options());
+  
+  // 对积累的激光数据进行滤波
+  const sensor::PointCloud& filtered_gravity_aligned_point_cloud = merged_data.merged_filtered_cloud;
   if (filtered_gravity_aligned_point_cloud.empty()) {
     return nullptr;
   }
 
-  // 4. ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
-  // local map frame <- gravity-aligned frame
+  // ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
   Eigen::Matrix3d loc_cov;
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
       ScanMatch(time, pose_prediction,
                 filtered_gravity_aligned_point_cloud,
-                line_data,
+                merged_data.merged_highlight_cloud,
+                merged_data.merged_line_data,
                 tracked_lane_data,
                 loc_cov);
-  // std::cout << "tracked_lane_data: " << tracked_lane_data.size() << std::endl;
+  
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
+  
   const transform::Rigid3d pose_estimate =
       transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
   local_pose_ = pose_estimate;
@@ -277,10 +346,10 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
   UpdateLastOdomForDelta(time);
 
   sensor::RangeData range_data_in_local =
-      TransformRangeData(gravity_aligned_range_data,
+      TransformRangeData(merged_data.merged_range_data,
                          transform::Embed3D(pose_estimate_2d->cast<float>()));
-  // 6. 将当前帧的激光数据，按照估计的位姿插入到submap中
 
+  // 将线数据转换到local坐标系
   std::map<int, std::vector<sensor::LineData>> lines_in_local;
   for (const auto& data_vec: tracked_lane_data) {
     for (const auto& line: data_vec.second) {
@@ -289,28 +358,19 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
   }
 
   // 保存原始去畸变数据（用于TrajectoryNode）
-  std::vector<sensor::RangeData> original_undistorted_range_datas;
-  for (const auto& raw_data : sensor_raw_data_list) {
-    original_undistorted_range_datas.push_back(raw_data.range_data_in_local);
-  }
+  std::vector<sensor::RangeData> original_undistorted_range_datas = merged_data.original_undistorted_range_datas;
 
-  // 将传感器原始数据转换到local坐标系
-  std::vector<SensorRawData> sensor_raw_data_in_local = sensor_raw_data_list;
-  for (auto& raw_data : sensor_raw_data_in_local) {
-    raw_data.range_data_in_local = TransformRangeData(raw_data.range_data_in_local,
-                                                      transform::Embed3D(pose_estimate_2d->cast<float>()));
-  }
-
+  // 使用merged_data中的less_flat_cloud和highlight_cloud
   std::unique_ptr<InsertionResult>
     insertion_result = InsertIntoSubmap(
       time, range_data_in_local,
-      *laser_perception_->getLessFlatCloud(),
-      *laser_perception_->getHighlightCloud(),
+      merged_data.merged_less_flat_cloud,
+      merged_data.merged_highlight_cloud,
       pose_estimate, gravity_alignment.rotation(),
-      lines_in_local, tracked_lane_data, reflector_data, sensor_raw_data_in_local,
+      lines_in_local, tracked_lane_data, merged_data.merged_reflector_data, 
       original_undistorted_range_datas);
 
-  // 7. 计算local slam的频率
+  // 计算local slam的频率
   const auto wall_time = std::chrono::steady_clock::now();
   if (last_wall_time_.has_value()) {
     const auto wall_time_duration = wall_time - last_wall_time_.value();
@@ -333,8 +393,8 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
   }
   last_wall_time_ = wall_time;
   last_thread_cpu_time_seconds_ = thread_cpu_time_seconds;
-  // 8. 返回匹配结果
-
+  
+  // 返回匹配结果
   std::vector<transform::Rigid2d> particle_poses;
   return absl::make_unique<MatchingResult>(
       MatchingResult{time, pose_estimate,
@@ -342,132 +402,6 @@ LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
                      std::move(range_data_in_local),
                      std::move(lines_in_local),
                      std::move(insertion_result)});
-}
-
-/**
- * @brief 处理同步后的激光数据
- * 
- * @param synchronized_data 同步后的激光数据
- * @return std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult> 处理结果
- */
-std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
-LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
-    const LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
-  
-  const common::Time& sync_time = synchronized_data.sync_time;
-  std::cout << "Processing synchronized data at time: " << sync_time << std::endl;
-  
-  // 从里程计缓冲区获取同步时间对应的里程计数据
-  auto odom_at_sync_time = GetOdometryAtTime(sync_time);
-  if (!odom_at_sync_time.has_value()) {
-    LOG(WARNING) << "No odometry data available for sync time: " << sync_time;
-    return nullptr;
-  }
-  
-  // 关键帧策略检查 - 移到同步数据处理之前
-  if (keyframe_motion_filter_.IsSimilar(sync_time, odom_at_sync_time->pose)) {
-    std::cout << "Skipping frame due to keyframe motion filter at time: " << sync_time << std::endl;
-    return nullptr;
-  }
-  
-  // 存储处理后的传感器数据
-  std::vector<ProcessedSensorData> processed_sensors;
-  
-  // 对每个雷达数据进行单独的预处理和特征检测
-  for (const auto& sensor_pair : synchronized_data.laser_data_map) {
-    const std::string& sensor_id = sensor_pair.first;
-    const sensor::TimedPointCloudData& laser_data = sensor_pair.second;
-    
-    std::cout << "Processing sensor: " << sensor_id << std::endl;
-    
-    // 处理单个传感器数据
-    auto processed_data = ProcessSingleSensorData(sensor_id, laser_data, sync_time);
-    if (processed_data.has_value()) {
-      processed_sensors.push_back(processed_data.value());
-    }
-  }
-  
-  if (processed_sensors.empty()) {
-    LOG(WARNING) << "No valid sensor data processed";
-    return nullptr;
-  }
-  
-  // 合并所有传感器的点云数据
-  sensor::RangeData merged_range_data;
-  sensor::PointCloud merged_filtered_cloud;
-  sensor::PointCloud merged_highlight_cloud;
-  std::vector<sensor::LineData> merged_line_data;
-  std::vector<sensor::LandmarkPointData> merged_reflector_data;
-  std::vector<SensorRawData> sensor_raw_data_list;
-  
-  // 初始化合并的range data origin为第一个传感器的origin
-  if (!processed_sensors.empty()) {
-    merged_range_data.origin = processed_sensors[0].undistorted_range_data.origin;
-  }
-  
-  for (const auto& sensor_data : processed_sensors) {
-    // 合并点云数据
-    const auto& range_data = sensor_data.undistorted_range_data;
-    
-    // 合并returns点云
-    for (const auto& point : range_data.returns) {
-      merged_range_data.returns.push_back(point);
-    }
-    
-    // 合并misses点云
-    for (const auto& point : range_data.misses) {
-      merged_range_data.misses.push_back(point);
-    }
-    
-    // 合并滤波后的点云
-    for (const auto& point : sensor_data.filtered_gravity_aligned_point_cloud) {
-      merged_filtered_cloud.push_back(point);
-    }
-    
-    // 合并highlight点云
-    for (const auto& point : sensor_data.highlight_point_cloud) {
-      merged_highlight_cloud.push_back(point);
-    }
-    
-    // 合并特征数据
-    merged_line_data.insert(merged_line_data.end(),
-                           sensor_data.feature_data.line_data.begin(),
-                           sensor_data.feature_data.line_data.end());
-    merged_reflector_data.insert(merged_reflector_data.end(),
-                                sensor_data.feature_data.reflector_data.begin(),
-                                sensor_data.feature_data.reflector_data.end());
-    
-    // 保存每个传感器的原始数据，用于后续插入
-    SensorRawData raw_data;
-    raw_data.sensor_id = sensor_data.sensor_id;
-    raw_data.range_data_in_local = range_data;  // 这里暂时用undistorted数据，后面会在local坐标系中更新
-    raw_data.filtered_gravity_aligned_point_cloud = sensor_data.filtered_gravity_aligned_point_cloud;
-    raw_data.highlight_point_cloud = sensor_data.highlight_point_cloud;
-    sensor_raw_data_list.push_back(raw_data);
-  }
-  
-  std::cout << "Merged data - points: " << merged_range_data.returns.size()
-            << ", lines: " << merged_line_data.size()
-            << ", reflectors: " << merged_reflector_data.size() << std::endl;
-  
-  // 更新传感器时间信息
-  const common::Time current_sensor_time = sync_time;
-  absl::optional<common::Duration> sensor_duration;
-  if (last_sensor_time_.has_value()) {
-    sensor_duration = current_sensor_time - last_sensor_time_.value();
-  }
-  last_sensor_time_ = current_sensor_time;
-  
-  // 使用合并后的数据调用 AddAccumulatedRangeData
-  return AddAccumulatedRangeData(
-      "merged_sensors",  // 使用一个标识来表示这是合并的传感器数据
-      current_sensor_time,
-      FilterRangeData(merged_range_data),
-      merged_line_data,
-      merged_reflector_data,
-      transform::Rigid3d::Identity(), 
-      sensor_duration,
-      sensor_raw_data_list);
 }
 
 /**
@@ -484,10 +418,16 @@ LocalTrajectoryBuilder2D::ProcessSingleSensorData(
     const sensor::TimedPointCloudData& laser_data,
     const common::Time& sync_time) {
   
-  // 获取对应的数据预处理器
+  // 获取对应的数据预处理器和激光感知器
   auto* data_preprocessor = GetDataPreprocessor(sensor_id);
   if (!data_preprocessor) {
     LOG(ERROR) << "Cannot process data for unknown sensor: " << sensor_id;
+    return absl::nullopt;
+  }
+
+  auto* laser_perception = GetLaserPerception(sensor_id);
+  if (!laser_perception) {
+    LOG(ERROR) << "Cannot get laser perception for unknown sensor: " << sensor_id;
     return absl::nullopt;
   }
   
@@ -497,11 +437,14 @@ LocalTrajectoryBuilder2D::ProcessSingleSensorData(
   sync_laser_data.origins.push_back(laser_data.origin);
   sync_laser_data.sensor_to_trackings.push_back(laser_data.sensor_to_tracking);
   
-  // 转换点云数据格式
-  for (const auto& point : laser_data.ranges) {
+  assert(laser_data.ranges.size() == laser_data.intensities.size() || 
+         laser_data.intensities.empty());
+
+  // 转换点云数据格式，并保留强度信息
+  for (size_t i = 0; i < laser_data.ranges.size(); ++i) {
     sensor::TimedPointCloudOriginData::RangeMeasurement range_measurement;
-    range_measurement.point_time = point;
-    range_measurement.intensity = 0.0f;  // 默认强度
+    range_measurement.point_time = laser_data.ranges[i];
+    range_measurement.intensity = laser_data.intensities[i];
     range_measurement.origin_index = 0;
     sync_laser_data.ranges.push_back(range_measurement);
   }
@@ -526,18 +469,11 @@ LocalTrajectoryBuilder2D::ProcessSingleSensorData(
   cloud.intensities = undistort_range->data.returns.intensities();
   sync_point_cloud.sync_point_clouds.push_back(cloud);
   
-  std::cout << "Sensor " << sensor_id 
-            << " undistorted points: " << undistort_range->data.returns.points().size() << std::endl;
-  
   // 单独进行特征检测
   std::vector<laser_perception::FeatureMsgWithOrigin> feature_data_origin = 
-      laser_perception_->laserUpdate(sync_point_cloud);
+      laser_perception->laserUpdate(sync_point_cloud);
   auto feature_data = GetFeatureData(sync_time, feature_data_origin);
-  
-  std::cout << "Sensor " << sensor_id 
-            << " - lines: " << feature_data.line_data.size()
-            << ", reflectors: " << feature_data.reflector_data.size() << std::endl;
-  
+
   // 对点云进行滤波
   const sensor::PointCloud& filtered_gravity_aligned_point_cloud =
       sensor::AdaptiveVoxelFilter(undistort_range->data.returns,
@@ -549,7 +485,7 @@ LocalTrajectoryBuilder2D::ProcessSingleSensorData(
   processed_data.undistorted_range_data = undistort_range->data;
   processed_data.feature_data = feature_data;
   processed_data.filtered_gravity_aligned_point_cloud = filtered_gravity_aligned_point_cloud;
-  processed_data.highlight_point_cloud = *laser_perception_->getHighlightCloud();
+  processed_data.highlight_point_cloud = *laser_perception->getHighlightCloud();
   
   return processed_data;
 }
@@ -579,13 +515,110 @@ sensor::FeatureData LocalTrajectoryBuilder2D::GetFeatureData(
 }
 
 /**
+ * @brief 获取融合后的数据
+ * 
+ * @param processed_sensors 处理后的传感器数据列表
+ * @return MergedData 融合后的数据结构
+ */
+LocalTrajectoryBuilder2D::MergedData 
+LocalTrajectoryBuilder2D::GetMergedData(const std::vector<ProcessedSensorData>& processed_sensors) const {
+  MergedData merged_data;
+  
+  if (processed_sensors.empty()) {
+    LOG(WARNING) << "No processed sensor data to merge";
+    return merged_data;
+  }
+  
+  // std::cout << "Merging data from " << processed_sensors.size() << " sensors" << std::endl;
+  
+  // 初始化合并的range data origin为第一个传感器的origin
+  merged_data.merged_range_data.origin = processed_sensors[0].undistorted_range_data.origin;
+  
+  // 遍历所有传感器数据进行融合
+  for (const auto& sensor_data : processed_sensors) {
+    const auto& range_data = sensor_data.undistorted_range_data;
+    
+    // std::cout << "Processing sensor: " << sensor_data.sensor_id 
+    //           << " with " << range_data.returns.size() << " points" << std::endl;
+    
+    // 合并returns点云
+    for (const auto& point : range_data.returns) {
+      merged_data.merged_range_data.returns.push_back(point);
+    }
+    
+    // 合并misses点云
+    for (const auto& point : range_data.misses) {
+      merged_data.merged_range_data.misses.push_back(point);
+    }
+    
+    // 合并滤波后的点云
+    for (const auto& point : sensor_data.filtered_gravity_aligned_point_cloud) {
+      merged_data.merged_filtered_cloud.push_back(point);
+    }
+    
+    // 合并highlight点云
+    for (const auto& point : sensor_data.highlight_point_cloud) {
+      merged_data.merged_highlight_cloud.push_back(point);
+    }
+    
+    // 合并特征数据
+    merged_data.merged_line_data.insert(merged_data.merged_line_data.end(),
+                                       sensor_data.feature_data.line_data.begin(),
+                                       sensor_data.feature_data.line_data.end());
+    merged_data.merged_reflector_data.insert(merged_data.merged_reflector_data.end(),
+                                            sensor_data.feature_data.reflector_data.begin(),
+                                            sensor_data.feature_data.reflector_data.end());
+    
+    // 保存原始去畸变数据
+    merged_data.original_undistorted_range_datas.push_back(range_data);
+  }
+  
+  // 特征检测完成后，获取每个传感器的LessFlatCloud和HighlightCloud
+  for (const auto& sensor_data : processed_sensors) {
+    auto* laser_perception = GetLaserPerception(sensor_data.sensor_id);
+    if (laser_perception != nullptr) {
+      // 获取该传感器的LessFlatCloud
+      for (const auto& point : *laser_perception->getLessFlatCloud()) {
+        merged_data.merged_less_flat_cloud.push_back(point);
+      }
+      
+      // 获取该传感器的HighlightCloud（作为补充）
+      for (const auto& point : *laser_perception->getHighlightCloud()) {
+        merged_data.merged_highlight_cloud.push_back(point);
+      }
+    }
+  }
+  
+  // 对合并后的点云数据进行滤波处理
+  merged_data.merged_filtered_cloud = sensor::VoxelFilter(merged_data.merged_filtered_cloud, options_.voxel_filter_size());
+  merged_data.merged_highlight_cloud = sensor::VoxelFilter(merged_data.merged_highlight_cloud, options_.voxel_filter_size());
+  merged_data.merged_less_flat_cloud = sensor::VoxelFilter(merged_data.merged_less_flat_cloud, options_.voxel_filter_size());
+  
+  // std::cout << "Merged data summary (after filtering):" << std::endl;
+  // std::cout << "  - Total points: " << merged_data.merged_range_data.returns.size() << std::endl;
+  // std::cout << "  - Filtered cloud: " << merged_data.merged_filtered_cloud.size() << std::endl;
+  // std::cout << "  - Highlight cloud: " << merged_data.merged_highlight_cloud.size() << std::endl;
+  // std::cout << "  - Less flat cloud: " << merged_data.merged_less_flat_cloud.size() << std::endl;
+  // std::cout << "  - Lines: " << merged_data.merged_line_data.size() << std::endl;
+  // std::cout << "  - Reflectors: " << merged_data.merged_reflector_data.size() << std::endl;
+  // std::cout << "  - Original undistorted data: " << merged_data.original_undistorted_range_datas.size() << std::endl;
+  
+  return merged_data;
+}
+
+/**
  * @brief 将雷达数据插入到submap中
  * 
  * @param time 时间
  * @param range_data_in_local local系下的激光数据
  * @param filtered_gravity_aligned_point_cloud  重力对齐的激光点云
+ * @param highlight_point_cloud 高亮点云
  * @param pose_estimate 估计的位姿
  * @param gravity_alignment 重力对齐的旋转
+ * @param line_data_in_local local系下的线数据
+ * @param tracked_lane_data 跟踪的车道线数据
+ * @param reflector_data 反射器数据
+ * @param original_undistorted_range_datas 原始去畸变点云数据
  * @return std::unique_ptr<LocalTrajectoryBuilder2D::InsertionResult> 插入的结果
  */
 std::unique_ptr<LocalTrajectoryBuilder2D::InsertionResult>
@@ -598,7 +631,6 @@ LocalTrajectoryBuilder2D::InsertIntoSubmap(
     const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
     const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
     const std::vector<sensor::LandmarkPointData> & reflector_data,
-    const std::vector<SensorRawData>& sensor_raw_data_list,
     const std::vector<sensor::RangeData>& original_undistorted_range_datas)
 {
   // 1. 判断是否是关键帧
@@ -619,60 +651,27 @@ LocalTrajectoryBuilder2D::InsertIntoSubmap(
   std::vector<std::shared_ptr<const Submap2D>> insertion_submaps =
       active_submaps_.InsertRangeData(range_data_in_local);
 
+  // 插入合并后的云数据、线数据和反射器数据
   active_submaps_.InsertCloudData(cloud_in_local, highlight_cloud_in_local);
   active_submaps_.InsertLineData(line_data_in_local);
   active_submaps_.InsertReflectorData(reflector_data);
 
-  // 3. 分别插入每个传感器的原始数据到栅格地图
-  for (const auto& sensor_raw_data : sensor_raw_data_list) {
-    std::cout << "Inserting raw data for sensor: " << sensor_raw_data.sensor_id << std::endl;
-    
-    // 为每个传感器的原始数据单独插入到栅格地图
-    active_submaps_.InsertRangeData(sensor_raw_data.range_data_in_local);
-    
-    // 转换传感器点云到local坐标系并插入
-    sensor::PointCloud sensor_cloud_in_local =
-        sensor::TransformPointCloud(
-            sensor_raw_data.filtered_gravity_aligned_point_cloud,
-            pose_estimate.cast<float>());
-    
-    sensor::PointCloud sensor_highlight_cloud_in_local =
-        sensor::TransformPointCloud(
-            sensor_raw_data.highlight_point_cloud,
-            pose_estimate.cast<float>());
-    
-    active_submaps_.InsertCloudData(sensor_cloud_in_local, sensor_highlight_cloud_in_local);
+  // 3. 分别插入每个传感器的原始去畸变range data到栅格地图
+  for (const auto& original_range_data : original_undistorted_range_datas) {
+    // 将原始去畸变数据转换到local坐标系并插入到栅格地图
+    sensor::RangeData sensor_range_data_in_local = sensor::TransformRangeData(
+        original_range_data, pose_estimate.cast<float>());
+    active_submaps_.InsertRangeData(sensor_range_data_in_local);
   }
 
   // 3. 准备TrajectoryNode::Data所需的数据
   
-  // 合并所有传感器的滤波点云为单个点云
-  sensor::PointCloud merged_filtered_cloud;
-  for (const auto& sensor_raw_data : sensor_raw_data_list) {
-    for (const auto& point : sensor_raw_data.filtered_gravity_aligned_point_cloud) {
-      merged_filtered_cloud.push_back(point);
-    }
-  }
+  // 直接使用已经在GetMergedData中滤波过的点云数据
+  sensor::PointCloud merged_filtered_cloud = filtered_gravity_aligned_point_cloud;
+  sensor::PointCloud merged_highlight_cloud = highlight_point_cloud;
   
-  // 对合并后的滤波点云进行voxel filter降采样
-  merged_filtered_cloud = sensor::VoxelFilter(merged_filtered_cloud, options_.voxel_filter_size());
-  
-  // 合并所有传感器的highlight点云为单个点云
-  sensor::PointCloud merged_highlight_cloud;
-  for (const auto& sensor_raw_data : sensor_raw_data_list) {
-    for (const auto& point : sensor_raw_data.highlight_point_cloud) {
-      merged_highlight_cloud.push_back(point);
-    }
-  }
-  
-  // 对合并后的highlight点云进行voxel filter降采样
-  merged_highlight_cloud = sensor::VoxelFilter(merged_highlight_cloud, options_.voxel_filter_size());
-  
-  // 提取所有传感器的原始去畸变range data
-  std::vector<sensor::RangeData> all_sensors_range_datas;
-  for (const auto& original_range_data : original_undistorted_range_datas) {
-    all_sensors_range_datas.push_back(original_range_data);
-  }
+  // 直接使用传入的原始去畸变range data
+  std::vector<sensor::RangeData> all_sensors_range_datas = original_undistorted_range_datas;
 
   // 4. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{
@@ -746,6 +745,25 @@ preprocess::DataPreprocessor* LocalTrajectoryBuilder2D::GetDataPreprocessor(cons
   auto it = data_preprocessors_.find(sensor_id);
   if (it == data_preprocessors_.end()) {
     LOG(ERROR) << "No data preprocessor found for sensor: " << sensor_id 
+               << ". Expected sensors are: ";
+    for (const auto& expected_id : expected_range_sensor_ids_) {
+      LOG(ERROR) << "  - " << expected_id;
+    }
+    return nullptr;
+  }
+  return it->second.get();
+}
+
+/**
+ * @brief 获取指定sensor_id的激光感知器
+ * 
+ * @param sensor_id 传感器ID
+ * @return laser_perception::LaserPerception* 激光感知器指针，如果不存在则返回nullptr
+ */
+laser_perception::LaserPerception* LocalTrajectoryBuilder2D::GetLaserPerception(const std::string& sensor_id) const {
+  auto it = laser_perceptions_.find(sensor_id);
+  if (it == laser_perceptions_.end()) {
+    LOG(ERROR) << "No laser perception found for sensor: " << sensor_id 
                << ". Expected sensors are: ";
     for (const auto& expected_id : expected_range_sensor_ids_) {
       LOG(ERROR) << "  - " << expected_id;

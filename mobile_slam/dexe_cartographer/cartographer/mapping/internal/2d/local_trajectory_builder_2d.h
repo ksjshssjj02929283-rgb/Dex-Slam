@@ -69,11 +69,36 @@ class LocalTrajectoryBuilder2D {
     std::unique_ptr<const InsertionResult> insertion_result;    // 插入结果
   };
 
-  struct SensorRawData {
-    std::string sensor_id;
-    sensor::RangeData range_data_in_local;
-    sensor::PointCloud filtered_gravity_aligned_point_cloud;
-    sensor::PointCloud highlight_point_cloud;
+  struct MergedData {
+    sensor::RangeData merged_range_data;
+    sensor::PointCloud merged_filtered_cloud;
+    sensor::PointCloud merged_highlight_cloud;
+    sensor::PointCloud merged_less_flat_cloud;
+    std::vector<sensor::LineData> merged_line_data;
+    std::vector<sensor::LandmarkPointData> merged_reflector_data;
+    std::vector<sensor::RangeData> original_undistorted_range_datas;  // 原始去畸变后的点云数据
+    
+    MergedData() = default;
+    
+    void Clear() {
+      merged_range_data = sensor::RangeData{};
+      merged_filtered_cloud = sensor::PointCloud{};
+      merged_highlight_cloud = sensor::PointCloud{};
+      merged_less_flat_cloud = sensor::PointCloud{};
+      merged_line_data.clear();
+      merged_reflector_data.clear();
+      original_undistorted_range_datas.clear();
+    }
+    
+    bool IsEmpty() const {
+      return merged_range_data.returns.empty() && 
+             merged_filtered_cloud.empty() && 
+             merged_highlight_cloud.empty() &&
+             merged_less_flat_cloud.empty() &&
+             merged_line_data.empty() && 
+             merged_reflector_data.empty() && 
+             original_undistorted_range_datas.empty();
+    }
   };
 
   explicit LocalTrajectoryBuilder2D(
@@ -102,13 +127,11 @@ class LocalTrajectoryBuilder2D {
 
  private:
   std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
-	  const std::string& sensor_id,
-	  common::Time time, const sensor::RangeData& gravity_aligned_range_data,
-    const std::vector<sensor::LineData> & line_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data,
-	  const transform::Rigid3d& gravity_alignment,
-	  const absl::optional<common::Duration>& sensor_duration,
-    const std::vector<SensorRawData>& sensor_raw_data_list);
+    const std::string& sensor_id,
+    const common::Time& time,
+    const MergedData& merged_data,
+    const transform::Rigid3d& gravity_alignment,
+    const absl::optional<common::Duration>& sensor_duration);
 
   sensor::FeatureData GetFeatureData(
     const common::Time & time,
@@ -130,7 +153,6 @@ class LocalTrajectoryBuilder2D {
     const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
     const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
     const std::vector<sensor::LandmarkPointData> & reflector_data,
-    const std::vector<SensorRawData>& sensor_raw_data_list,
     const std::vector<sensor::RangeData>& original_undistorted_range_datas);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
@@ -138,6 +160,7 @@ class LocalTrajectoryBuilder2D {
   std::unique_ptr<transform::Rigid2d> ScanMatch(
     const common::Time time, const transform::Rigid2d& pose_prediction,
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data,
     Eigen::Matrix3d & cov);
@@ -148,6 +171,9 @@ class LocalTrajectoryBuilder2D {
 
   // 获取指定sensor_id的数据预处理器
   preprocess::DataPreprocessor* GetDataPreprocessor(const std::string& sensor_id);
+
+  // 获取指定sensor_id的激光感知器
+  laser_perception::LaserPerception* GetLaserPerception(const std::string& sensor_id) const;
 
   // 处理同步后的激光数据
   std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
@@ -166,6 +192,9 @@ class LocalTrajectoryBuilder2D {
       const std::string& sensor_id,
       const sensor::TimedPointCloudData& laser_data,
       const common::Time& sync_time);
+
+  // 获取融合后的数据
+  MergedData GetMergedData(const std::vector<ProcessedSensorData>& processed_sensors) const;
 
   // 里程计缓冲区管理方法
   void AddOdometryToBuffer(const sensor::OdometryData& odometry_data);
@@ -198,8 +227,6 @@ class LocalTrajectoryBuilder2D {
   // 多雷达数据预处理器管理，每个sensor_id对应一个预处理器
   const std::vector<std::string> expected_range_sensor_ids_;  // 预期的传感器ID列表
   std::map<std::string, std::unique_ptr<preprocess::DataPreprocessor>> data_preprocessors_;
-  bool is_sensor_to_tracking_set_ = false;
-  transform::Rigid3d sensor_to_tracking_ = transform::Rigid3d::Identity();
 
   transform::Rigid3d local_pose_ = transform::Rigid3d::Identity();
   transform::Rigid3d temp_pose_ = transform::Rigid3d::Identity();
@@ -212,7 +239,8 @@ class LocalTrajectoryBuilder2D {
   static constexpr size_t kMaxOdomBufferSize = 1000;  // 最大缓冲区大小
   static constexpr double kMaxOdomBufferDuration = 10.0;  // 最大缓冲时间(秒)
 
-  std::unique_ptr<laser_perception::LaserPerception> laser_perception_;
+  // 多个激光感知器，每个sensor_id对应一个LaserPerception实例
+  std::map<std::string, std::unique_ptr<laser_perception::LaserPerception>> laser_perceptions_;
 
   std::unique_ptr<scan_matching::LineMatcher2D> line_matcher_;
 };

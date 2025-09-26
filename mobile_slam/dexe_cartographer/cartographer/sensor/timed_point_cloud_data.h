@@ -45,7 +45,7 @@ struct TimedPointCloudOriginData {
   struct RangeMeasurement {
     TimedRangefinderPoint point_time;  // 该点的观测时间
     float intensity;  // 反射率
-    size_t origin_index;  // 原始索引
+    size_t origin_index;  // 该点对应的激光雷达原点索引
   };
   common::Time time;
   std::vector<Eigen::Vector3f> origins;  // 原点坐标
