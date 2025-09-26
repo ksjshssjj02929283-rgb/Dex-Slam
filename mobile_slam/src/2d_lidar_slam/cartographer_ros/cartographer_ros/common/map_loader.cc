@@ -243,7 +243,7 @@ bool MapLoader::LoadGridMap(
       num_y_cells).matrix());
   grid_map->mutable_known_cells_box()->extend(
     Eigen::Array2i(0, 0).matrix());
-  // grid_map->DrawAsImage("/home/ubt/data/", "loc_map.png");
+  // grid_map->DrawAsImage("/home/fengbro/dexforce/0_slam/data/", "loc_map.png");
   return true;
 }
 

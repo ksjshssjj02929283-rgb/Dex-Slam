@@ -112,14 +112,14 @@ void Run()
   node.FinishAllTrajectories();
   // 8. 结束的时候是否保存建图信息
   // if (1) {
-  //   node.SerializeState("/home/ubt/data/map.pbstream",
+  //   node.SerializeState("/home/fengbro/dexforce/0_slam/data/map.pbstream",
   //                       true /* include_unfinished_submaps */);
   //   // LOG(INFO) << "State saved to '" << FLAGS_save_state_filename << "'. \n";
   // }
 
   std::string map_filestream = FLAGS_map_folder + "/" + FLAGS_map_name + "/map";
 
-  // node.SaveMap("/home/ubt/data/map", 0.04);
+  // node.SaveMap("/home/fengbro/dexforce/0_slam/data/map", 0.04);
 }
 
 }  // namespace
