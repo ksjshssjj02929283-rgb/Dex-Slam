@@ -525,14 +525,18 @@ void Node::PublishLocalTrajectoryData() {
             carto::sensor::TransformTimedPointCloud(
                 local_map_cloud, trajectory_data.local_to_map.cast<float>())));
       }
+      // 获取local到map的变换矩阵
+      const Rigid3d& local_to_map = trajectory_data.local_to_map;
+      
       if (matched_feature_publisher_->get_subscription_count() > 0) {
         visualization_msgs::msg::MarkerArray local_line_msg;
         const auto& line_data = trajectory_data.local_slam_data->line_data_in_local;
+        
         for (const auto& line_element : line_data) {
           for (const auto& line : line_element.second) {
-            std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen;
-            line_eigen.first = line.begin();
-            line_eigen.second = line.end();
+            // 使用全局函数风格的坐标转换，与PointCloud保持一致
+            auto transformed_line = cartographer::sensor::TransformLineData(line, local_to_map);
+            std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen = {transformed_line.begin(), transformed_line.end()};
             local_line_msg.markers.push_back(CreateLineMsg(
                                               line_element.first,
                                               node_options_.map_frame,
@@ -542,13 +546,15 @@ void Node::PublishLocalTrajectoryData() {
         }
         matched_feature_publisher_->publish(local_line_msg);
       }
+      
       if (local_feature_map_publisher_->get_subscription_count() > 0) {
         visualization_msgs::msg::MarkerArray map_line_msg;
         const auto& line_map_2d_list = trajectory_data.local_slam_data->line_map_2d_list->GetLineMapData2DList();
+        
         for (const auto& line_map : line_map_2d_list) {
-          std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen;
-          line_eigen.first = line_map.second.line_data().begin();
-          line_eigen.second = line_map.second.line_data().end();
+          // 使用全局函数风格的坐标转换，与PointCloud保持一致
+          auto transformed_line = cartographer::sensor::TransformLineData(line_map.second.line_data(), local_to_map);
+          std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen = {transformed_line.begin(), transformed_line.end()};
           map_line_msg.markers.push_back(CreateLineMsg(
                                             line_map.first,
                                             node_options_.map_frame,
