@@ -168,6 +168,10 @@ public:
 };
 
 LineData TransformLineData(transform::Rigid2d origin, LineData data);
+
+// 3D变换全局函数，风格与PointCloud保持一致
+LineData TransformLineData(const LineData& line_data, const transform::Rigid3d& transform);
+
 /**
  * @struct LaneData 线数据结构（只负责数据的存储传输）
  */

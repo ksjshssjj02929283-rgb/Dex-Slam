@@ -23,6 +23,22 @@ LineData TransformLineData(transform::Rigid2d origin, LineData data)
   return LineData(origin * data.begin(), origin * data.end());
 }
 
+// 3D变换全局函数，风格与PointCloud保持一致
+LineData TransformLineData(const LineData& line_data, const transform::Rigid3d& transform)
+{
+  Eigen::Vector3d begin_3d(line_data.begin().x(), line_data.begin().y(), 0.0);
+  Eigen::Vector3d end_3d(line_data.end().x(), line_data.end().y(), 0.0);
+  
+  Eigen::Vector3d begin_transformed = transform * begin_3d;
+  Eigen::Vector3d end_transformed = transform * end_3d;
+  
+  return LineData(
+      Eigen::Vector2d(begin_transformed.x(), begin_transformed.y()),
+      Eigen::Vector2d(end_transformed.x(), end_transformed.y()),
+      line_data.weight()
+  );
+}
+
 proto::LineData ToProto(const LineData & lane_data)
 {
   proto::LineData proto;
