@@ -17,6 +17,7 @@
 #include "cartographer/mapping/internal/2d/local_trajectory_builder_options_2d.h"
 
 #include "cartographer/preprocess/data_preprocessor.h"
+#include "cartographer/preprocess/data_preprocessor_options.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/ceres_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
@@ -31,14 +32,8 @@ namespace mapping {
 proto::LocalTrajectoryBuilderOptions2D CreateLocalTrajectoryBuilderOptions2D(
   common::LuaParameterDictionary* const parameter_dictionary) {
   proto::LocalTrajectoryBuilderOptions2D options;
-  options.set_min_range(parameter_dictionary->GetDouble("min_range"));
-  options.set_max_range(parameter_dictionary->GetDouble("max_range"));
   options.set_min_z(parameter_dictionary->GetDouble("min_z"));
   options.set_max_z(parameter_dictionary->GetDouble("max_z"));
-  options.set_missing_data_ray_length(
-    parameter_dictionary->GetDouble("missing_data_ray_length"));
-  options.set_num_accumulated_range_data(
-    parameter_dictionary->GetInt("num_accumulated_range_data"));
   options.set_voxel_filter_size(
     parameter_dictionary->GetDouble("voxel_filter_size"));
   options.set_use_online_correlative_scan_matching(
@@ -46,9 +41,6 @@ proto::LocalTrajectoryBuilderOptions2D CreateLocalTrajectoryBuilderOptions2D(
   *options.mutable_data_preprocessor_options() =
     preprocess::CreateDataPreprocessorOptions(
       parameter_dictionary->GetDictionary("data_preprocessor").get());
-  *options.mutable_adaptive_voxel_filter_options() =
-    sensor::CreateAdaptiveVoxelFilterOptions(
-      parameter_dictionary->GetDictionary("adaptive_voxel_filter").get());
   *options.mutable_loop_closure_adaptive_voxel_filter_options() =
     sensor::CreateAdaptiveVoxelFilterOptions(
       parameter_dictionary

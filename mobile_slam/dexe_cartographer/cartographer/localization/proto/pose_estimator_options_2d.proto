@@ -41,10 +41,6 @@ message PoseEstimatorOptions2D {
   // Points beyond 'max_range' will be inserted with this length as empty space.
   float missing_data_ray_length = 16;
 
-  // Number of range data to accumulate into one unwarped, combined range data
-  // to use for scan matching.
-  int32 num_accumulated_range_data = 19;
-
   // Voxel filter that gets applied to the range data immediately after
   // cropping.
   float voxel_filter_size = 3;

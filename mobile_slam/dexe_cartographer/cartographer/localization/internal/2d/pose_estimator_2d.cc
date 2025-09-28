@@ -369,7 +369,7 @@ PoseEstimator2D::AddRangeData(
   // 2. 不使用IMU，则在AddRangeData中初始化位姿插值器
 
   // 每一帧都要去畸变
-  data_preprocessor_->AddSyncedPointCloud(synchronized_data); // 雷达去畸变
+  data_preprocessor_->UndistortPointCloud(synchronized_data); // 雷达去畸变
   auto undistort_range = data_preprocessor_->GetProcessedRangeData();
   if (!undistort_range.has_value()) {
     return nullptr;

@@ -16,11 +16,14 @@ syntax = "proto3";
 
 package cartographer.preprocess.proto;
 
+import "cartographer/sensor/proto/adaptive_voxel_filter_options.proto";
+import "cartographer/laser_perception/proto/laser_perception_options.proto";
+
 message DataPreprocessorOptions {
   // Rangefinder points outside these ranges will be dropped.
   float min_range = 1;
   float max_range = 2;
-
+  
   // Points beyond 'max_range' will be inserted with this length as empty space.
   float missing_data_ray_length = 3;
 
@@ -28,8 +31,16 @@ message DataPreprocessorOptions {
   bool use_deskew = 4;
   bool use_odometry = 5;
 
-  // Number of range data to accumulate into one unwarped, combined range data
-  // to use for scan matching.
-  int32 num_accumulated_range_data = 6;
+  // 体素滤波器大小
+  float voxel_filter_size = 7;
 
+  // 是否启用特征检测
+  bool enable_feature_detection = 8;
+
+  // 是否启用多传感器融合
+  bool enable_multi_sensor_fusion = 9;
+
+  cartographer.sensor.proto.AdaptiveVoxelFilterOptions adaptive_voxel_filter_options = 10;
+
+  cartographer.laser_perception.proto.LaserPerceptionOptions laser_perception_options = 11;
 }

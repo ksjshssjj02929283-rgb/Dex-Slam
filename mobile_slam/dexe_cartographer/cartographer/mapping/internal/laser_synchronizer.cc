@@ -104,8 +104,8 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
       if (time_diff <= max_time_diff_seconds_) {
         result.laser_data_map[sensor_id] = *closest_data;
       } else {
-        LOG(WARNING) << "Time difference too large for sensor " << sensor_id 
-                     << ": " << time_diff << " seconds";
+        // LOG(WARNING) << "Time difference too large for sensor " << sensor_id 
+        //              << ": " << time_diff << " seconds";
         all_sensors_have_data = false;
         break;
       }
@@ -117,11 +117,17 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
   }
 
   result.is_valid = all_sensors_have_data;
-  
-  if (result.is_valid) {
-    LOG(INFO) << "Successfully synchronized " << expected_sensor_ids_.size() 
-              << " laser sensors at time: " << sync_time;
-  }
+  // // 打印每个有效激光数据的时间戳
+  // if (result.is_valid) {
+  //   for (const auto& pair : result.laser_data_map) {
+  //     LOG(INFO) << "Sensor: " << pair.first << ", Data time: " << common::ToUniversal(pair.second.time);
+  //   }
+  // }
+
+  // if (result.is_valid) {
+  //   LOG(INFO) << "Successfully synchronized " << expected_sensor_ids_.size() 
+  //             << " laser sensors at time: " << sync_time;
+  // }
 
   return result;
 }

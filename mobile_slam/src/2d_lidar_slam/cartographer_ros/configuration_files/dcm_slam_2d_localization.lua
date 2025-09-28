@@ -54,11 +54,26 @@ TRAJECTORY_BUILDER.pure_localization_trimmer = {
 
 MAP_BUILDER.use_trajectory_builder_2d = true
 
-TRAJECTORY_BUILDER_2D.data_preprocessor.num_accumulated_range_data = 1
 TRAJECTORY_BUILDER_2D.data_preprocessor.min_range = 0.2
 TRAJECTORY_BUILDER_2D.data_preprocessor.max_range = 15.
 TRAJECTORY_BUILDER_2D.data_preprocessor.missing_data_ray_length = 5.
 TRAJECTORY_BUILDER_2D.data_preprocessor.use_deskew = true;
+TRAJECTORY_BUILDER_2D.data_preprocessor.enable_feature_detection = true
+
+-- 自适应体素滤波选项
+TRAJECTORY_BUILDER_2D.data_preprocessor.adaptive_voxel_filter.max_length = 0.5
+TRAJECTORY_BUILDER_2D.data_preprocessor.adaptive_voxel_filter.min_num_points = 200
+TRAJECTORY_BUILDER_2D.data_preprocessor.adaptive_voxel_filter.max_range = 15.
+
+-- 激光感知选项
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.predict_rec = false
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.reflect_rec = false
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.shape_rec = false
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.line_rec = false
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.angle_rec = false
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.intensity_threshold = 30
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.connect_threshold = 0.05
+TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.min_cluster_points = 5
 TRAJECTORY_BUILDER_2D.use_imu_data = false
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 
