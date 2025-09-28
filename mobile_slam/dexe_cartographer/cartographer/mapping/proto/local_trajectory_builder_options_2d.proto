@@ -29,18 +29,8 @@ import "cartographer/laser_perception/proto/laser_perception_options.proto";
 message LocalTrajectoryBuilderOptions2D {
   cartographer.preprocess.proto.DataPreprocessorOptions
       data_preprocessor_options = 24;
-  // Rangefinder points outside these ranges will be dropped.
-  float min_range = 14;
-  float max_range = 15;
   float min_z = 1;
   float max_z = 2;
-
-  // Points beyond 'max_range' will be inserted with this length as empty space.
-  float missing_data_ray_length = 16;
-
-  // Number of range data to accumulate into one unwarped, combined range data
-  // to use for scan matching.
-  int32 num_accumulated_range_data = 19;
 
   // Voxel filter that gets applied to the range data immediately after
   // cropping.

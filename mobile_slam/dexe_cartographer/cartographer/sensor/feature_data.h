@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef CARTOGRAPHER__SENSOR__FEATURE_DATAsrc
+#ifndef CARTOGRAPHER__SENSOR__FEATURE_DATA_H_
 #define CARTOGRAPHER__SENSOR__FEATURE_DATA_H_
 #include <mutex>
 #include <vector>

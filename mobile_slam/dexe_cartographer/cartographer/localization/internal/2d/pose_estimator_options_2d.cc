@@ -17,6 +17,7 @@
 #include "cartographer/localization/internal/2d/pose_estimator_options_2d.h"
 
 #include "cartographer/preprocess/data_preprocessor.h"
+#include "cartographer/preprocess/data_preprocessor_options.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/ceres_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
@@ -40,8 +41,6 @@ proto::PoseEstimatorOptions2D CreatePoseEstimatorOptions2D(
   options.set_max_z(parameter_dictionary->GetDouble("max_z"));
   options.set_missing_data_ray_length(
     parameter_dictionary->GetDouble("missing_data_ray_length"));
-  options.set_num_accumulated_range_data(
-    parameter_dictionary->GetInt("num_accumulated_range_data"));
   options.set_voxel_filter_size(
     parameter_dictionary->GetDouble("voxel_filter_size"));
   options.set_use_online_correlative_scan_matching(

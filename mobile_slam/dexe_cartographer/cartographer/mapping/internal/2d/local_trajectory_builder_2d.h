@@ -43,6 +43,21 @@
 #include "cartographer/preprocess/data_preprocessor.h"
 #include "cartographer/laser_perception/data_type.h"
 #include "cartographer/laser_perception/laser_perception.h"
+#include "cartographer/mapping/internal/laser_synchronizer.h"
+#include "cartographer/mapping/pose_extrapolator.h"
+#include "cartographer/mapping/proto/local_trajectory_builder_options_2d.pb.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
+#include "cartographer/metrics/family_factory.h"
+#include "cartographer/sensor/imu_data.h"
+#include "cartographer/sensor/internal/voxel_filter.h"
+#include "cartographer/sensor/odometry_data.h"
+#include "cartographer/sensor/range_data.h"
+#include "cartographer/sensor/timed_point_cloud_data.h"
+#include "cartographer/sensor/line_data.h"
+#include "cartographer/transform/rigid_transform.h"
+#include "cartographer/preprocess/data_preprocessor.h"
+#include "cartographer/laser_perception/data_type.h"
+#include "cartographer/laser_perception/laser_perception.h"
 
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -69,37 +84,9 @@ class LocalTrajectoryBuilder2D {
     std::unique_ptr<const InsertionResult> insertion_result;    // 插入结果
   };
 
-  struct MergedData {
-    sensor::RangeData merged_range_data;
-    sensor::PointCloud merged_filtered_cloud;
-    sensor::PointCloud merged_highlight_cloud;
-    sensor::PointCloud merged_less_flat_cloud;
-    std::vector<sensor::LineData> merged_line_data;
-    std::vector<sensor::LandmarkPointData> merged_reflector_data;
-    std::vector<sensor::RangeData> original_undistorted_range_datas;  // 原始去畸变后的点云数据
-    
-    MergedData() = default;
-    
-    void Clear() {
-      merged_range_data = sensor::RangeData{};
-      merged_filtered_cloud = sensor::PointCloud{};
-      merged_highlight_cloud = sensor::PointCloud{};
-      merged_less_flat_cloud = sensor::PointCloud{};
-      merged_line_data.clear();
-      merged_reflector_data.clear();
-      original_undistorted_range_datas.clear();
-    }
-    
-    bool IsEmpty() const {
-      return merged_range_data.returns.empty() && 
-             merged_filtered_cloud.empty() && 
-             merged_highlight_cloud.empty() &&
-             merged_less_flat_cloud.empty() &&
-             merged_line_data.empty() && 
-             merged_reflector_data.empty() && 
-             original_undistorted_range_datas.empty();
-    }
-  };
+  // 使用DataPreprocessor定义的数据结构
+  using MergedData = preprocess::MergedData;
+  using ProcessedSensorData = preprocess::ProcessedSensorData;
 
   explicit LocalTrajectoryBuilder2D(
 	  const proto::LocalTrajectoryBuilderOptions2D& options,
@@ -131,7 +118,8 @@ class LocalTrajectoryBuilder2D {
     const common::Time& time,
     const MergedData& merged_data,
     const transform::Rigid3d& gravity_alignment,
-    const absl::optional<common::Duration>& sensor_duration);
+    const absl::optional<common::Duration>& sensor_duration,
+    preprocess::DataPreprocessor* data_preprocessor);
 
   sensor::FeatureData GetFeatureData(
     const common::Time & time,
@@ -169,38 +157,21 @@ class LocalTrajectoryBuilder2D {
   bool is_exptrapolator_initialized_ = false;
   void InitializeExtrapolator(common::Time time);
 
-  // 获取指定sensor_id的数据预处理器
-  preprocess::DataPreprocessor* GetDataPreprocessor(const std::string& sensor_id);
+  // 获取数据预处理器
+  preprocess::DataPreprocessor* GetDataPreprocessor() const;
 
-  // 获取指定sensor_id的激光感知器
-  laser_perception::LaserPerception* GetLaserPerception(const std::string& sensor_id) const;
+  // 计算相对于上次位姿的delta pose
+  transform::Rigid3d GetOdomDeltaPose(const common::Time& laser_time);
+
+  // 更新用于计算delta pose的基准里程计数据
+  void UpdateLastOdomForDelta(const common::Time& time);
+
+  // 获取指定时间的里程计数据
+  absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
 
   // 处理同步后的激光数据
   std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
       const LaserSynchronizer::SynchronizedLaserData& synchronized_data);
-
-  // 处理单个传感器的激光数据，返回处理后的数据结构
-  struct ProcessedSensorData {
-    std::string sensor_id;
-    sensor::RangeData undistorted_range_data;
-    sensor::FeatureData feature_data;
-    sensor::PointCloud filtered_gravity_aligned_point_cloud;
-    sensor::PointCloud highlight_point_cloud;
-  };
-
-  absl::optional<ProcessedSensorData> ProcessSingleSensorData(
-      const std::string& sensor_id,
-      const sensor::TimedPointCloudData& laser_data,
-      const common::Time& sync_time);
-
-  // 获取融合后的数据
-  MergedData GetMergedData(const std::vector<ProcessedSensorData>& processed_sensors) const;
-
-  // 里程计缓冲区管理方法
-  void AddOdometryToBuffer(const sensor::OdometryData& odometry_data);
-  absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
-  transform::Rigid3d GetOdomDeltaPose(const common::Time& laser_time);
-  void UpdateLastOdomForDelta(const common::Time& laser_time);
 
   const proto::LocalTrajectoryBuilderOptions2D options_;
   ActiveSubmaps2D active_submaps_;
@@ -224,23 +195,16 @@ class LocalTrajectoryBuilder2D {
 
   LaserSynchronizer laser_synchronizer_;
 
-  // 多雷达数据预处理器管理，每个sensor_id对应一个预处理器
+  // 单个数据预处理器处理所有传感器数据
   const std::vector<std::string> expected_range_sensor_ids_;  // 预期的传感器ID列表
-  std::map<std::string, std::unique_ptr<preprocess::DataPreprocessor>> data_preprocessors_;
+  std::unique_ptr<preprocess::DataPreprocessor> data_preprocessor_;
 
   transform::Rigid3d local_pose_ = transform::Rigid3d::Identity();
   transform::Rigid3d temp_pose_ = transform::Rigid3d::Identity();
   sensor::OdometryData curr_odom_data_;
-
-  // 里程计数据缓冲区
-  mutable std::mutex odom_buffer_mutex_;
-  std::deque<sensor::OdometryData> odom_buffer_;
-  absl::optional<sensor::OdometryData> last_odom_for_delta_;  // 用于计算delta pose的上次里程计数据
-  static constexpr size_t kMaxOdomBufferSize = 1000;  // 最大缓冲区大小
-  static constexpr double kMaxOdomBufferDuration = 10.0;  // 最大缓冲时间(秒)
-
-  // 多个激光感知器，每个sensor_id对应一个LaserPerception实例
-  std::map<std::string, std::unique_ptr<laser_perception::LaserPerception>> laser_perceptions_;
+  
+  // 用于计算delta pose的上次里程计数据
+  absl::optional<sensor::OdometryData> last_odom_for_delta_;
 
   std::unique_ptr<scan_matching::LineMatcher2D> line_matcher_;
 };

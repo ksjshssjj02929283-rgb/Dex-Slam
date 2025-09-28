@@ -472,8 +472,6 @@ bool MapBuilderBridge::SaveGridMapFromRange(
 
   // 2. 逐帧处理激光数据并插入到栅格地图中
   for (const auto& node : nodes) {
-    std::cout << "Processing node id: " << node.id << std::endl;
-    std::cout <<"range_Data size: " << node.data.constant_data->range_datas.size() << std::endl;
     // 使用新的range_datas字段，包含了各个传感器的原始去畸变range data
     for (const auto& range_data : node.data.constant_data->range_datas) {
       // 将range data转换到global坐标系下

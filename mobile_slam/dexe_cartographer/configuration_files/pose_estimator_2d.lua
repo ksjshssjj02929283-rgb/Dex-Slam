@@ -22,25 +22,62 @@ POSE_ESTIMATOR_2D = {
   min_z = -0.8,
   max_z = 2.,
   missing_data_ray_length = 5.,
-  num_accumulated_range_data = 1,
   voxel_filter_size = 0.04,
 
   pose_initializer_2d = POSE_INITIALIZER_2D,
   amcl_core = AMCL_CORE,
 
-  data_preprocessor = {
-    min_range = 0.,
-    max_range = 30.,
-    missing_data_ray_length = 5.,
-    num_accumulated_range_data = 1,
-    use_deskew = true,
-    use_odometry = true,
-  },
-
   adaptive_voxel_filter = {
     max_length = 0.5,
     min_num_points = 200,
     max_range = 50.,
+  },
+
+  data_preprocessor = {
+    min_range = 0.,
+    max_range = 30.,
+    missing_data_ray_length = 5.,
+    voxel_filter_size = 0.04,
+    use_deskew = true,
+    use_odometry = true,
+    enable_feature_detection = true,
+    enable_multi_sensor_fusion = false,
+
+    adaptive_voxel_filter = {
+      max_length = 0.5,
+      min_num_points = 200,
+      max_range = 50.,
+    },
+    
+    laser_perception = {
+      predict_rec = false,
+      reflect_rec = false,
+      shape_rec = false,
+      line_rec = false,
+      angle_rec = false,
+      intensity_threshold = 30,
+      connect_threshold = 0.05,
+      min_cluster_points = 5,
+      search_distance = 0.2,
+      max_dis_error = 0.02,
+      max_ang_error = 0.1,
+      start_rec_dis = 0.5,
+      target_file = "",
+      model_file = "",
+      min_select_points = 10,
+      reflector_error = 0.05,
+      reflector_radius = 0.1,
+      min_line_length = 0.3,
+      shape_match_score = 0.8,
+      shape_match_close_degree = 0.9,
+      shape_dis_to_robot_center = 5.0,
+      intensity_max_threshold = 255,
+      laser_intensity_type = 0,
+      intensity_max_range_threshold = 30.0,
+      intensity_min_range_threshold = 0.1,
+      reflector_error_range = 0.1,
+      angle_increment = 0.00436332,
+    },
   },
 
   loop_closure_adaptive_voxel_filter = {
