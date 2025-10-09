@@ -28,7 +28,7 @@
 #include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
-#include "cartographer/mapping/internal/laser_synchronizer.h"
+#include "cartographer/preprocess/laser_synchronizer.h"
 #include "cartographer/mapping/pose_extrapolator.h"
 #include "cartographer/mapping/proto/local_trajectory_builder_options_2d.pb.h"
 #include "cartographer/localization/internal/2d/pose_estimator_2d.h"
@@ -43,11 +43,6 @@
 #include "cartographer/preprocess/data_preprocessor.h"
 #include "cartographer/laser_perception/data_type.h"
 #include "cartographer/laser_perception/laser_perception.h"
-#include "cartographer/mapping/internal/laser_synchronizer.h"
-#include "cartographer/mapping/pose_extrapolator.h"
-#include "cartographer/mapping/proto/local_trajectory_builder_options_2d.pb.h"
-#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
-#include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/imu_data.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer/sensor/odometry_data.h"
@@ -171,7 +166,7 @@ class LocalTrajectoryBuilder2D {
 
   // 处理同步后的激光数据
   std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
-      const LaserSynchronizer::SynchronizedLaserData& synchronized_data);
+      const preprocess::LaserSynchronizer::SynchronizedLaserData& synchronized_data);
 
   const proto::LocalTrajectoryBuilderOptions2D options_;
   ActiveSubmaps2D active_submaps_;
@@ -193,7 +188,7 @@ class LocalTrajectoryBuilder2D {
   absl::optional<double> last_thread_cpu_time_seconds_;
   absl::optional<common::Time> last_sensor_time_;
 
-  LaserSynchronizer laser_synchronizer_;
+  preprocess::LaserSynchronizer laser_synchronizer_;
 
   // 单个数据预处理器处理所有传感器数据
   const std::vector<std::string> expected_range_sensor_ids_;  // 预期的传感器ID列表

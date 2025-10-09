@@ -30,7 +30,7 @@
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/internal/range_data_collator.h"
-#include "cartographer/mapping/internal/laser_synchronizer.h"
+#include "cartographer/preprocess/laser_synchronizer.h"
 #include "cartographer/preprocess/data_preprocessor.h"
 
 #include "cartographer/metrics/family_factory.h"
@@ -135,7 +135,7 @@ class PoseEstimator2D {
 
 
   std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
-      const mapping::LaserSynchronizer::SynchronizedLaserData& synchronized_data);
+      const preprocess::LaserSynchronizer::SynchronizedLaserData& synchronized_data);
 
   transform::Rigid3d GetOdomDeltaPose(const common::Time& laser_time);
   absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
@@ -207,7 +207,7 @@ private:
   absl::optional<common::Time> last_sensor_time_;
 
   mapping::RangeDataCollator range_data_collator_;
-  mapping::LaserSynchronizer laser_synchronizer_;
+  preprocess::LaserSynchronizer laser_synchronizer_;
   std::vector<std::string> expected_range_sensor_ids_;
 
   std::unique_ptr<preprocess::DataPreprocessor> data_preprocessor_;
