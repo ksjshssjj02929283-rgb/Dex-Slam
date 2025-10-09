@@ -113,7 +113,7 @@ class LocalTrajectoryBuilder2D {
   static void RegisterMetrics(metrics::FamilyFactory* family_factory);
 
  private:
-  std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
+  std::unique_ptr<MatchingResult> ProcessDataAndEstimatePose(
     const std::string& sensor_id,
     const common::Time& time,
     const MergedData& merged_data,

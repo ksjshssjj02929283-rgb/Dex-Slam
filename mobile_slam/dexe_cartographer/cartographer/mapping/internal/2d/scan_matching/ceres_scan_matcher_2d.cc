@@ -91,6 +91,12 @@ void CeresScanMatcher2D::Match(
   Eigen::Matrix3d& cov,
   ceres::Solver::Summary * const summary) const
 {
+  // 添加断言，确保输入点云不为空
+  assert(point_cloud.size() > 0 && "point_cloud must not be empty");
+  assert(highlight_point_cloud.size() > 0 && "highlight_point_cloud must not be empty");
+  assert(pose_estimate != nullptr && "pose_estimate pointer must not be null");
+  assert(summary != nullptr && "summary pointer must not be null");
+
   double ceres_pose_estimate[3] = {initial_pose_estimate.translation().x(),
     initial_pose_estimate.translation().y(),
     initial_pose_estimate.rotation().angle()};

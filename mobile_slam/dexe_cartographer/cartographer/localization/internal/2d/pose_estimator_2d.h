@@ -30,6 +30,9 @@
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/internal/range_data_collator.h"
+#include "cartographer/mapping/internal/laser_synchronizer.h"
+#include "cartographer/preprocess/data_preprocessor.h"
+
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/imu_data.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -120,12 +123,23 @@ class PoseEstimator2D {
   static void RegisterMetrics(metrics::FamilyFactory* family_factory);
 
  private:
-  std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
-	  common::Time time, const sensor::RangeData& gravity_aligned_range_data,
-    const std::vector<sensor::LineData> & line_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data,
-	  const transform::Rigid3d& gravity_alignment,
-	  const absl::optional<common::Duration>& sensor_duration);
+  // 使用MergedData进行位姿估计和地图更新的重载版本
+  std::unique_ptr<MatchingResult> ProcessDataAndEstimatePose(
+    const std::string& sensor_id,
+    const common::Time& time,
+    const preprocess::MergedData& merged_data,
+    const transform::Rigid3d& gravity_alignment,
+    const absl::optional<common::Duration>& sensor_duration,
+    preprocess::DataPreprocessor* data_preprocessor);
+
+
+
+  std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
+      const mapping::LaserSynchronizer::SynchronizedLaserData& synchronized_data);
+
+  transform::Rigid3d GetOdomDeltaPose(const common::Time& laser_time);
+  absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
+  void UpdateLastOdomForDelta(const common::Time& time);
 
   sensor::FeatureData GetFeatureData(
     const common::Time & time,
@@ -146,13 +160,15 @@ class PoseEstimator2D {
     const Eigen::Quaterniond& gravity_alignment,
     const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
     const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data);
+    const std::vector<sensor::LandmarkPointData> & reflector_data,
+    const std::vector<sensor::RangeData>& original_undistorted_range_datas);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
   // observed pose, or nullptr on failure.
   std::unique_ptr<transform::Rigid2d> ScanMatch(
     const common::Time time, const transform::Rigid2d& pose_prediction,
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data,
     Eigen::Matrix3d & cov);
@@ -162,8 +178,6 @@ class PoseEstimator2D {
 
   static amcl::pf_vector_t UniformPoseGenerator(void* arg);
   static std::vector<std::pair<int, int>> free_space_indices_;
-
-  std::optional<sensor::OdometryData> GetCurrOdomData(const common::Time& time);
 
 private:
   const proto::PoseEstimatorOptions2D options_;
@@ -193,6 +207,8 @@ private:
   absl::optional<common::Time> last_sensor_time_;
 
   mapping::RangeDataCollator range_data_collator_;
+  mapping::LaserSynchronizer laser_synchronizer_;
+  std::vector<std::string> expected_range_sensor_ids_;
 
   std::unique_ptr<preprocess::DataPreprocessor> data_preprocessor_;
   bool is_sensor_to_tracking_set_ = false;
@@ -202,7 +218,7 @@ private:
 
   sensor::OdometryData last_laser_odom_data_;
   sensor::OdometryData curr_odom_data_;
-  std::deque<sensor::OdometryData> odom_data_queue_;
+  absl::optional<sensor::OdometryData> last_odom_for_delta_;
 
   std::unique_ptr<LocalMapUpdater2D> local_map_updater_;
 

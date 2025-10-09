@@ -128,17 +128,17 @@ private:
   void InitializeServices() {
     // 创建服务
     start_localization_srv_ = create_service<std_srvs::srv::Trigger>(
-        "start_localization",
+        "~/start_localization",
         std::bind(&LocalizationManagerNode::HandleStartLocalization, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     stop_localization_srv_ = create_service<std_srvs::srv::Trigger>(
-        "stop_localization", 
+        "~/stop_localization",
         std::bind(&LocalizationManagerNode::HandleStopLocalization, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     reset_localization_srv_ = create_service<std_srvs::srv::Trigger>(
-        "reset_localization",
+        "~/reset_localization",
         std::bind(&LocalizationManagerNode::HandleResetLocalization, this,
                   std::placeholders::_1, std::placeholders::_2));
 

@@ -52,10 +52,12 @@ PoseEstimator2D::PoseEstimator2D(
       real_time_correlative_scan_matcher_(
           options_.real_time_correlative_scan_matcher_options()),
       ceres_scan_matcher_(options_.ceres_scan_matcher_options()),
-      range_data_collator_(expected_range_sensor_ids)
+      range_data_collator_(expected_range_sensor_ids),
+      laser_synchronizer_(expected_range_sensor_ids),
+      expected_range_sensor_ids_(expected_range_sensor_ids)
 {
-  data_preprocessor_ =
-    absl::make_unique<preprocess::DataPreprocessor>(
+  LOG(INFO) << "Creating single data preprocessor for all sensors";
+  data_preprocessor_ = absl::make_unique<preprocess::DataPreprocessor>(
       options_.data_preprocessor_options());
 
   laser_perception_ =
@@ -197,11 +199,16 @@ PoseEstimator2D::FilterRangeData(
  * @param time 时间
  * @param pose_prediction 预测的位姿 
  * @param filtered_gravity_aligned_point_cloud 重力对齐的激光点云
+ * @param highlight_point_cloud 高亮点云
+ * @param line_data 线数据
+ * @param tracked_lane_data 跟踪的车道线数据
+ * @param cov 协方差矩阵
  * @return std::unique_ptr<transform::Rigid2d> 位姿估计结果
  */
 std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     const common::Time time, const transform::Rigid2d& pose_prediction,
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
     Eigen::Matrix3d & cov)
@@ -230,7 +237,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
       pose_prediction, filtered_gravity_aligned_point_cloud,
       *matching_submap->grid(), &correlative_pose);
       kRealTimeCorrelativeScanMatcherScoreMetric->Observe(score);
-    LOG(INFO) << "correlative score: " << score;
+    // LOG(INFO) << "correlative score: " << score;
     if (score > 0.4) {
       transform::Rigid2d temp(pose_prediction.translation(), correlative_pose.rotation());
       initial_ceres_pose = temp;
@@ -240,7 +247,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     }
   }
   double correlative_time = tic_correlative.toc();
-  LOG(INFO) << "correlative scan matcher cost time: " << correlative_time << " ms";
+  // LOG(INFO) << "correlative scan matcher cost time: " << correlative_time << " ms";
   // std::cout << "initial_ceres_pose: " << initial_ceres_pose << std::endl;
 
   // LOG(INFO) << "csm: " << initial_ceres_pose;
@@ -267,7 +274,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 
   ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
                           filtered_gravity_aligned_point_cloud,
-                          *laser_perception_->getHighlightCloud(),
+                          highlight_point_cloud,
                           tracked_lane_data,
                           global_tracked_lane_data,
                           *matching_submap->grid(), *local_grid_map,
@@ -278,7 +285,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                           pose_observation.get(), cov,
                           &summary);
   double match_time = tic_toc.toc();
-  LOG(INFO) << "ceres scan matcher cost time: " << match_time << " ms";
+  // LOG(INFO) << "ceres scan matcher cost time: " << match_time << " ms";
   // time_file_ << match_time << std::endl;
 
   // ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
@@ -295,13 +302,13 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   {
     LOG(WARNING) << "Normal matching failed, use correlative scan matcher help localization.";
     transform::Rigid2d check_pose;
-    double score = real_time_correlative_scan_matcher_.Match(
+    real_time_correlative_scan_matcher_.Match(
       initial_ceres_pose, filtered_gravity_aligned_point_cloud,
       *local_grid_map, &initial_ceres_pose);
 
     ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
                               filtered_gravity_aligned_point_cloud,
-                              *laser_perception_->getHighlightCloud(),
+                              highlight_point_cloud,
                               *local_grid_map,
                               *local_cloud_ikdtree,
                               *global_highlight_cloud_ikdtree_,
@@ -337,7 +344,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 }
 
 /**
- * @brief 向PoseEstimator2D中加入激光雷达数据，同时进行位姿估计
+ * @brief 向PoseEstimator2D中加入激光雷达数据，使用激光同步器进行同步
  * 
  * @param sensor_id 
  * @param unsynchronized_data 
@@ -347,79 +354,77 @@ std::unique_ptr<PoseEstimator2D::MatchingResult>
 PoseEstimator2D::AddRangeData(
     const std::string& sensor_id,
     const sensor::TimedPointCloudData& unsynchronized_data) {
-  std::lock_guard<std::mutex> lock(data_mutex_);
-
-  if (!is_sensor_to_tracking_set_) {
-    sensor_to_tracking_ = unsynchronized_data.sensor_to_tracking;
-    is_sensor_to_tracking_set_ = true;
-  }
-
-  // 1. 雷达数据预处理，包括雷达数据从range转换为TimedPointCloud
-  auto synchronized_data =
-      range_data_collator_.AddRangeData(sensor_id, unsynchronized_data);
-  if (synchronized_data.ranges.empty()) {
-    LOG(INFO) << "Range data collator filling buffer.";
+  // 1. 将激光雷达数据添加到同步器
+  if (!laser_synchronizer_.AddLaserData(sensor_id, unsynchronized_data)) {
+    LOG(ERROR) << "Failed to add laser data for sensor: " << sensor_id;
     return nullptr;
   }
 
-  CHECK(!synchronized_data.ranges.empty());
-  // TODO(gaschler): Check if this can strictly be 0.
-  CHECK_LE(synchronized_data.ranges.back().point_time.time, 0.f);
-
-  // 2. 不使用IMU，则在AddRangeData中初始化位姿插值器
-
-  // 每一帧都要去畸变
-  data_preprocessor_->UndistortPointCloud(synchronized_data); // 雷达去畸变
-  auto undistort_range = data_preprocessor_->GetProcessedRangeData();
-  if (!undistort_range.has_value()) {
+  // 2. 尝试获取同步后的激光数据
+  auto synchronized_data = laser_synchronizer_.GetSynchronizedData();
+  if (!synchronized_data.is_valid) {
+    // LOG(INFO) << "Laser synchronizer filling buffer, waiting for more data.";
     return nullptr;
   }
 
-  const common::Time& time = undistort_range->time;
-  curr_odom_data_ = GetCurrOdomData(time).value();
+  // 3. 处理同步后的激光数据
+  return ProcessSynchronizedLaserData(synchronized_data);
+}
 
+/**
+ * @brief 处理同步后的激光数据（简化版本，使用DataPreprocessor）
+ * 
+ * @param synchronized_data 同步后的激光数据
+ * @return std::unique_ptr<PoseEstimator2D::MatchingResult> 处理结果
+ */
+std::unique_ptr<PoseEstimator2D::MatchingResult>
+PoseEstimator2D::ProcessSynchronizedLaserData(
+    const mapping::LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
+  
+  const common::Time& sync_time = synchronized_data.sync_time;
+  
+  // 使用数据预处理器来处理所有传感器数据
+  if (!data_preprocessor_) {
+    LOG(ERROR) << "Data preprocessor not initialized";
+    return nullptr;
+  }
+  
+  // 从里程计缓冲区获取同步时间对应的里程计数据
+  auto odom_at_sync_time = data_preprocessor_->GetOdometryAtTime(sync_time);
+  if (!odom_at_sync_time.has_value()) {
+    LOG(WARNING) << "No odometry data available for sync time: " << sync_time;
+    return nullptr;
+  }
+  
   // 只有在定位模式下才会用关键帧策略
   if (loc_state_ == LocalizationState::LOCALIZED) {
-    if (keyframe_motion_filter_.IsSimilar(time, curr_odom_data_.pose)) {
+    if (keyframe_motion_filter_.IsSimilar(sync_time, odom_at_sync_time->pose)) {
       return nullptr;
     }
   }
-
-  // 去畸变后的雷达数据是在激光坐标系下
-  // 检测特征
-  sensor::SyncPointCloudWithOdom sync_point_cloud;
-  sync_point_cloud.stamp = undistort_range->time;
-  sync_point_cloud.odom = curr_odom_data_;
-
-  sensor::PointCloudWithOrigin cloud;
-  cloud.origin = undistort_range->data.origin.cast<double>();
-  for (size_t i = 0; i < undistort_range->data.returns.points().size(); i++) {
-    cloud.sync_points_base_link.push_back(undistort_range->data.returns.points()[i].position);
+  
+  // 使用DataPreprocessor处理多传感器数据
+  preprocess::MergedData merged_data = data_preprocessor_->ProcessMultipleSensorData(
+      synchronized_data.laser_data_map, sync_time);
+  
+  if (merged_data.IsEmpty()) {
+    LOG(WARNING) << "Merged data from DataPreprocessor is empty";
+    return nullptr;
   }
-  cloud.intensities = undistort_range->data.returns.intensities();
-  sync_point_cloud.sync_point_clouds.push_back(cloud);
-
-  std::vector<laser_perception::FeatureMsgWithOrigin>
-  feature_data_origin = laser_perception_->laserUpdate(sync_point_cloud);
-
-  auto feature_data = GetFeatureData(time, feature_data_origin);
-
-  // std::cout << "feature_data.line_data: " << feature_data.line_data.size() << std::endl;
-  // std::cout << "feature_data.reflector_data: " << feature_data.reflector_data.size() << std::endl;
-
-  const common::Time current_sensor_time = undistort_range.value().time;
+  
+  // 更新传感器时间信息
+  const common::Time current_sensor_time = sync_time;
   absl::optional<common::Duration> sensor_duration;
   if (last_sensor_time_.has_value()) {
     sensor_duration = current_sensor_time - last_sensor_time_.value();
   }
   last_sensor_time_ = current_sensor_time;
-
-
-  // 重定位
+  
+  // 重定位逻辑
   if (loc_state_ == LocalizationState::RELOCALIZING) {
     CHECK(pose_initializer_ != nullptr);
-    pose_initializer_->UpdateSensorData(undistort_range.value().data.returns,
-                                        feature_data.line_data);
+    pose_initializer_->UpdateSensorData(merged_data.merged_range_data.returns,
+                                        merged_data.merged_line_data);
 
     PoseInitializerStatus initializer_status =
                               pose_initializer_->GetInitializerStatus();
@@ -428,7 +433,8 @@ PoseEstimator2D::AddRangeData(
       if (initial_pose) {
         LOG(WARNING) << "Initialized pose: " << *initial_pose;
         local_pose_ = transform::Embed3D(*initial_pose);
-        last_laser_odom_data_ = curr_odom_data_;
+        // 更新用于计算delta pose的基准里程计数据
+        UpdateLastOdomForDelta(sync_time);
         loc_state_ = LocalizationState::LOCALIZED;
         pose_initializer_->stop();
         active_submaps_.clear();
@@ -444,59 +450,59 @@ PoseEstimator2D::AddRangeData(
   if (loc_state_ != LocalizationState::LOCALIZED) {
     return nullptr;
   }
-
-  return AddAccumulatedRangeData(
+  
+  // 使用融合后的数据进行位姿估计和地图更新
+  return ProcessDataAndEstimatePose(
+      "merged_sensors",  // 使用一个标识来表示这是合并的传感器数据
       current_sensor_time,
-      FilterRangeData(undistort_range.value().data),
-      feature_data.line_data,
-      feature_data.reflector_data,
-      transform::Rigid3d::Identity(), sensor_duration);
+      merged_data,
+      transform::Rigid3d::Identity(), 
+      sensor_duration,
+      data_preprocessor_.get());
 }
 
 /**
- * @brief 对积累的激光数据进行位姿估计
+ * @brief 处理融合数据并进行位姿估计和地图更新
  * 
- * @param time 
- * @param gravity_aligned_range_data 
- * @param gravity_alignment 
- * @param sensor_duration 
+ * @param sensor_id 传感器ID标识符
+ * @param time 时间戳
+ * @param merged_data 融合后的传感器数据
+ * @param gravity_alignment 重力对齐变换
+ * @param sensor_duration 传感器持续时间
  * @return std::unique_ptr<PoseEstimator2D::MatchingResult> 
  */
 std::unique_ptr<PoseEstimator2D::MatchingResult>
-PoseEstimator2D::AddAccumulatedRangeData(
-    const common::Time time,
-    const sensor::RangeData& gravity_aligned_range_data,
-    const std::vector<sensor::LineData> & line_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data,
+PoseEstimator2D::ProcessDataAndEstimatePose(
+    const std::string& sensor_id,
+    const common::Time& time,
+    const preprocess::MergedData& merged_data,
     const transform::Rigid3d& gravity_alignment,
-    const absl::optional<common::Duration>& sensor_duration) {
-  if (gravity_aligned_range_data.returns.empty()) {
-    LOG(WARNING) << "Dropped empty horizontal range data.";
+    const absl::optional<common::Duration>& sensor_duration,
+    preprocess::DataPreprocessor* data_preprocessor) {
+  
+  if (merged_data.merged_range_data.returns.empty()) {
+    LOG(WARNING) << "Dropped empty merged range data.";
     return nullptr;
   }
 
-  const sensor::PointCloud& filtered_gravity_aligned_point_cloud =
-      sensor::AdaptiveVoxelFilter(gravity_aligned_range_data.returns,
-                                  options_.adaptive_voxel_filter_options());
-  if (filtered_gravity_aligned_point_cloud.empty()) {
-    return nullptr;
-  }
-
-  //在这里update local map
-
-  // const transform::Rigid3f odom_delta_pose = data_preprocessor_->GetOdomDeltaPose();
-  const transform::Rigid3d odom_delta_pose =
-                              last_laser_odom_data_.pose.inverse() * curr_odom_data_.pose;
+  // 根据激光雷达时间戳获取delta pose（关键帧之间的位姿增量）
+  const transform::Rigid3d odom_delta_pose = GetOdomDeltaPose(time);
+  const auto pose_prediction_odom = transform::Project2D(local_pose_ * odom_delta_pose);
+  
+  // 更新AMCL
   if (!amcl_core_->IsInitialized()) {
     amcl_core_->SetInitialPose(transform::Project2D(local_pose_));
   } else {
-    amcl_core_->UpdateWithSensorData(time,
-                                     filtered_gravity_aligned_point_cloud,
-                                     curr_odom_data_);
+    // 获取当前里程计数据用于AMCL更新
+    auto current_odom = GetOdometryAtTime(time);
+    if (current_odom.has_value()) {
+      amcl_core_->UpdateWithSensorData(time,
+                                       merged_data.merged_filtered_cloud,
+                                       *current_odom);
+    }
   }
 
   const auto amcl_pose = amcl_core_->GetPose2D();
-  const auto pose_prediction_odom = transform::Project2D(local_pose_ * odom_delta_pose);
 
   transform::Rigid2d pose_prediction;
   if (amcl_pose) {
@@ -511,31 +517,33 @@ PoseEstimator2D::AddAccumulatedRangeData(
     pose_prediction = pose_prediction_odom;
   }
 
+  const sensor::PointCloud& filtered_gravity_aligned_point_cloud = merged_data.merged_filtered_cloud;
+  if (filtered_gravity_aligned_point_cloud.empty()) {
+    return nullptr;
+  }
 
-  // 4. ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
-  // local map frame <- gravity-aligned frame
-  // common::TicToc aa;
+  // ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
   Eigen::Matrix3d loc_cov;
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
       ScanMatch(time, pose_prediction,
                 filtered_gravity_aligned_point_cloud,
-                line_data,
+                merged_data.merged_highlight_cloud,
+                merged_data.merged_line_data,
                 tracked_lane_data,
                 loc_cov);
-  // std::cout << "tracked_lane_data: " << tracked_lane_data.size() << std::endl;
-  // std::cout << aa.toc() << " ms" << std::endl;
+  
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
-
-  last_laser_odom_data_ = curr_odom_data_;
-
+  
   const transform::Rigid3d pose_estimate =
       transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
-
   local_pose_ = pose_estimate;
+  
+  // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
+  UpdateLastOdomForDelta(time);
 
   local_map_updater_->UpdateRobotPose(*pose_estimate_2d);
 
@@ -548,10 +556,10 @@ PoseEstimator2D::AddAccumulatedRangeData(
   }
 
   sensor::RangeData range_data_in_local =
-      TransformRangeData(gravity_aligned_range_data,
+      sensor::TransformRangeData(merged_data.merged_range_data,
                          transform::Embed3D(pose_estimate_2d->cast<float>()));
-  // 6. 将当前帧的激光数据，按照估计的位姿插入到submap中
 
+  // 将线数据转换到local坐标系
   std::map<int, std::vector<sensor::LineData>> lines_in_local;
   for (const auto& data_vec: tracked_lane_data) {
     for (const auto& line: data_vec.second) {
@@ -559,19 +567,23 @@ PoseEstimator2D::AddAccumulatedRangeData(
     }
   }
 
-  std::unique_ptr<InsertionResult>
-    insertion_result = InsertIntoSubmap(
+  // 保存原始去畸变数据（用于TrajectoryNode）
+  std::vector<sensor::RangeData> original_undistorted_range_datas = merged_data.original_undistorted_range_datas;
+
+  // 使用merged_data中的数据进行插入
+  std::unique_ptr<InsertionResult> insertion_result = InsertIntoSubmap(
       time, range_data_in_local,
-      filtered_gravity_aligned_point_cloud,
-      *laser_perception_->getHighlightCloud(),
+      merged_data.merged_filtered_cloud,
+      merged_data.merged_highlight_cloud,
       pose_estimate, gravity_alignment.rotation(),
-      lines_in_local, tracked_lane_data, reflector_data);
+      lines_in_local, tracked_lane_data, merged_data.merged_reflector_data, 
+      original_undistorted_range_datas);
 
   if (insertion_result) {
     amcl_core_->SetGrid(active_submaps_.submaps().front()->grid());
   }
 
-  // 7. 计算local slam的频率
+  // 计算local slam的频率
   const auto wall_time = std::chrono::steady_clock::now();
   if (last_wall_time_.has_value()) {
     const auto wall_time_duration = wall_time - last_wall_time_.value();
@@ -594,8 +606,8 @@ PoseEstimator2D::AddAccumulatedRangeData(
   }
   last_wall_time_ = wall_time;
   last_thread_cpu_time_seconds_ = thread_cpu_time_seconds;
-  // 8. 返回匹配结果
-
+  
+  // 返回匹配结果
   return absl::make_unique<MatchingResult>(
       MatchingResult{time, local_pose_,
                      std::move(amcl_core_->GetParticlePoses()),
@@ -603,6 +615,8 @@ PoseEstimator2D::AddAccumulatedRangeData(
                      std::move(lines_in_local),
                      std::move(insertion_result)});
 }
+
+
 
 sensor::FeatureData PoseEstimator2D::GetFeatureData(
   const common::Time & time,
@@ -634,8 +648,13 @@ sensor::FeatureData PoseEstimator2D::GetFeatureData(
  * @param time 时间
  * @param range_data_in_local local系下的激光数据
  * @param filtered_gravity_aligned_point_cloud  重力对齐的激光点云
+ * @param highlight_point_cloud 高亮点云
  * @param pose_estimate 估计的位姿
  * @param gravity_alignment 重力对齐的旋转
+ * @param line_data_in_local local系下的线数据
+ * @param tracked_lane_data 跟踪的车道线数据
+ * @param reflector_data 反射器数据
+ * @param original_undistorted_range_datas 原始去畸变点云数据
  * @return std::unique_ptr<PoseEstimator2D::InsertionResult> 插入的结果
  */
 std::unique_ptr<PoseEstimator2D::InsertionResult>
@@ -647,7 +666,8 @@ PoseEstimator2D::InsertIntoSubmap(
     const Eigen::Quaterniond& gravity_alignment,
     const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
     const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data)
+    const std::vector<sensor::LandmarkPointData> & reflector_data,
+    const std::vector<sensor::RangeData>& original_undistorted_range_datas)
 {
   // 1. 判断是否是关键帧
   if (map_insertion_motion_filter_.IsSimilar(time, pose_estimate)) {
@@ -663,23 +683,40 @@ PoseEstimator2D::InsertIntoSubmap(
                         highlight_point_cloud,
                         pose_estimate.cast<float>());
 
-  // 2. 将激光数据插入到submap中
+  // 2. 将合并后的激光数据插入到submap中
   std::vector<std::shared_ptr<const mapping::Submap2D>> insertion_submaps =
       active_submaps_.InsertRangeData(range_data_in_local);
 
+  // 插入合并后的云数据、线数据和反射器数据
   active_submaps_.InsertCloudData(cloud_in_local, highlight_cloud_in_local);
   active_submaps_.InsertLineData(line_data_in_local);
   active_submaps_.InsertReflectorData(reflector_data);
 
-  // 3. 返回插入结果
-  // TODO: 后面再加上TrajectoryNode中的line和reflector信息
+  // 3. 分别插入每个传感器的原始去畸变range data到栅格地图
+  for (const auto& original_range_data : original_undistorted_range_datas) {
+    // 将原始去畸变数据转换到local坐标系并插入到栅格地图
+    sensor::RangeData sensor_range_data_in_local = sensor::TransformRangeData(
+        original_range_data, pose_estimate.cast<float>());
+    active_submaps_.InsertRangeData(sensor_range_data_in_local);
+  }
+
+  // 4. 准备TrajectoryNode::Data所需的数据
+  
+  // 直接使用已经在GetMergedData中滤波过的点云数据
+  sensor::PointCloud merged_filtered_cloud = filtered_gravity_aligned_point_cloud;
+  sensor::PointCloud merged_highlight_cloud = highlight_point_cloud;
+  
+  // 直接使用传入的原始去畸变range data
+  std::vector<sensor::RangeData> all_sensors_range_datas = original_undistorted_range_datas;
+
+  // 5. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{
       std::make_shared<const mapping::TrajectoryNode::Data>(mapping::TrajectoryNode::Data{
           time,
           gravity_alignment,
-          filtered_gravity_aligned_point_cloud,  // 单个合并后的点云
-          highlight_point_cloud,  // 单个合并后的点云
-          {},  // range_datas - 空的range data vector
+          merged_filtered_cloud,
+          merged_highlight_cloud,
+          all_sensors_range_datas,
           tracked_lane_data,
           reflector_data,
           {},  // 'high_resolution_point_cloud' is only used in 3D.
@@ -700,27 +737,70 @@ void PoseEstimator2D::AddImuData(const sensor::ImuData& imu_data) {
 
 /**
  * @brief 向PoseEstimator2D中加入odom数据
- * @param imu_data OdometryData格式的数据
+ * @param odometry_data OdometryData格式的数据
  */
 void PoseEstimator2D::AddOdometryData(
     const sensor::OdometryData& odometry_data)
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  data_preprocessor_->AddOdometryData(odometry_data);
-  odom_data_queue_.push_back(odometry_data);
-  while (odom_data_queue_.size() > 1000) {
-    odom_data_queue_.pop_front();
+  // 将里程计数据添加到数据预处理器
+  if (data_preprocessor_) {
+    data_preprocessor_->AddOdometryData(odometry_data);
   }
 }
 
-std::optional<sensor::OdometryData> PoseEstimator2D::GetCurrOdomData(const common::Time& time)
-{
-  for (size_t i = odom_data_queue_.size() - 1; i > 0; i--) {
-    if (odom_data_queue_[i].time <= time) {
-      return odom_data_queue_[i];
-    }
+/**
+ * @brief 计算相对于上次位姿的delta pose
+ * 
+ * @param laser_time 激光雷达时间戳
+ * @return transform::Rigid3d delta pose
+ */
+transform::Rigid3d PoseEstimator2D::GetOdomDeltaPose(const common::Time& laser_time) {
+  auto current_odom = GetOdometryAtTime(laser_time);
+  if (!current_odom.has_value()) {
+    LOG(WARNING) << "No odometry data available for delta pose calculation at time: " << laser_time;
+    return transform::Rigid3d::Identity();
   }
-  return std::nullopt;
+  
+  // 如果这是第一次调用，保存当前位姿作为基准
+  if (!last_odom_for_delta_.has_value()) {
+    last_odom_for_delta_ = *current_odom;
+    return transform::Rigid3d::Identity();
+  }
+  
+  // 计算delta pose
+  const transform::Rigid3d delta_pose = 
+      last_odom_for_delta_->pose.inverse() * current_odom->pose;
+  
+  return delta_pose;
+}
+
+/**
+ * @brief 获取指定时间的里程计数据
+ * 
+ * @param time 时间戳
+ * @return absl::optional<sensor::OdometryData> 里程计数据，如果不存在则返回nullopt
+ */
+absl::optional<sensor::OdometryData> PoseEstimator2D::GetOdometryAtTime(const common::Time& time) const {
+  assert(data_preprocessor_ != nullptr);
+  // 使用数据预处理器来获取里程计数据
+  if (data_preprocessor_) {
+    return data_preprocessor_->GetOdometryAtTime(time);
+  }
+  
+  return absl::nullopt;
+}
+
+/**
+ * @brief 更新用于计算delta pose的基准里程计数据
+ * 
+ * @param time 时间戳
+ */
+void PoseEstimator2D::UpdateLastOdomForDelta(const common::Time& time) {
+  auto current_odom = GetOdometryAtTime(time);
+  if (current_odom.has_value()) {
+    last_odom_for_delta_ = *current_odom;
+  }
 }
 
 void PoseEstimator2D::ResetMapping()
@@ -763,5 +843,5 @@ void PoseEstimator2D::RegisterMetrics(
   kScanMatcherResidualAngleMetric = residuals->Add({{"component", "angle"}});
 }
 
-}  // namespace mapping
+}  // namespace localization
 }  // namespace cartographer
