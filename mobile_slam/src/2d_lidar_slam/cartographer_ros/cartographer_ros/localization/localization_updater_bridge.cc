@@ -502,7 +502,6 @@ LocalizationUpdaterBridge::GetLocalTrajectoryData()
 
     // LOG(INFO) << localization_updater_->pose_graph()->GetLocalToGlobalTransform(trajectory_id);
   }
-  std::cout << "local_trajectory_data size: " << local_trajectory_data.size() << std::endl;
   return local_trajectory_data;
 }
 

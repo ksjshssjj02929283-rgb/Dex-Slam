@@ -256,8 +256,8 @@ LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
     sensor_duration = current_sensor_time - last_sensor_time_.value();
   }
   last_sensor_time_ = current_sensor_time;
-  // 使用融合后的数据调用 AddAccumulatedRangeData
-  return AddAccumulatedRangeData(
+  // 使用融合后的数据进行位姿估计和地图更新
+  return ProcessDataAndEstimatePose(
       "merged_sensors",  // 使用一个标识来表示这是合并的传感器数据
       current_sensor_time,
       merged_data,
@@ -268,7 +268,7 @@ LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
 
 
 /**
- * @brief 使用MergedData进行位姿估计的重载版本
+ * @brief 处理融合数据并进行位姿估计和地图更新
  * 
  * @param sensor_id 传感器ID标识符
  * @param time 时间戳
@@ -278,7 +278,7 @@ LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
  * @return std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult> 
  */
 std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
-LocalTrajectoryBuilder2D::AddAccumulatedRangeData(
+LocalTrajectoryBuilder2D::ProcessDataAndEstimatePose(
     const std::string& sensor_id,
     const common::Time& time,
     const MergedData& merged_data,
