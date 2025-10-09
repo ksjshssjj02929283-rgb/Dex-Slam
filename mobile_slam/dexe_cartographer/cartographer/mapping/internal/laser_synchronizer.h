@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef CARTOGRAPHER_MAPPING_INTERNAL_LASER_SYNCHRONIZER_H_
-#define CARTOGRAPHER_MAPPING_INTERNAL_LASER_SYNCHRONIZER_H_
+#ifndef CARTOGRAPHER_PREPROCESS_LASER_SYNCHRONIZER_H_
+#define CARTOGRAPHER_PREPROCESS_LASER_SYNCHRONIZER_H_
 
 #include <map>
 #include <string>
@@ -29,7 +29,7 @@
 #include "glog/logging.h"
 
 namespace cartographer {
-namespace mapping {
+namespace preprocess {
 
 /**
  * @brief 激光雷达同步器类，用于将多个激光雷达数据按时间同步
@@ -118,7 +118,7 @@ class LaserSynchronizer {
   absl::optional<common::Time> latest_sync_time_;
 };
 
-}  // namespace mapping
+}  // namespace preprocess
 }  // namespace cartographer
 
-#endif  // CARTOGRAPHER_MAPPING_INTERNAL_LASER_SYNCHRONIZER_H_
+#endif  // CARTOGRAPHER_PREPROCESS_LASER_SYNCHRONIZER_H_

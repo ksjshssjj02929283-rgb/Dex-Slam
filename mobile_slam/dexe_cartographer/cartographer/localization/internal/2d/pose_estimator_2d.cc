@@ -379,7 +379,7 @@ PoseEstimator2D::AddRangeData(
  */
 std::unique_ptr<PoseEstimator2D::MatchingResult>
 PoseEstimator2D::ProcessSynchronizedLaserData(
-    const mapping::LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
+    const preprocess::LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
   
   const common::Time& sync_time = synchronized_data.sync_time;
   

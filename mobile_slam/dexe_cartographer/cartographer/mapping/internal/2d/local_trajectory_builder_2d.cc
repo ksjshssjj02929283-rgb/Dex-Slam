@@ -218,7 +218,7 @@ LocalTrajectoryBuilder2D::AddRangeData(
  */
 std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
 LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
-    const LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
+    const preprocess::LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
   
   const common::Time& sync_time = synchronized_data.sync_time;
   

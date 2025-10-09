@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "cartographer/mapping/internal/laser_synchronizer.h"
+#include "cartographer/preprocess/laser_synchronizer.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace cartographer {
-namespace mapping {
+namespace preprocess {
 
 LaserSynchronizer::LaserSynchronizer(
     const std::vector<std::string>& expected_sensor_ids,
@@ -192,5 +192,5 @@ void LaserSynchronizer::RemoveOldData(const common::Time& cutoff_time) {
   }
 }
 
-}  // namespace mapping
+}  // namespace preprocess
 }  // namespace cartographer
