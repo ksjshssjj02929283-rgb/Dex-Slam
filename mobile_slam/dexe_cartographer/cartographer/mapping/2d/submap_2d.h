@@ -156,7 +156,7 @@ class ActiveSubmaps2D {
 
   // Inserts 'range_data' into the Submap collection.
   std::vector<std::shared_ptr<const Submap2D>> InsertRangeData(
-      const sensor::RangeData& range_data);
+      const std::vector<sensor::RangeData>& range_data_vector);
 
   // void InsertNormalData(const sensor::NormalPointCloud & normals);
 

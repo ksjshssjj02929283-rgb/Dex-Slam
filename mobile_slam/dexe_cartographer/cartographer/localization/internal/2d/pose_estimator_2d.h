@@ -153,15 +153,11 @@ class PoseEstimator2D {
 	  const sensor::RangeData& range_data) const;
 
   std::unique_ptr<InsertionResult> InsertIntoSubmap(
-    const common::Time time, const sensor::RangeData& range_data_in_local,
-    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
-    const sensor::PointCloud& highlight_point_cloud,
+    const common::Time time,
+    const preprocess::MergedData& merged_data,
+    const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
     const transform::Rigid3d& pose_estimate,
-    const Eigen::Quaterniond& gravity_alignment,
-    const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
-    const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data,
-    const std::vector<sensor::RangeData>& original_undistorted_range_datas);
+    const Eigen::Quaterniond& gravity_alignment);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
   // observed pose, or nullptr on failure.
