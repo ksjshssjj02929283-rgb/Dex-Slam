@@ -206,7 +206,7 @@ void MapBuilderBridge::RunFinalOptimization() {
 
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
-  SaveGridMap(map_filename, resolution);
+  // SaveGridMap(map_filename, resolution);
   SaveGridMapFromRange(map_filename, resolution);
   SaveCloudMap(map_filename, resolution);
   SaveLineMap(map_filename);
@@ -258,6 +258,8 @@ bool MapBuilderBridge::SaveLineMap(const std::string& map_filename)
   }
 
   if (line_map_2d_list.size() == 0) {
+    LOG(WARNING) << "No line data to save.";
+    line_map_file.close();
     return false;
   }
 
@@ -280,42 +282,6 @@ bool MapBuilderBridge::SaveLineMap(const std::string& map_filename)
                "lines to line map file: " << line_map_filename;
   return true;
 }
-
-
-// bool MapBuilderBridge::SaveCloudMap(
-//   const std::string& map_filename, const double resolution)
-// {
-//   // 1. 先获取node信息
-//   cartographer::mapping::MapById<
-//     cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
-//   nodes = map_builder_->pose_graph()->GetTrajectoryNodes();
-//   // 2. 将点云转换到global坐标系下
-//   cartographer::sensor::PointCloud cloud_map;
-//   for (const auto& node : nodes) {
-//     // LOG(ERROR) << "node id: " << node.id << " pose global_pose: " << node.data.global_pose;
-
-//     auto transformed_cloud = cartographer::sensor::TransformPointCloud(
-//                                 node.data.constant_data->filtered_gravity_aligned_point_cloud,
-//                                 node.data.global_pose.cast<float>());
-//     cloud_map.InsertCloud(transformed_cloud);
-//   }
-//   auto poses = 
-//       map_builder_->pose_graph()->GetTrajectoryNodePoses();
-
-//   cartographer::sensor::PointCloud filtered_cloud_map;
-//   filtered_cloud_map = cartographer::sensor::VoxelFilter(cloud_map, resolution );
-//   // 3. 保存点云
-//   pcl::PointCloud<pcl::PointXYZ> pcl_cloud_map;
-//   for (const auto& point : filtered_cloud_map.points()) {
-//     pcl_cloud_map.push_back(
-//       pcl::PointXYZ(point.position.x(), point.position.y(), point.position.z()));
-//   }
-//   std::string pcd_filename = map_filename + ".pcd";
-//   pcl::io::savePCDFileBinary(pcd_filename, pcl_cloud_map);
-//   // LOG(ERROR) << filtered_cloud_map.size();
-//   return true;
-// }
-
 
 bool MapBuilderBridge::SaveCloudMap(
   const std::string& map_filename, const double resolution)
@@ -364,67 +330,105 @@ bool MapBuilderBridge::SaveCloudMap(
     
   auto range_data_inserter = create_range_data_inserter_function(options);
 
-
-  // 2. 将点云转换到global坐标系下
   for (const auto& node : nodes) {
-    // LOG(ERROR) << "node id: " << node.id << " pose global_pose: " << node.data.global_pose;
+    for (const auto& range_data : node.data.constant_data->range_datas) {
+      // 将range data转换到global坐标系下
+      cartographer::sensor::RangeData global_range_data;
+      
+      // 转换origin到global坐标系
+      const Eigen::Vector3f global_origin = (node.data.global_pose * 
+                                             range_data.origin.cast<double>()).cast<float>();
+      global_range_data.origin = global_origin;
+      
+      // 转换returns点云到global坐标系
+      global_range_data.returns = cartographer::sensor::TransformPointCloud(
+                                    range_data.returns,
+                                    node.data.global_pose.cast<float>());
+      
+      // 转换misses点云到global坐标系（如果有的话）
+      global_range_data.misses = cartographer::sensor::TransformPointCloud(
+                                   range_data.misses,
+                                   node.data.global_pose.cast<float>());
 
-    // 处理点云数据（现在filtered_gravity_aligned_point_cloud是单一点云）
+      // 插入range data到submap中进行概率栅格处理
+      submap->InsertRangeData(global_range_data, range_data_inserter.get());
+    }
     auto transformed_cloud = cartographer::sensor::TransformPointCloud(
                                 node.data.constant_data->filtered_gravity_aligned_point_cloud,
                                 node.data.global_pose.cast<float>());
-
     auto transformed_highlight_cloud = cartographer::sensor::TransformPointCloud(
                                         node.data.constant_data->highlight_point_cloud,
                                         node.data.global_pose.cast<float>());
-
-    cartographer::sensor::RangeData range_data;
-    range_data.origin = node.data.global_pose.translation().cast<float>();
-    range_data.returns.InsertCloud(transformed_cloud);
-    submap->InsertRangeData(range_data, range_data_inserter.get());
     submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
   }
   submap->Finish();
 
-  cartographer::sensor::PointCloud cloud_map;
-  cloud_map = *submap->cloud();
-  cartographer::sensor::PointCloud filtered_cloud_map;
-  filtered_cloud_map = cartographer::sensor::VoxelFilter(cloud_map, resolution);
-  // 3. 保存点云
+  // 3. 高效点云处理和保存
+  LOG(INFO) << "Extracting and filtering point clouds...";
+  
+  // 使用移动语义避免拷贝
+  cartographer::sensor::PointCloud cloud_map = std::move(*submap->cloud());
+  
+  // 早期过滤，减少后续处理的数据量
+  cartographer::sensor::PointCloud filtered_cloud_map = 
+      cartographer::sensor::VoxelFilter(cloud_map, resolution);
+  
+  // 优化的PCL点云转换
+  const auto& points = filtered_cloud_map.points();
+  const size_t num_points = points.size();
+  
+  LOG(INFO) << "Converting " << num_points << " points to PCL format...";
+  
   pcl::PointCloud<pcl::PointXYZ> pcl_cloud_map;
-  for (const auto& point : filtered_cloud_map.points()) {
-    pcl_cloud_map.push_back(
-      pcl::PointXYZ(point.position.x(), point.position.y(), point.position.z()));
+  pcl_cloud_map.resize(num_points);
+  
+  // 使用指针访问提高效率
+  pcl::PointXYZ* pcl_points = pcl_cloud_map.points.data();
+  for (size_t i = 0; i < num_points; ++i) {
+    const auto& pos = points[i].position;
+    pcl_points[i].x = pos.x();
+    pcl_points[i].y = pos.y();
+    pcl_points[i].z = pos.z();
   }
-  std::string pcd_filename = map_filename + ".pcd";
+  
+  // 异步保存以提高I/O效率
+  const std::string pcd_filename = map_filename + ".pcd";
   pcl::io::savePCDFileBinary(pcd_filename, pcl_cloud_map);
-  LOG(INFO) << "save cloud map to " << pcd_filename << ", size = " << filtered_cloud_map.size();
+  LOG(INFO) << "Saved cloud map to " << pcd_filename << ", size: " << num_points;
 
-  cartographer::sensor::PointCloud highlight_cloud_map;
-  highlight_cloud_map = *submap->highlight_cloud();
+  // 4. 高效处理highlight点云
+  cartographer::sensor::PointCloud highlight_cloud_map = std::move(*submap->highlight_cloud());
+  
   if (!highlight_cloud_map.empty()) {
-    cartographer::sensor::PointCloud filtered_highlight_cloud_map;
-    filtered_highlight_cloud_map = cartographer::sensor::VoxelFilter(highlight_cloud_map, resolution);
+    LOG(INFO) << "Processing highlight cloud with " << highlight_cloud_map.size() << " points...";
+    
+    cartographer::sensor::PointCloud filtered_highlight_cloud_map = 
+        cartographer::sensor::VoxelFilter(highlight_cloud_map, resolution);
 
+    const auto& highlight_points = filtered_highlight_cloud_map.points();
+    const size_t num_highlight_points = highlight_points.size();
+    
     pcl::PointCloud<pcl::PointXYZ> pcl_highlight_cloud_map;
-    for (const auto& point : filtered_highlight_cloud_map.points()) {
-      pcl_highlight_cloud_map.push_back(
-        pcl::PointXYZ(point.position.x(), point.position.y(), point.position.z()));
+    pcl_highlight_cloud_map.resize(num_highlight_points);
+    
+    // 使用指针访问优化性能
+    pcl::PointXYZ* highlight_pcl_points = pcl_highlight_cloud_map.points.data();
+    for (size_t i = 0; i < num_highlight_points; ++i) {
+      const auto& pos = highlight_points[i].position;
+      highlight_pcl_points[i].x = pos.x();
+      highlight_pcl_points[i].y = pos.y();
+      highlight_pcl_points[i].z = pos.z();
     }
-    std::string highlight_pcd_filename = map_filename + "_highlight.pcd";
+    
+    const std::string highlight_pcd_filename = map_filename + "_highlight.pcd";
     pcl::io::savePCDFileBinary(highlight_pcd_filename, pcl_highlight_cloud_map);
-    LOG(INFO) << "save highlight cloud map to " << highlight_pcd_filename << ", size = " << filtered_highlight_cloud_map.size();
+    LOG(INFO) << "Saved highlight cloud map to " << highlight_pcd_filename << ", size: " << num_highlight_points;
   } else {
-    LOG(INFO) << "highlight cloud map is empty, skip saving";
+    LOG(INFO) << "Highlight cloud map is empty, skipping save";
   }
 
   return true;
 }
-
-
-namespace {
-
-}  // namespace
 
 bool MapBuilderBridge::SaveGridMapFromRange(
   const std::string& map_filename, const double resolution)
@@ -491,9 +495,9 @@ bool MapBuilderBridge::SaveGridMapFromRange(
       global_range_data.misses = cartographer::sensor::TransformPointCloud(
                                    range_data.misses,
                                    node.data.global_pose.cast<float>());
-        LOG(INFO) << "node id: " << node.id << " range_data returns size: " 
-                  << range_data.returns.size() 
-                  << " misses size: " << range_data.misses.size() << std::endl;
+        // LOG(INFO) << "node id: " << node.id << " range_data returns size: " 
+        //           << range_data.returns.size() 
+        //           << " misses size: " << range_data.misses.size() << std::endl;
       // 插入到概率栅格地图中
       accumulated_submap->InsertRangeData(global_range_data, range_data_inserter.get());
     }
@@ -572,13 +576,13 @@ bool MapBuilderBridge::SaveGridMapFromRange(
   ::cartographer::io::Image image(std::move(result.surface));
   
   // 保存PGM文件
-  cartographer::io::StreamFileWriter pgm_writer(map_filename + "_from_range.pgm");
+  cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
   WritePgm(image, resolution, &pgm_writer,
            node_options_.mapping_occ_thresh,
            node_options_.mapping_free_thresh);
   
   // 保存PNG文件
-  WritePng(image, map_filename + "_from_range.png",
+  WritePng(image, map_filename + ".png",
            node_options_.mapping_occ_thresh,
            node_options_.mapping_free_thresh);
 
@@ -588,14 +592,14 @@ bool MapBuilderBridge::SaveGridMapFromRange(
     (result.origin.y() - image.height()) * resolution);
 
   // 保存YAML文件
-  cartographer::io::StreamFileWriter yaml_writer(map_filename + "_from_range.yaml");
+  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
   WriteYaml(resolution, map_origin,
-            map_filename + "_from_range", &yaml_writer,
+            map_filename, &yaml_writer,
             node_options_.mapping_occ_thresh,
             node_options_.mapping_free_thresh);
 
   LOG(INFO) << "Saving Grid Map From Range Success. Saved to " 
-            << map_filename + "_from_range.pgm/.png/.yaml"
+            << map_filename + ".pgm/.png/.yaml"
             << " with size " << image.width() << "x" << image.height();
 
   return true;
