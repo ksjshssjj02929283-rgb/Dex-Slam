@@ -323,30 +323,13 @@ LocalTrajectoryBuilder2D::ProcessDataAndEstimatePose(
   // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
   UpdateLastOdomForDelta(time);
 
-  sensor::RangeData range_data_in_local =
-      TransformRangeData(merged_data.merged_range_data,
-                         transform::Embed3D(pose_estimate_2d->cast<float>()));
-
-  // 将线数据转换到local坐标系
-  std::map<int, std::vector<sensor::LineData>> lines_in_local;
-  for (const auto& data_vec: tracked_lane_data) {
-    for (const auto& line: data_vec.second) {
-      lines_in_local[data_vec.first].push_back(sensor::TransformLineData(*pose_estimate_2d, line));
-    }
-  }
-
-  // 保存原始去畸变数据（用于TrajectoryNode）
-  std::vector<sensor::RangeData> original_undistorted_range_datas = merged_data.original_undistorted_range_datas;
-
-  // 使用merged_data中的less_flat_cloud和highlight_cloud
   std::unique_ptr<InsertionResult>
     insertion_result = InsertIntoSubmap(
-      time, range_data_in_local,
-      merged_data.merged_less_flat_cloud,
-      merged_data.merged_highlight_cloud,
-      pose_estimate, gravity_alignment.rotation(),
-      lines_in_local, tracked_lane_data, merged_data.merged_reflector_data, 
-      original_undistorted_range_datas);
+      time,
+      merged_data,
+      tracked_lane_data,
+      pose_estimate,
+      gravity_alignment.rotation());
 
   // 计算local slam的频率
   const auto wall_time = std::chrono::steady_clock::now();
@@ -372,6 +355,19 @@ LocalTrajectoryBuilder2D::ProcessDataAndEstimatePose(
   last_wall_time_ = wall_time;
   last_thread_cpu_time_seconds_ = thread_cpu_time_seconds;
   
+  // 为返回值准备转换后的数据
+  sensor::RangeData range_data_in_local =
+      TransformRangeData(merged_data.merged_range_data,
+                         transform::Embed3D(pose_estimate_2d->cast<float>()));
+
+  // 将线数据转换到local坐标系
+  std::map<int, std::vector<sensor::LineData>> lines_in_local;
+  for (const auto& data_vec: tracked_lane_data) {
+    for (const auto& line: data_vec.second) {
+      lines_in_local[data_vec.first].push_back(sensor::TransformLineData(*pose_estimate_2d, line));
+    }
+  }
+
   // 返回匹配结果
   std::vector<transform::Rigid2d> particle_poses;
   return absl::make_unique<MatchingResult>(
@@ -410,68 +406,74 @@ sensor::FeatureData LocalTrajectoryBuilder2D::GetFeatureData(
  * @brief 将雷达数据插入到submap中
  * 
  * @param time 时间
- * @param range_data_in_local local系下的激光数据
- * @param filtered_gravity_aligned_point_cloud  重力对齐的激光点云
- * @param highlight_point_cloud 高亮点云
+ * @param merged_data 融合后的传感器数据
  * @param pose_estimate 估计的位姿
  * @param gravity_alignment 重力对齐的旋转
- * @param line_data_in_local local系下的线数据
- * @param tracked_lane_data 跟踪的车道线数据
- * @param reflector_data 反射器数据
- * @param original_undistorted_range_datas 原始去畸变点云数据
+ * @param tracked_lane_data 跟踪到的线特征
  * @return std::unique_ptr<LocalTrajectoryBuilder2D::InsertionResult> 插入的结果
  */
 std::unique_ptr<LocalTrajectoryBuilder2D::InsertionResult>
 LocalTrajectoryBuilder2D::InsertIntoSubmap(
-    const common::Time time, const sensor::RangeData& range_data_in_local,
-    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
-    const sensor::PointCloud& highlight_point_cloud,
+    const common::Time time,
+    const MergedData& merged_data,
+    const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
     const transform::Rigid3d& pose_estimate,
-    const Eigen::Quaterniond& gravity_alignment,
-    const std::map<int, std::vector<sensor::LineData>> & line_data_in_local,
-    const std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
-    const std::vector<sensor::LandmarkPointData> & reflector_data,
-    const std::vector<sensor::RangeData>& original_undistorted_range_datas)
+    const Eigen::Quaterniond& gravity_alignment)
 {
   // 1. 判断是否是关键帧
   if (map_insertion_motion_filter_.IsSimilar(time, pose_estimate)) {
     return nullptr;
   }
+
+  // 2. 将原始数据转换到local坐标系
+  const transform::Rigid2d pose_estimate_2d = transform::Project2D(pose_estimate);
+
+  // 转换点云到local坐标系
   sensor::PointCloud cloud_in_local =
             sensor::TransformPointCloud(
-                        filtered_gravity_aligned_point_cloud,
+                        merged_data.merged_less_flat_cloud,
                         pose_estimate.cast<float>());
 
   sensor::PointCloud highlight_cloud_in_local =
             sensor::TransformPointCloud(
-                        highlight_point_cloud,
+                        merged_data.merged_highlight_cloud,
                         pose_estimate.cast<float>());
 
-  // 2. 将合并后的激光数据插入到submap中
-  std::vector<std::shared_ptr<const Submap2D>> insertion_submaps =
-      active_submaps_.InsertRangeData(range_data_in_local);
+  // 将线数据转换到local坐标系
+  std::map<int, std::vector<sensor::LineData>> tracked_lines_in_local;
+  for (const auto& data_vec: tracked_lane_data) {
+    for (const auto& line: data_vec.second) {
+      tracked_lines_in_local[data_vec.first].push_back(sensor::TransformLineData(pose_estimate_2d, line));
+    }
+  }
 
-  // 插入合并后的云数据、线数据和反射器数据
-  active_submaps_.InsertCloudData(cloud_in_local, highlight_cloud_in_local);
-  active_submaps_.InsertLineData(line_data_in_local);
-  active_submaps_.InsertReflectorData(reflector_data);
-
-  // 3. 分别插入每个传感器的原始去畸变range data到栅格地图
-  for (const auto& original_range_data : original_undistorted_range_datas) {
-    // 将原始去畸变数据转换到local坐标系并插入到栅格地图
+  // 3. 收集所有需要插入的range data到vector中
+  std::vector<sensor::RangeData> all_range_data_to_insert;
+  
+  // 添加每个传感器的原始去畸变range data
+  for (const auto& original_range_data : merged_data.original_undistorted_range_datas) {
+    // 将原始去畸变数据转换到local坐标系
     sensor::RangeData sensor_range_data_in_local = sensor::TransformRangeData(
         original_range_data, pose_estimate.cast<float>());
-    active_submaps_.InsertRangeData(sensor_range_data_in_local);
+    all_range_data_to_insert.push_back(sensor_range_data_in_local);
   }
+  
+  // 一次性批量插入所有range data
+  std::vector<std::shared_ptr<const Submap2D>> insertion_submaps =
+      active_submaps_.InsertRangeData(all_range_data_to_insert);
+  // 插入合并后的云数据、线数据和反射器数据
+  active_submaps_.InsertCloudData(cloud_in_local, highlight_cloud_in_local);
+  active_submaps_.InsertLineData(tracked_lines_in_local);
+  active_submaps_.InsertReflectorData(merged_data.merged_reflector_data);
 
   // 3. 准备TrajectoryNode::Data所需的数据
   
-  // 直接使用已经在GetMergedData中滤波过的点云数据
-  sensor::PointCloud merged_filtered_cloud = filtered_gravity_aligned_point_cloud;
-  sensor::PointCloud merged_highlight_cloud = highlight_point_cloud;
+  // 直接使用merged_data中的数据
+  sensor::PointCloud merged_filtered_cloud = merged_data.merged_filtered_cloud;
+  sensor::PointCloud merged_highlight_cloud = merged_data.merged_highlight_cloud;
   
-  // 直接使用传入的原始去畸变range data
-  std::vector<sensor::RangeData> all_sensors_range_datas = original_undistorted_range_datas;
+  // 直接使用merged_data中的原始去畸变range data
+  std::vector<sensor::RangeData> all_sensors_range_datas = merged_data.original_undistorted_range_datas;
 
   // 4. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{
@@ -482,7 +484,7 @@ LocalTrajectoryBuilder2D::InsertIntoSubmap(
           merged_highlight_cloud, // 合并后的highlight点云
           all_sensors_range_datas, // 各个传感器的原始去畸变range data
           tracked_lane_data,
-          reflector_data,
+          merged_data.merged_reflector_data,
           {},  // 'high_resolution_point_cloud' is only used in 3D.
           {},  // 'low_resolution_point_cloud' is only used in 3D.
           {},  // 'rotational_scan_matcher_histogram' is only used in 3D.

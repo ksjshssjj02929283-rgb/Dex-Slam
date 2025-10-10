@@ -255,8 +255,7 @@ void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
   if (cloud_culling_count_ % culling_interval_ != 0) {
     return;
   }
-  std::cout << "Submap2D::CloudDataCulling(), before culling, cloud size: " << cloud_ikdtree_->PCL_Storage.size()
-            << ", highlight_cloud size: " << highlight_cloud_ikdtree_->PCL_Storage.size() << std::endl;
+
   CloudDataCulling();
 }
 
@@ -405,17 +404,28 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::submaps() const {
 }
 
 std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
-    const sensor::RangeData& range_data) {
+    const std::vector<sensor::RangeData>& range_data_vector) {
+  if (range_data_vector.empty()) {
+    return submaps();
+  }
+  
+  // 使用第一个range data的原点来决定是否需要创建新的submap
+  const sensor::RangeData& first_range_data = range_data_vector.front();
+  
   // TODO: 增加角速度过大时候，不增加submap的操作(旋转中增加submap会增大建图的误差)
   if (submaps_.empty() ||
       submaps_.back()->num_range_data() == options_.num_range_data()) {
-    AddSubmap(range_data.origin.head<2>());
+    AddSubmap(first_range_data.origin.head<2>());
   }
-  for (auto& submap : submaps_) {
-    submap->InsertRangeData(range_data, range_data_inserter_.get());
+  
+  // 批量插入所有range data
+  for (const auto& range_data : range_data_vector) {
+    for (auto& submap : submaps_) {
+      submap->InsertRangeData(range_data, range_data_inserter_.get());
+    }
   }
 
-  if (submaps_.front()->num_range_data() == 2 * options_.num_range_data()) {
+  if (!submaps_.empty() && submaps_.front()->num_range_data() >= 2 * options_.num_range_data()) {
     submaps_.front()->Finish();
 
     // static int submap_count = 0;
