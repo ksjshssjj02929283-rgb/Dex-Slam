@@ -206,10 +206,297 @@ void MapBuilderBridge::RunFinalOptimization() {
 
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
-  // SaveGridMap(map_filename, resolution);
-  SaveGridMapFromRange(map_filename, resolution);
-  SaveCloudMap(map_filename, resolution);
+  LOG(INFO) << "Starting optimized SaveMap process for " << map_filename;
+  
+  // 1. 生成统一的final submap，包含所有数据
+  auto final_submap = GenerateFinalSubmap(resolution);
+  if (!final_submap) {
+    LOG(ERROR) << "Failed to generate final submap";
+    return false;
+  }
+  
+  LOG(INFO) << "Generated final submap successfully";
+  
+  // 2. 使用同一个submap保存不同格式的地图，避免重复计算（resolution从submap中获取）
+  SaveGridMapFromRange(map_filename, final_submap);
+  SaveCloudMap(map_filename, final_submap);
   SaveLineMap(map_filename);
+  
+  LOG(INFO) << "Optimized SaveMap process completed for " << map_filename;
+  return true;
+}
+
+std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinalSubmap(const double resolution)
+{
+  LOG(INFO) << "Starting GenerateFinalSubmap with resolution: " << resolution;
+  
+  // 1. 获取所有trajectory nodes
+  cartographer::mapping::MapById<
+    cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
+  nodes = map_builder_->pose_graph()->GetTrajectoryNodes();
+  
+  if (nodes.empty()) {
+    LOG(WARNING) << "No trajectory nodes found for final submap generation";
+    return nullptr;
+  }
+  
+  LOG(INFO) << "Found " << nodes.size() << " trajectory nodes for final submap generation";
+  
+  cartographer::mapping::ValueConversionTables conversion_tables;
+
+  // 2. 获取地图范围，使用第一个节点的位置作为原点
+  const Eigen::Vector2f origin = nodes.begin()->data.global_pose.translation().head<2>().cast<float>();
+
+  // 3. 创建大的submap来积累所有数据
+  constexpr int kLargeSubmapSize = 2000;
+  auto final_submap = std::make_shared<cartographer::mapping::Submap2D>(
+      origin,
+      std::unique_ptr<cartographer::mapping::Grid2D>(
+          static_cast<cartographer::mapping::Grid2D*>(
+              absl::make_unique<cartographer::mapping::ProbabilityGrid>(
+                  cartographer::mapping::MapLimits(resolution,
+                                                   origin.cast<double>(),
+                                                   cartographer::mapping::CellLimits(kLargeSubmapSize, kLargeSubmapSize)),
+                  &conversion_tables).release())),
+      &conversion_tables,
+      std::make_unique<cartographer::sensor::PointCloud>(),
+      std::make_unique<cartographer::sensor::PointCloud>(),
+      0, std::map<int, cartographer::mapping::MapLine2D>{});
+  
+  final_submap->SetCloudCullingProb(0.65);
+
+  // 4. 设置range data插入器
+  ::cartographer::mapping::proto::ProbabilityGridRangeDataInserterOptions2D options;
+  options.set_hit_probability(0.65);
+  options.set_miss_probability(0.48);
+  options.set_insert_free_space(true);
+
+  auto range_data_inserter = 
+      absl::make_unique<cartographer::mapping::ProbabilityGridRangeDataInserter2D>(options);
+
+  LOG(INFO) << "Processing " << nodes.size() << " nodes to generate final submap";
+
+  // 5. 逐帧处理所有数据并插入到final submap中
+  for (const auto& node : nodes) {
+    // 5a. 处理range_datas（原始激光数据）
+    for (const auto& range_data : node.data.constant_data->range_datas) {
+      // 转换range data到global坐标系
+      cartographer::sensor::RangeData global_range_data;
+      
+      const Eigen::Vector3f global_origin = (node.data.global_pose * 
+                                             range_data.origin.cast<double>()).cast<float>();
+      global_range_data.origin = global_origin;
+      
+      global_range_data.returns = cartographer::sensor::TransformPointCloud(
+                                    range_data.returns,
+                                    node.data.global_pose.cast<float>());
+      
+      global_range_data.misses = cartographer::sensor::TransformPointCloud(
+                                   range_data.misses,
+                                   node.data.global_pose.cast<float>());
+
+      // 插入range data用于概率栅格处理
+      final_submap->InsertRangeData(global_range_data, range_data_inserter.get());
+    }
+
+    auto transformed_cloud = cartographer::sensor::TransformPointCloud(
+                                node.data.constant_data->filtered_gravity_aligned_point_cloud,
+                                node.data.global_pose.cast<float>());
+    auto transformed_highlight_cloud = cartographer::sensor::TransformPointCloud(
+                                        node.data.constant_data->highlight_point_cloud,
+                                        node.data.global_pose.cast<float>());
+    final_submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
+  }
+
+  // 6. 完成submap构建
+  final_submap->Finish();
+  
+  LOG(INFO) << "Final submap generation completed successfully";
+  
+  return final_submap;
+}
+
+bool MapBuilderBridge::SaveGridMapFromRange(
+  const std::string& map_filename,
+  std::shared_ptr<cartographer::mapping::Submap2D> submap)
+{
+  LOG(INFO) << "Starting SaveGridMapFromRange with provided submap for " << map_filename;
+  
+  if (!submap) {
+    LOG(ERROR) << "Provided submap is null";
+    return false;
+  }
+  
+  // 从submap的栅格地图中获取resolution
+  const double resolution = submap->grid()->limits().resolution();
+  // 创建SubmapSlice并使用PaintSubmapSlices
+  std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice> submap_slices;
+  
+  // 创建一个虚拟的submap ID
+  const ::cartographer::mapping::SubmapId virtual_id{0, 0};
+  ::cartographer::io::SubmapSlice& submap_slice = submap_slices[virtual_id];
+  
+  // 获取栅格地图
+  const cartographer::mapping::Grid2D* grid = submap->grid();
+  const cartographer::mapping::ProbabilityGrid* probability_grid = 
+      static_cast<const cartographer::mapping::ProbabilityGrid*>(grid);
+
+  // 获取地图尺寸
+  const cartographer::mapping::MapLimits& limits = probability_grid->limits();
+  const int width = limits.cell_limits().num_x_cells;
+  const int height = limits.cell_limits().num_y_cells;
+
+  LOG(INFO) << "Grid map dimensions: " << width << "x" << height;
+
+  // 创建intensity和alpha数组
+  std::vector<char> intensity_data;
+  std::vector<char> alpha_data;
+  intensity_data.reserve(width * height);
+  alpha_data.reserve(width * height);
+  
+  for (int i = 0; i < height; ++i) {
+    for (int j = 0; j < width; ++j) {
+      const Eigen::Array2i cell_index(j, i);
+      
+      if (!probability_grid->IsKnown(cell_index)) {
+        intensity_data.push_back(0);
+        alpha_data.push_back(0);
+      } else {
+        const float probability = probability_grid->GetProbability(cell_index);
+        const int log_odds_integer = ::cartographer::mapping::ProbabilityToLogOddsInteger(probability);
+        const int delta = 128 - log_odds_integer;
+        const uint8_t alpha_value = delta > 0 ? 0 : static_cast<uint8_t>(-delta);
+        const uint8_t value = delta > 0 ? static_cast<uint8_t>(delta) : 0;
+        
+        intensity_data.push_back(static_cast<char>(value));
+        alpha_data.push_back(static_cast<char>((value || alpha_value) ? alpha_value : 1));
+      }
+    }
+  }
+  
+  // 设置submap slice属性
+  submap_slice.pose = cartographer::transform::Rigid3d::Identity();
+  submap_slice.width = width;
+  submap_slice.height = height;
+  submap_slice.resolution = resolution;
+  submap_slice.slice_pose = cartographer::transform::Rigid3d::Identity();
+  submap_slice.cairo_data.clear();
+  
+  // 生成surface
+  submap_slice.surface = cartographer::io::DrawTexture(
+      intensity_data, alpha_data, width, height, &submap_slice.cairo_data);
+
+  // 使用PaintSubmapSlices
+  auto result = ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
+  
+  // 转换为Image并保存
+  ::cartographer::io::Image image(std::move(result.surface));
+  
+  // 保存文件
+  cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
+  WritePgm(image, resolution, &pgm_writer,
+           node_options_.mapping_occ_thresh,
+           node_options_.mapping_free_thresh);
+  
+  cartographer::io::StreamFileWriter png_writer(map_filename + ".png");
+  WritePng(image, map_filename + ".png",
+           node_options_.mapping_occ_thresh,
+           node_options_.mapping_free_thresh);
+
+  const Eigen::Vector2d map_origin(
+    -result.origin.x() * resolution,
+    (result.origin.y() - image.height()) * resolution);
+
+  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
+  WriteYaml(resolution, map_origin,
+            map_filename, &yaml_writer,
+            node_options_.mapping_occ_thresh,
+            node_options_.mapping_free_thresh);
+
+  LOG(INFO) << "SaveGridMapFromRange with provided submap completed. Saved to " 
+            << map_filename + ".pgm/.png/.yaml"
+            << " with size " << image.width() << "x" << image.height();
+
+  return true;
+}
+
+bool MapBuilderBridge::SaveCloudMap(
+  const std::string& map_filename,
+  std::shared_ptr<cartographer::mapping::Submap2D> submap)
+{
+  LOG(INFO) << "Starting SaveCloudMap with provided submap for " << map_filename;
+  
+  if (!submap) {
+    LOG(ERROR) << "Provided submap is null";
+    return false;
+  }
+  
+  // 从submap的栅格地图中获取resolution
+  const double resolution = submap->grid()->limits().resolution();
+
+  // 高效点云处理和保存
+  LOG(INFO) << "Extracting and filtering point clouds from provided submap...";
+  
+  // 使用移动语义避免拷贝
+  cartographer::sensor::PointCloud cloud_map = std::move(*submap->cloud());
+  
+  // 早期过滤，减少后续处理的数据量
+  cartographer::sensor::PointCloud filtered_cloud_map = 
+      cartographer::sensor::VoxelFilter(cloud_map, resolution);
+  
+  // 优化的PCL点云转换
+  const auto& points = filtered_cloud_map.points();
+  const size_t num_points = points.size();
+  
+  LOG(INFO) << "Converting " << num_points << " points to PCL format...";
+  
+  pcl::PointCloud<pcl::PointXYZ> pcl_cloud_map;
+  pcl_cloud_map.resize(num_points);
+  
+  // 使用指针访问提高效率
+  pcl::PointXYZ* pcl_points = pcl_cloud_map.points.data();
+  for (size_t i = 0; i < num_points; ++i) {
+    const auto& pos = points[i].position;
+    pcl_points[i].x = pos.x();
+    pcl_points[i].y = pos.y();
+    pcl_points[i].z = pos.z();
+  }
+  
+  // 保存主要点云
+  const std::string pcd_filename = map_filename + ".pcd";
+  pcl::io::savePCDFileBinary(pcd_filename, pcl_cloud_map);
+  LOG(INFO) << "Saved cloud map to " << pcd_filename << ", size: " << num_points;
+
+  // 处理highlight点云
+  cartographer::sensor::PointCloud highlight_cloud_map = std::move(*submap->highlight_cloud());
+  
+  if (!highlight_cloud_map.empty()) {
+    LOG(INFO) << "Processing highlight cloud with " << highlight_cloud_map.size() << " points...";
+    
+    cartographer::sensor::PointCloud filtered_highlight_cloud_map = 
+        cartographer::sensor::VoxelFilter(highlight_cloud_map, resolution);
+
+    const auto& highlight_points = filtered_highlight_cloud_map.points();
+    const size_t num_highlight_points = highlight_points.size();
+    
+    pcl::PointCloud<pcl::PointXYZ> pcl_highlight_cloud_map;
+    pcl_highlight_cloud_map.resize(num_highlight_points);
+    
+    pcl::PointXYZ* highlight_pcl_points = pcl_highlight_cloud_map.points.data();
+    for (size_t i = 0; i < num_highlight_points; ++i) {
+      const auto& pos = highlight_points[i].position;
+      highlight_pcl_points[i].x = pos.x();
+      highlight_pcl_points[i].y = pos.y();
+      highlight_pcl_points[i].z = pos.z();
+    }
+    
+    const std::string highlight_pcd_filename = map_filename + "_highlight.pcd";
+    pcl::io::savePCDFileBinary(highlight_pcd_filename, pcl_highlight_cloud_map);
+    LOG(INFO) << "Saved highlight cloud map to " << highlight_pcd_filename << ", size: " << num_highlight_points;
+  } else {
+    LOG(INFO) << "Highlight cloud map is empty, skipping save";
+  }
+
   return true;
 }
 
@@ -280,328 +567,6 @@ bool MapBuilderBridge::SaveLineMap(const std::string& map_filename)
 
   LOG(INFO) << "Save " << line_map_2d_list.size() <<
                "lines to line map file: " << line_map_filename;
-  return true;
-}
-
-bool MapBuilderBridge::SaveCloudMap(
-  const std::string& map_filename, const double resolution)
-{
-  // 1. 先获取node信息
-  cartographer::mapping::MapById<
-    cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
-  nodes = map_builder_->pose_graph()->GetTrajectoryNodes();
-  cartographer::mapping::ValueConversionTables conversion_tables;
-
-  auto create_grid_function = [&](const Eigen::Vector2f& origin)  
-    -> std::unique_ptr<cartographer::mapping::GridInterface>
-  {
-    constexpr int kInitialSubmapSize = 100;
-    return absl::make_unique<cartographer::mapping::ProbabilityGrid>(
-        cartographer::mapping::MapLimits(resolution,
-                                         origin.cast<double>() + 0.5 * kInitialSubmapSize *  
-                                         resolution *  
-                                         Eigen::Vector2d::Ones(),  
-                                         cartographer::mapping::CellLimits(kInitialSubmapSize, kInitialSubmapSize)),  
-                                         &conversion_tables);
-  };
-
-  const Eigen::Vector2f origin = nodes.begin()->data.global_pose.translation().head<2>().cast<float>();
-  std::unique_ptr<cartographer::mapping::Submap2D>
-  submap = absl::make_unique<cartographer::mapping::Submap2D>(
-                      origin,
-                      std::unique_ptr<cartographer::mapping::Grid2D>(
-                          static_cast<cartographer::mapping::Grid2D*>(create_grid_function(origin).release())),
-                      &conversion_tables,
-                      std::make_unique<cartographer::sensor::PointCloud>(),
-                      std::make_unique<cartographer::sensor::PointCloud>(),
-                      0, std::map<int, cartographer::mapping::MapLine2D>{});
-  submap->SetCloudCullingProb(0.65);
-
-  ::cartographer::mapping::proto::ProbabilityGridRangeDataInserterOptions2D options;
-  options.set_hit_probability(0.65);
-  options.set_miss_probability(0.48);
-  options.set_insert_free_space(true);
-
-  auto create_range_data_inserter_function = [](const cartographer::mapping::proto::ProbabilityGridRangeDataInserterOptions2D& options)  
-      -> std::unique_ptr<cartographer::mapping::RangeDataInserterInterface> {  
-      return absl::make_unique<cartographer::mapping::ProbabilityGridRangeDataInserter2D>(  
-          options);  
-  };  
-    
-  auto range_data_inserter = create_range_data_inserter_function(options);
-
-  for (const auto& node : nodes) {
-    for (const auto& range_data : node.data.constant_data->range_datas) {
-      // 将range data转换到global坐标系下
-      cartographer::sensor::RangeData global_range_data;
-      
-      // 转换origin到global坐标系
-      const Eigen::Vector3f global_origin = (node.data.global_pose * 
-                                             range_data.origin.cast<double>()).cast<float>();
-      global_range_data.origin = global_origin;
-      
-      // 转换returns点云到global坐标系
-      global_range_data.returns = cartographer::sensor::TransformPointCloud(
-                                    range_data.returns,
-                                    node.data.global_pose.cast<float>());
-      
-      // 转换misses点云到global坐标系（如果有的话）
-      global_range_data.misses = cartographer::sensor::TransformPointCloud(
-                                   range_data.misses,
-                                   node.data.global_pose.cast<float>());
-
-      // 插入range data到submap中进行概率栅格处理
-      submap->InsertRangeData(global_range_data, range_data_inserter.get());
-    }
-    auto transformed_cloud = cartographer::sensor::TransformPointCloud(
-                                node.data.constant_data->filtered_gravity_aligned_point_cloud,
-                                node.data.global_pose.cast<float>());
-    auto transformed_highlight_cloud = cartographer::sensor::TransformPointCloud(
-                                        node.data.constant_data->highlight_point_cloud,
-                                        node.data.global_pose.cast<float>());
-    submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
-  }
-  submap->Finish();
-
-  // 3. 高效点云处理和保存
-  LOG(INFO) << "Extracting and filtering point clouds...";
-  
-  // 使用移动语义避免拷贝
-  cartographer::sensor::PointCloud cloud_map = std::move(*submap->cloud());
-  
-  // 早期过滤，减少后续处理的数据量
-  cartographer::sensor::PointCloud filtered_cloud_map = 
-      cartographer::sensor::VoxelFilter(cloud_map, resolution);
-  
-  // 优化的PCL点云转换
-  const auto& points = filtered_cloud_map.points();
-  const size_t num_points = points.size();
-  
-  LOG(INFO) << "Converting " << num_points << " points to PCL format...";
-  
-  pcl::PointCloud<pcl::PointXYZ> pcl_cloud_map;
-  pcl_cloud_map.resize(num_points);
-  
-  // 使用指针访问提高效率
-  pcl::PointXYZ* pcl_points = pcl_cloud_map.points.data();
-  for (size_t i = 0; i < num_points; ++i) {
-    const auto& pos = points[i].position;
-    pcl_points[i].x = pos.x();
-    pcl_points[i].y = pos.y();
-    pcl_points[i].z = pos.z();
-  }
-  
-  // 异步保存以提高I/O效率
-  const std::string pcd_filename = map_filename + ".pcd";
-  pcl::io::savePCDFileBinary(pcd_filename, pcl_cloud_map);
-  LOG(INFO) << "Saved cloud map to " << pcd_filename << ", size: " << num_points;
-
-  // 4. 高效处理highlight点云
-  cartographer::sensor::PointCloud highlight_cloud_map = std::move(*submap->highlight_cloud());
-  
-  if (!highlight_cloud_map.empty()) {
-    LOG(INFO) << "Processing highlight cloud with " << highlight_cloud_map.size() << " points...";
-    
-    cartographer::sensor::PointCloud filtered_highlight_cloud_map = 
-        cartographer::sensor::VoxelFilter(highlight_cloud_map, resolution);
-
-    const auto& highlight_points = filtered_highlight_cloud_map.points();
-    const size_t num_highlight_points = highlight_points.size();
-    
-    pcl::PointCloud<pcl::PointXYZ> pcl_highlight_cloud_map;
-    pcl_highlight_cloud_map.resize(num_highlight_points);
-    
-    // 使用指针访问优化性能
-    pcl::PointXYZ* highlight_pcl_points = pcl_highlight_cloud_map.points.data();
-    for (size_t i = 0; i < num_highlight_points; ++i) {
-      const auto& pos = highlight_points[i].position;
-      highlight_pcl_points[i].x = pos.x();
-      highlight_pcl_points[i].y = pos.y();
-      highlight_pcl_points[i].z = pos.z();
-    }
-    
-    const std::string highlight_pcd_filename = map_filename + "_highlight.pcd";
-    pcl::io::savePCDFileBinary(highlight_pcd_filename, pcl_highlight_cloud_map);
-    LOG(INFO) << "Saved highlight cloud map to " << highlight_pcd_filename << ", size: " << num_highlight_points;
-  } else {
-    LOG(INFO) << "Highlight cloud map is empty, skipping save";
-  }
-
-  return true;
-}
-
-bool MapBuilderBridge::SaveGridMapFromRange(
-  const std::string& map_filename, const double resolution)
-{
-  // 1. 先获取node信息
-  cartographer::mapping::MapById<
-    cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
-  nodes = map_builder_->pose_graph()->GetTrajectoryNodes();
-  
-  if (nodes.empty()) {
-    LOG(WARNING) << "No trajectory nodes found, cannot save grid map from range.";
-    return false;
-  }
-
-  cartographer::mapping::ValueConversionTables conversion_tables;
-
-  // 获取第一个节点的位置作为原点
-  const Eigen::Vector2f origin = nodes.begin()->data.global_pose.translation().head<2>().cast<float>();
-
-  // 创建一个大的submap来积累所有的range data
-  constexpr int kLargeSubmapSize = 2000;  // 创建一个大的地图
-  std::unique_ptr<cartographer::mapping::Submap2D>
-  accumulated_submap = absl::make_unique<cartographer::mapping::Submap2D>(
-      origin,
-      std::unique_ptr<cartographer::mapping::Grid2D>(
-          static_cast<cartographer::mapping::Grid2D*>(
-              absl::make_unique<cartographer::mapping::ProbabilityGrid>(
-                  cartographer::mapping::MapLimits(resolution,
-                                                   origin.cast<double>(),
-                                                   cartographer::mapping::CellLimits(kLargeSubmapSize, kLargeSubmapSize)),
-                  &conversion_tables).release())),
-      &conversion_tables,
-      std::make_unique<cartographer::sensor::PointCloud>(),
-      std::make_unique<cartographer::sensor::PointCloud>(),
-      0, std::map<int, cartographer::mapping::MapLine2D>{});
-
-  // 设置概率栅格插入器选项
-  ::cartographer::mapping::proto::ProbabilityGridRangeDataInserterOptions2D options;
-  options.set_hit_probability(0.65);
-  options.set_miss_probability(0.48);
-  options.set_insert_free_space(true);
-
-  auto range_data_inserter = 
-      absl::make_unique<cartographer::mapping::ProbabilityGridRangeDataInserter2D>(options);
-
-  // 2. 逐帧处理激光数据并插入到栅格地图中
-  for (const auto& node : nodes) {
-    // 使用新的range_datas字段，包含了各个传感器的原始去畸变range data
-    for (const auto& range_data : node.data.constant_data->range_datas) {
-      // 将range data转换到global坐标系下
-      cartographer::sensor::RangeData global_range_data;
-      
-      // 转换origin到global坐标系
-      const Eigen::Vector3f global_origin = (node.data.global_pose * 
-                                             range_data.origin.cast<double>()).cast<float>();
-      global_range_data.origin = global_origin;
-      
-      // 转换returns点云到global坐标系
-      global_range_data.returns = cartographer::sensor::TransformPointCloud(
-                                    range_data.returns,
-                                    node.data.global_pose.cast<float>());
-      
-      // 转换misses点云到global坐标系（如果有的话）
-      global_range_data.misses = cartographer::sensor::TransformPointCloud(
-                                   range_data.misses,
-                                   node.data.global_pose.cast<float>());
-        // LOG(INFO) << "node id: " << node.id << " range_data returns size: " 
-        //           << range_data.returns.size() 
-        //           << " misses size: " << range_data.misses.size() << std::endl;
-      // 插入到概率栅格地图中
-      accumulated_submap->InsertRangeData(global_range_data, range_data_inserter.get());
-    }
-  }
-
-  // 完成submap构建
-  accumulated_submap->Finish();
-
-  // 3. 使用与SaveGridMap完全相同的流程 - 创建SubmapSlice并使用PaintSubmapSlices
-  std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice> submap_slices;
-  
-  // 创建一个虚拟的submap ID
-  const ::cartographer::mapping::SubmapId virtual_id{0, 0};
-  ::cartographer::io::SubmapSlice& submap_slice = submap_slices[virtual_id];
-  
-  // 获取栅格地图
-  const cartographer::mapping::Grid2D* grid = accumulated_submap->grid();
-  const cartographer::mapping::ProbabilityGrid* probability_grid = 
-      static_cast<const cartographer::mapping::ProbabilityGrid*>(grid);
-
-  // 获取地图尺寸
-  const cartographer::mapping::MapLimits& limits = probability_grid->limits();
-  const int width = limits.cell_limits().num_x_cells;
-  const int height = limits.cell_limits().num_y_cells;
-
-  // 创建intensity和alpha数组，使用与DrawToSubmapTexture完全相同的逻辑
-  std::vector<char> intensity_data;
-  std::vector<char> alpha_data;
-  intensity_data.reserve(width * height);
-  alpha_data.reserve(width * height);
-  
-  for (int i = 0; i < height; ++i) {
-    for (int j = 0; j < width; ++j) {
-      const Eigen::Array2i cell_index(j, i);  // 注意：这里j是x，i是y
-      
-      // 检查是否为已知区域（与DrawToSubmapTexture中的IsKnown逻辑相同）
-      if (!probability_grid->IsKnown(cell_index)) {
-        // 未知区域：intensity=0, alpha=0（与DrawToSubmapTexture完全相同）
-        intensity_data.push_back(0);
-        alpha_data.push_back(0);
-      } else {
-        // 使用与DrawToSubmapTexture完全相同的逻辑
-        // 1. 获取概率并使用ProbabilityToLogOddsInteger转换
-        const float probability = probability_grid->GetProbability(cell_index);
-        const int log_odds_integer = ::cartographer::mapping::ProbabilityToLogOddsInteger(probability);
-        
-        // 2. 计算delta值（与DrawToSubmapTexture中相同）
-        const int delta = 128 - log_odds_integer;
-        
-        // 3. 计算intensity(value)和alpha（与DrawToSubmapTexture中相同）
-        const uint8_t alpha_value = delta > 0 ? 0 : static_cast<uint8_t>(-delta);
-        const uint8_t value = delta > 0 ? static_cast<uint8_t>(delta) : 0;
-        
-        intensity_data.push_back(static_cast<char>(value));
-        alpha_data.push_back(static_cast<char>((value || alpha_value) ? alpha_value : 1));
-      }
-    }
-  }
-  
-  // 设置submap slice属性
-  submap_slice.pose = cartographer::transform::Rigid3d::Identity();
-  submap_slice.width = width;
-  submap_slice.height = height;
-  submap_slice.resolution = resolution;
-  submap_slice.slice_pose = cartographer::transform::Rigid3d::Identity();
-  submap_slice.cairo_data.clear();
-  
-  // 使用cartographer的DrawTexture函数生成surface
-  submap_slice.surface = cartographer::io::DrawTexture(
-      intensity_data, alpha_data, width, height, &submap_slice.cairo_data);
-
-  // 使用与SaveGridMap相同的PaintSubmapSlices函数
-  auto result = ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
-  
-  // 转换为Image并保存
-  ::cartographer::io::Image image(std::move(result.surface));
-  
-  // 保存PGM文件
-  cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
-  WritePgm(image, resolution, &pgm_writer,
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
-  
-  // 保存PNG文件
-  WritePng(image, map_filename + ".png",
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
-
-  // 计算地图原点（使用与SaveGridMap相同的逻辑）
-  const Eigen::Vector2d map_origin(
-    -result.origin.x() * resolution,
-    (result.origin.y() - image.height()) * resolution);
-
-  // 保存YAML文件
-  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
-  WriteYaml(resolution, map_origin,
-            map_filename, &yaml_writer,
-            node_options_.mapping_occ_thresh,
-            node_options_.mapping_free_thresh);
-
-  LOG(INFO) << "Saving Grid Map From Range Success. Saved to " 
-            << map_filename + ".pgm/.png/.yaml"
-            << " with size " << image.width() << "x" << image.height();
-
   return true;
 }
 

@@ -98,9 +98,14 @@ class MapBuilderBridge {
 
   bool SaveMap(const std::string& map_filename, const double resolution);
   bool SaveGridMap(const std::string& map_filename, const double resolution);
-  bool SaveGridMapFromRange(const std::string& map_filename, const double resolution);
-  bool SaveCloudMap(const std::string& map_filename, const double resolution);
+  bool SaveGridMapFromRange(const std::string& map_filename,
+                           std::shared_ptr<cartographer::mapping::Submap2D> submap);
+  bool SaveCloudMap(const std::string& map_filename,
+                   std::shared_ptr<cartographer::mapping::Submap2D> submap);
   bool SaveLineMap(const std::string& map_filename);
+
+  // 生成最终的统一submap，包含所有range data和point cloud数据
+  std::shared_ptr<cartographer::mapping::Submap2D> GenerateFinalSubmap(const double resolution);
 
   std::unique_ptr<::cartographer::io::SubmapTextures>
   FetchSubmapTextures(const ::cartographer::mapping::SubmapId& submap_id);
