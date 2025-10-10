@@ -255,7 +255,8 @@ void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
   if (cloud_culling_count_ % culling_interval_ != 0) {
     return;
   }
-
+  std::cout << "Submap2D::CloudDataCulling(), before culling, cloud size: " << cloud_ikdtree_->PCL_Storage.size()
+            << ", highlight_cloud size: " << highlight_cloud_ikdtree_->PCL_Storage.size() << std::endl;
   CloudDataCulling();
 }
 
@@ -418,6 +419,12 @@ void Submap2D::Finish() {
   line_map_2d_list_->LineDataCulling();
   // LOG(WARNING) << "Finishing submap...";
   CloudDataCulling();
+
+  auto start_time = std::chrono::high_resolution_clock::now();
+  FreshCloudData();
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+  LOG(INFO) << "FreshCloudData execution time: " << duration.count() << " microseconds";
   set_insertion_finished(true);
 }
 
