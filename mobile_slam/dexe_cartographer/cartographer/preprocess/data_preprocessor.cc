@@ -15,17 +15,6 @@ DataPreprocessor::DataPreprocessor(const proto::DataPreprocessorOptions& options
 {
 }
 
-absl::optional<sensor::TimedRangeData>
-DataPreprocessor::GetProcessedRangeData()
-{
-  if (accumlated_range_buff_.empty()) {
-    return absl::nullopt;
-  }
-  sensor::TimedRangeData range_data = accumlated_range_buff_.front();
-  accumlated_range_buff_.pop_front();
-  return absl::optional<sensor::TimedRangeData>(range_data);
-}
-
 /**
  * @brief 处理多个传感器的同步数据
  */
@@ -121,7 +110,6 @@ absl::optional<ProcessedSensorData> DataPreprocessor::ProcessSingleSensorData(
   }
   
   // 数据预处理（去畸变）
-  
   auto undistort_range = UndistortPointCloud(sync_laser_data);
   if (!undistort_range.has_value()) {
     LOG(WARNING) << "DataPreprocessor: Failed to get processed range data for sensor: " << sensor_id
@@ -341,8 +329,6 @@ sensor::FeatureData DataPreprocessor::GetFeatureData(
 
 absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(const sensor::TimedPointCloudOriginData& cloud_in)
 {
-  std::unique_lock<std::mutex> lock(data_mutex_);
-
   if (!options_.use_odometry()) {
     // 不使用里程计时，直接返回未去畸变的数据
     auto undistort_range_data = sensor::TimedRangeData{cloud_in.time, {{}, {}, {}}};
@@ -354,58 +340,62 @@ absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(con
     }
     return undistort_range_data;
   }
-  
-  DLOG(INFO) << "AddSyncedPointCloud: Processing cloud with time: " << cloud_in.time
-            << ", odom_buff_size: " << odom_data_buff_.size();
-            
-  // 1. 数据同步检查
-  // 要求有足够的里程计数据来进行去畸变
-  if (odom_data_buff_.empty() ||
-      odom_data_buff_.front().time > cloud_in.time)
+
+  // 1. 快速检查数据可用性（持锁时间短）
+  std::vector<sensor::OdometryData> odom_copy;
   {
-    LOG(WARNING) << "AddSyncedPointCloud: Odom data insufficient. odom_empty: " << odom_data_buff_.empty()
-                 << ", cloud_time: " << cloud_in.time;
-    if (!odom_data_buff_.empty()) {
-      LOG(WARNING) << "odom_front_time: " << odom_data_buff_.front().time;
+    std::unique_lock<std::mutex> lock(odometry_buffer_mutex_);
+    
+    // 检查里程计数据是否足够
+    if (odom_data_buff_.empty() || odom_data_buff_.front().time > cloud_in.time) {
+      LOG(WARNING) << "UndistortPointCloud: Odom data insufficient. odom_empty: " << odom_data_buff_.empty()
+                   << ", cloud_time: " << cloud_in.time;
+      if (!odom_data_buff_.empty()) {
+        LOG(WARNING) << "odom_front_time: " << odom_data_buff_.front().time;
+      }
+      return absl::nullopt;
     }
-    return absl::nullopt;
-  }
+
+    const common::Time cloud_time = cloud_in.time;
+    const common::Time latest_odom_time = odom_data_buff_.back().time;
+    const double time_diff_seconds = common::ToSeconds(cloud_time - latest_odom_time);
+    
+    // 检查时间差是否过大
+    if (time_diff_seconds > 0.1) {
+      LOG(WARNING) << "UndistortPointCloud: Odom data too old. odom_back_time: " << latest_odom_time
+                   << ", cloud_time: " << cloud_time 
+                   << ", time_diff: " << time_diff_seconds << "s";
+      return absl::nullopt;
+    }
+
+    // 复制需要的里程计数据，释放锁后进行计算
+    odom_copy.assign(odom_data_buff_.begin(), odom_data_buff_.end());
+  } // 释放锁
   
-  // 允许小的时间差异通过外插处理，只在时间差异过大时拒绝
-  const common::Time cloud_time = cloud_in.time;
-  const common::Time latest_odom_time = odom_data_buff_.back().time;
-  const double time_diff_seconds = common::ToSeconds(cloud_time - latest_odom_time);
+  LOG(INFO) << "UndistortPointCloud: Processing cloud with time: " << cloud_in.time
+            << ", odom_buff_size: " << odom_copy.size();
   
-  // 允许最大100ms的外插，超过则认为里程计数据过旧
-  if (time_diff_seconds > 0.1) {
-    LOG(WARNING) << "AddSyncedPointCloud: Odom data too old. odom_back_time: " << latest_odom_time
-                 << ", cloud_time: " << cloud_time 
-                 << ", time_diff: " << time_diff_seconds << "s";
-    return absl::nullopt;
-  }
-  
-  // 2. 获取第一个点的时间戳进行检查
+  // 2. 获取第一个点的时间戳进行检查（使用复制的数据）
   const common::Time& time = cloud_in.time;
   const common::Time time_first_point =
       time + common::FromSeconds(cloud_in.ranges.front().point_time.time);
   
-  DLOG(INFO) << "AddSyncedPointCloud: Cloud time: " << time
+  DLOG(INFO) << "UndistortPointCloud: Cloud time: " << time
             << ", first_point_time: " << time_first_point
-            << ", odom_front_time: " << odom_data_buff_.front().time;
+            << ", odom_front_time: " << odom_copy.front().time;
 
   // 检查第一个点是否太早（早于最早的里程计数据）
-  // 以及是否太晚（需要过度外插）
-  if (time_first_point < odom_data_buff_.front().time) {
-    LOG(WARNING) << "AddSyncedPointCloud: First point too early. time_first_point: " << time_first_point
-                 << ", odom_front_time: " << odom_data_buff_.front().time;
+  if (time_first_point < odom_copy.front().time) {
+    LOG(WARNING) << "UndistortPointCloud: First point too early. time_first_point: " << time_first_point
+                 << ", odom_front_time: " << odom_copy.front().time;
     return absl::nullopt;
   }
   
   // 检查第一个点是否需要过度外插
-  const double first_point_time_diff = common::ToSeconds(time_first_point - latest_odom_time);
+  const double first_point_time_diff = common::ToSeconds(time_first_point - odom_copy.back().time);
   if (first_point_time_diff > 0.1) {
-    LOG(WARNING) << "AddSyncedPointCloud: First point requires excessive extrapolation. time_first_point: " << time_first_point
-                 << ", odom_back_time: " << latest_odom_time
+    LOG(WARNING) << "UndistortPointCloud: First point requires excessive extrapolation. time_first_point: " << time_first_point
+                 << ", odom_back_time: " << odom_copy.back().time
                  << ", time_diff: " << first_point_time_diff << "s";
     return absl::nullopt;
   }
@@ -417,7 +407,7 @@ absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(con
 
   for (size_t i = 0; i < cloud_in.ranges.size(); i++) {
     common::Time time_point = time + common::FromSeconds(cloud_in.ranges[i].point_time.time);
-    range_data_poses.push_back(GetOdometryPose(time_point).cast<float>());
+    range_data_poses.push_back(GetOdometryPoseFromBuffer(time_point, odom_copy).cast<float>());
   }
 
   auto undistort_range_data = sensor::TimedRangeData{{}, {{}, {}, {}}};
@@ -578,27 +568,134 @@ transform::Rigid3d DataPreprocessor::GetOdometryPose(const common::Time& time) c
   return transform::Rigid3d(translation, rotation);
 }
 
+/**
+ * @brief 从给定缓冲区获得该点在odom下的位姿插值（无锁版本）
+ * 
+ * @param time 时间戳
+ * @param odom_buffer 里程计数据缓冲区
+ * @return transform::Rigid3d 
+ */
+transform::Rigid3d DataPreprocessor::GetOdometryPoseFromBuffer(const common::Time& time, 
+                                                               const std::vector<sensor::OdometryData>& odom_buffer) const
+{
+  if (odom_buffer.empty()) {
+    return transform::Rigid3d::Identity();
+  }
+  
+  // 如果查询时间早于最早的数据
+  if (time < odom_buffer.front().time) {
+    return odom_buffer.front().pose;
+  }
+  
+  // 如果查询时间晚于最新的数据，进行外插
+  if (time > odom_buffer.back().time) {
+    // 外插逻辑：使用最后一个数据点的速度信息
+    const auto& last = odom_buffer.back();
+    const double dt = common::ToSeconds(time - last.time);
+
+    const Eigen::Vector3d w = last.twist.angular; // 角速度
+    Eigen::Vector3d v = last.twist.linear;
+    v = last.pose.rotation() * v;  // 将线速度转换到世界坐标系
+
+    const Eigen::Vector3d t = last.pose.translation() + dt * v;
+    const Eigen::Quaterniond dq =
+        transform::AngleAxisVectorToRotationQuaternion(
+          Eigen::Vector3d(w * dt));
+    Eigen::Quaterniond q = last.pose.rotation() * dq;
+    q.normalize();
+
+    return transform::Rigid3d(t, q);
+  }
+  
+  // 从后往前查找合适的插值区间
+  auto it_lower = odom_buffer.end() - 1;
+  auto it_upper = odom_buffer.end();
+  
+  for (auto it = odom_buffer.rbegin(); it != odom_buffer.rend(); ++it) {
+    if (it->time <= time) {
+      it_lower = it.base() - 1;
+      it_upper = it_lower + 1;
+      break;
+    }
+  }
+  
+  if (it_lower == odom_buffer.end() - 1 && odom_buffer.back().time > time) {
+    return odom_buffer.front().pose;
+  }
+  
+  if (it_upper == odom_buffer.end()) {
+    return it_lower->pose;
+  }
+  
+  // 线性插值
+  const double duration_between = common::ToSeconds(it_upper->time - it_lower->time);
+  const double duration_to_lower = common::ToSeconds(time - it_lower->time);
+  
+  if (duration_between == 0) {
+    return it_lower->pose;
+  }
+  
+  const double interpolation_ratio = duration_to_lower / duration_between;
+  
+  // 插值位置
+  const Eigen::Vector3d translation = 
+      it_lower->pose.translation() + 
+      interpolation_ratio * (it_upper->pose.translation() - it_lower->pose.translation());
+  
+  // 插值旋转（球面线性插值）
+  const Eigen::Quaterniond rotation = 
+      it_lower->pose.rotation().slerp(interpolation_ratio, it_upper->pose.rotation());
+  
+  return transform::Rigid3d(translation, rotation);
+}
+
 void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data)
 {
-  std::unique_lock<std::mutex> lock(data_mutex_);
+  std::unique_lock<std::mutex> lock(odometry_buffer_mutex_);
   if (!odom_data_buff_.empty() &&
     odom_data_buff_.back().time > odometry_data.time)
   {
     return;
   }
   odom_data_buff_.push_back(odometry_data);
-  TrimOdomData();
+  
+  // 每添加100个数据点进行一次清理，避免频繁清理（约每秒一次）
+  static int add_count = 0;
+  if (++add_count >= 100) {
+    TrimOdomData();
+    add_count = 0;
+  }
+  
+  std::cout << "DataPreprocessor: Added odometry data at time: " << odometry_data.time
+            << ", odom_buff_size: " << odom_data_buff_.size() << std::endl;
 }
 
 void DataPreprocessor::TrimOdomData()
 {
   // 保留最近30秒的里程计数据用于插值
-  const auto cutoff_time = common::Time::max();
-  if (!accumlated_range_buff_.empty()) {
-    const auto latest_range_time = accumlated_range_buff_.back().time;
-    const auto cutoff_time = latest_range_time - common::FromSeconds(30.0);
-    while (!odom_data_buff_.empty() && odom_data_buff_.front().time < cutoff_time) {
-      odom_data_buff_.pop_front();
+  if (odom_data_buff_.empty()) {
+    return;
+  }
+  
+  const common::Time current_time = odom_data_buff_.back().time;
+  const common::Time cutoff_time = current_time - common::FromSeconds(10.0);
+  
+  // 优化：使用binary search快速定位需要删除的位置
+  auto it = std::lower_bound(odom_data_buff_.begin(), odom_data_buff_.end(), 
+                            cutoff_time, 
+                            [](const sensor::OdometryData& data, const common::Time& time) {
+                              return data.time < time;
+                            });
+  
+  // 批量删除过期数据，比逐个pop_front效率更高
+  if (it != odom_data_buff_.begin()) {
+    size_t removed_count = std::distance(odom_data_buff_.begin(), it);
+    odom_data_buff_.erase(odom_data_buff_.begin(), it);
+    
+    // 只在实际删除数据时打印日志
+    if (removed_count > 0) {
+      DLOG(INFO) << "TrimOdomData: Removed " << removed_count 
+                 << " old odometry entries, remaining: " << odom_data_buff_.size();
     }
   }
 }
