@@ -69,8 +69,6 @@ public:
   ~DataPreprocessor() = default;
 
 public:
-  // 原有接口保持兼容
-  absl::optional<sensor::TimedRangeData> GetProcessedRangeData();
   absl::optional<sensor::TimedRangeData> UndistortPointCloud(const sensor::TimedPointCloudOriginData& cloud_in);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
   
@@ -123,6 +121,8 @@ public:
 private:
   // 里程计插值方法
   transform::Rigid3d GetOdometryPose(const common::Time& time) const;
+  transform::Rigid3d GetOdometryPoseFromBuffer(const common::Time& time, 
+                                               const std::vector<sensor::OdometryData>& odom_buffer) const;
   void TrimOdomData();
 
   // 新增私有方法
@@ -137,8 +137,6 @@ private:
     const std::vector<laser_perception::FeatureMsgWithOrigin>& feature_data_origin);
 
 private:
-  std::mutex data_mutex_;
-  
   proto::DataPreprocessorOptions options_;
 
   std::deque<sensor::TimedRangeData> accumlated_range_buff_;
