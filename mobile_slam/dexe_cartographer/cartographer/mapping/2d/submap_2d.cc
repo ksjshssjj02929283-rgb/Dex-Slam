@@ -260,43 +260,13 @@ void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
   CloudDataCulling();
 }
 
-
-// void Submap2D::GenerateCloudKdTree()
-// {
-//   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-
-//   for (const auto& p : cloud_->points()) {
-//     pcl::PointXYZ p_pcl;
-//     p_pcl.x = p.position.x();
-//     p_pcl.y = p.position.y();
-//     p_pcl.z = p.position.z();
-//     // pcl::PointXYZ p_pcl_transformed;
-//     // pcl::transformPoint(p_pcl, p_pcl_transformed, local_pose().cast<float>());
-//     cloud_pcl->push_back(p_pcl);
-//   }
-//   cloud_kdtree_->setInputCloud(cloud_pcl);
-
-//   pcl::PointCloud<pcl::PointXYZ>::Ptr highlight_cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-
-//   for (const auto& p : highlight_cloud_->points()) {
-//     pcl::PointXYZ p_pcl;
-//     p_pcl.x = p.position.x();
-//     p_pcl.y = p.position.y();
-//     p_pcl.z = p.position.z();
-
-//     // pcl::PointXYZ p_pcl_transformed;
-//     // pcl::transformPoint(p_pcl, p_pcl_transformed, local_pose().cast<float>());
-//     highlight_cloud_pcl->push_back(p_pcl);
-//   }
-
-//   if (!highlight_cloud_pcl->empty()) {
-//     highlight_cloud_kdtree_->setInputCloud(highlight_cloud_pcl);
-//   }
-// }
-
 void Submap2D::CloudDataCulling()
 {
   const MapLimits& limits = grid_->limits();
+  // 需要先调用flatten函数，更新PCL_Storage
+  cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
+                          cloud_ikdtree_->PCL_Storage,
+                          ikd_tree::NOT_RECORD);
 
   ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_to_delete; // 用于保存需要删除的点  
   for (auto iter = cloud_ikdtree_->PCL_Storage.begin(); iter != cloud_ikdtree_->PCL_Storage.end(); iter++) {
@@ -309,11 +279,12 @@ void Submap2D::CloudDataCulling()
   }
   cloud_ikdtree_->Delete_Points(points_to_delete);
 
-  cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
-                          cloud_ikdtree_->PCL_Storage,
-                          ikd_tree::NOT_RECORD);
-
   points_to_delete.clear();
+
+  highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
+                                    highlight_cloud_ikdtree_->PCL_Storage,
+                                    ikd_tree::NOT_RECORD);
+
   for (auto iter = highlight_cloud_ikdtree_->PCL_Storage.begin(); iter != highlight_cloud_ikdtree_->PCL_Storage.end(); iter++) {
     Eigen::Vector2f p_vec(iter->x, iter->y);
     const Eigen::Array2i p_ind = limits.GetCellIndex(p_vec);
@@ -324,9 +295,6 @@ void Submap2D::CloudDataCulling()
   }
   highlight_cloud_ikdtree_->Delete_Points(points_to_delete);
 
-  highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
-                                    highlight_cloud_ikdtree_->PCL_Storage,
-                                    ikd_tree::NOT_RECORD);
   // FreshCloudData();
 }
 
