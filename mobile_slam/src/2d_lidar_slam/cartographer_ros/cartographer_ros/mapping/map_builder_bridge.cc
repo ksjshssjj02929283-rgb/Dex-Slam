@@ -33,6 +33,7 @@
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/submaps.h"
 #include "cartographer/mapping/probability_values.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -263,22 +264,66 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
       std::make_unique<cartographer::sensor::PointCloud>(),
       0, std::map<int, cartographer::mapping::MapLine2D>{});
   
-  final_submap->SetCloudCullingProb(0.65);
+  // 4. 获取配置参数并设置到final_submap - 使用第一个轨迹的参数
+  CHECK(!trajectory_options_.empty()) 
+      << "No trajectory options available for final submap generation. "
+      << "Cannot proceed without proper configuration parameters.";
+  
+  const auto& first_trajectory_options = trajectory_options_.begin()->second;
+  const auto& trajectory_builder_2d_options = first_trajectory_options.trajectory_builder_options.trajectory_builder_2d_options();
+  const auto& submaps_options = trajectory_builder_2d_options.submaps_options();
+  const auto& range_data_inserter_options = submaps_options.range_data_inserter_options();
+  const auto& line_matcher_options = trajectory_builder_2d_options.line_matcher_options();
+  
+  // 设置cloud culling参数
+  final_submap->SetCloudCullingProb(submaps_options.cloud_culling_prob());
+  
+  // 设置line culling参数
+  final_submap->SetLineCullingParam(
+      submaps_options.min_line_length(),
+      submaps_options.max_line_length(),
+      submaps_options.line_culling_obs());
+  
+  // 5. 创建line matcher用于线特征跟踪
+  std::unique_ptr<cartographer::mapping::scan_matching::LineMatcher2D> line_matcher =
+      std::make_unique<cartographer::mapping::scan_matching::LineMatcher2D>(line_matcher_options);
 
-  // 4. 设置range data插入器
+  // 6. 设置range data插入器
   ::cartographer::mapping::proto::ProbabilityGridRangeDataInserterOptions2D options;
-  options.set_hit_probability(0.65);
-  options.set_miss_probability(0.48);
-  options.set_insert_free_space(true);
+  
+  // 检查range_data_inserter类型，获取对应的参数
+  if (range_data_inserter_options.range_data_inserter_type() == 
+      ::cartographer::mapping::proto::RangeDataInserterOptions::PROBABILITY_GRID_INSERTER_2D) {
+    const auto& prob_grid_options = range_data_inserter_options.probability_grid_range_data_inserter_options_2d();
+    options.set_hit_probability(prob_grid_options.hit_probability());
+    options.set_miss_probability(prob_grid_options.miss_probability());
+    options.set_insert_free_space(prob_grid_options.insert_free_space());
+  } else {
+    // 如果不是probability grid inserter，使用默认值
+    LOG(WARNING) << "Range data inserter type is not PROBABILITY_GRID_INSERTER_2D, using default parameters";
+    options.set_hit_probability(0.65);
+    options.set_miss_probability(0.48);
+    options.set_insert_free_space(true);
+  }
+  
+  LOG(INFO) << "Configuration parameters loaded from trajectory " << trajectory_options_.begin()->first << ":";
+  LOG(INFO) << "  Cloud culling probability: " << submaps_options.cloud_culling_prob();
+  LOG(INFO) << "  Line culling parameters: min_length=" << submaps_options.min_line_length() 
+            << ", max_length=" << submaps_options.max_line_length()
+            << ", culling_obs=" << submaps_options.line_culling_obs();
+  LOG(INFO) << "  Range data inserter parameters: hit_probability=" << options.hit_probability()
+            << ", miss_probability=" << options.miss_probability()
+            << ", insert_free_space=" << options.insert_free_space();
+  LOG(INFO) << "  Created LineMatcher2D for line feature tracking";
 
   auto range_data_inserter = 
       absl::make_unique<cartographer::mapping::ProbabilityGridRangeDataInserter2D>(options);
 
   LOG(INFO) << "Processing " << nodes.size() << " nodes to generate final submap";
 
-  // 5. 逐帧处理所有数据并插入到final submap中
+  // 7. 逐帧处理所有数据并插入到final submap中
   for (const auto& node : nodes) {
-    // 5a. 处理range_datas（原始激光数据）
+    // 7a. 处理range_datas（原始激光数据）
     for (const auto& range_data : node.data.constant_data->range_datas) {
       // 转换range data到global坐标系
       cartographer::sensor::RangeData global_range_data;
@@ -299,7 +344,7 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
       final_submap->InsertRangeData(global_range_data, range_data_inserter.get());
     }
 
-    // 5b. 处理点云数据
+    // 7b. 处理点云数据
     auto transformed_cloud = cartographer::sensor::TransformPointCloud(
                                 node.data.constant_data->filtered_gravity_aligned_point_cloud,
                                 node.data.global_pose.cast<float>());
@@ -308,13 +353,45 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
                                         node.data.global_pose.cast<float>());
     final_submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
 
-    // 5c. 处理线特征数据（参考local_trajectory_builder_2d.cc中的处理）
+    // 7c. 处理线特征数据（参考local_trajectory_builder_2d.cc中的线特征跟踪处理）
     const auto& lines = node.data.constant_data->lines;
-    if (!lines.empty()) {
+    bool use_line_rematch = true; // 这里可以根据需要设置是否使用line matcher
+    if (!lines.empty() && line_matcher && use_line_rematch) {
       cartographer::transform::Rigid2d global_pose_2d = 
           cartographer::transform::Project2D(node.data.global_pose);
 
-      // 将线数据转换到global坐标系
+      // TrackLineFromMap期望接收base link坐标系下的线特征，通过pose进行转换匹配
+      // 所以这里直接使用原始的lines数据（base link坐标系下）
+      std::map<int, std::vector<cartographer::sensor::LineData>> tracked_line_data;
+      line_matcher->TrackLineFromMap(global_pose_2d, 
+                                     lines,  // 使用原始的base link坐标系下的线数据
+                                     *final_submap->line_map_2d_list(),
+                                     tracked_line_data);
+      
+      // 将跟踪后的线数据转换到global坐标系并插入到final submap
+      std::map<int, std::vector<cartographer::sensor::LineData>> global_tracked_lines;
+      for (const auto& tracked_element : tracked_line_data) {
+        for (const auto& line : tracked_element.second) {
+          cartographer::sensor::LineData global_line = 
+              cartographer::sensor::TransformLineData(global_pose_2d, line);
+          global_tracked_lines[tracked_element.first].push_back(global_line);
+        }
+      }
+      
+      // LOG(INFO) << "Tracked " << tracked_line_data.size() << " line categories with line matcher";
+      // for (const auto& category : tracked_line_data) {
+      //   LOG(INFO) << "  Category " << category.first << ": " << category.second.size() << " lines";
+      // }
+      
+      // 插入转换到global坐标系的跟踪线数据到final submap
+      if (!global_tracked_lines.empty()) {
+        final_submap->InsertLineData(global_tracked_lines);
+      }
+    } else if (!lines.empty()) {
+      // 如果没有line_matcher，直接插入转换后的线数据（回退到原始逻辑）
+      cartographer::transform::Rigid2d global_pose_2d = 
+          cartographer::transform::Project2D(node.data.global_pose);
+
       std::map<int, std::vector<cartographer::sensor::LineData>> transformed_lines;
       for (const auto& line_data_element : lines) {
         if (line_data_element.first < 0 || line_data_element.second.empty()) {
@@ -333,10 +410,11 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
     }
   }
 
-  // 6. 完成submap构建
+  // 8. 完成submap构建
   final_submap->Finish();
   
-  LOG(INFO) << "Final submap generation completed successfully";
+  LOG(INFO) << "Final submap generation completed successfully with " 
+            << final_submap->line_map_2d_list()->size() << " line features";
   
   return final_submap;
 }
@@ -571,7 +649,7 @@ bool MapBuilderBridge::SaveLineMap(const std::string& map_filename,
   line_map_file.close();
 
   LOG(INFO) << "Save " << line_map_2d_list.size() <<
-               "lines to line map file: " << line_map_filename;
+               " lines to line map file: " << line_map_filename;
   return true;
 }
 
