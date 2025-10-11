@@ -222,7 +222,7 @@ bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double res
   SaveGridMapFromRange(map_filename, final_submap);
   SaveCloudMap(map_filename, final_submap);
   SaveLineMap(map_filename, final_submap);
-  
+
   LOG(INFO) << "Optimized SaveMap process completed for " << map_filename;
   return true;
 }
@@ -477,13 +477,38 @@ bool MapBuilderBridge::SaveGridMapFromRange(
     }
   }
   
+  // 计算正确的slice_pose，参照ProbabilityGrid::DrawToSubmapTexture的实现
+  const auto& grid_limits = submap->grid()->limits();
+  
+  // 计算offset和cell_limits（模拟ComputeCroppedLimits的行为）
+  Eigen::Array2i offset = Eigen::Array2i::Zero();
+  cartographer::mapping::CellLimits cell_limits = grid_limits.cell_limits();
+  
+  // 计算max_x和max_y
+  const double max_x = grid_limits.max().x() - resolution * offset.y();
+  const double max_y = grid_limits.max().y() - resolution * offset.x();
+  
+  // 计算slice_pose，与ProbabilityGrid::DrawToSubmapTexture保持一致
+  const auto local_pose = submap->local_pose();
+  const auto slice_pose = local_pose.inverse() *
+      cartographer::transform::Rigid3d::Translation(Eigen::Vector3d(max_x, max_y, 0.));
+  
   // 设置submap slice属性
-  submap_slice.pose = cartographer::transform::Rigid3d::Identity();
+  submap_slice.pose = local_pose;
   submap_slice.width = width;
   submap_slice.height = height;
   submap_slice.resolution = resolution;
-  submap_slice.slice_pose = cartographer::transform::Rigid3d::Identity();
+  submap_slice.slice_pose = slice_pose;
   submap_slice.cairo_data.clear();
+  
+  // 调试输出：记录pose信息
+  // const auto& pose_translation = submap_slice.pose.translation();
+  // const auto& slice_pose_translation = submap_slice.slice_pose.translation();
+  // LOG(INFO) << "SaveGridMapFromRange - Local pose: (" 
+  //          << pose_translation.x() << ", " << pose_translation.y() << ", " << pose_translation.z() << ")";
+  // LOG(INFO) << "SaveGridMapFromRange - Slice pose: (" 
+  //          << slice_pose_translation.x() << ", " << slice_pose_translation.y() << ", " << slice_pose_translation.z() << ")";
+  // LOG(INFO) << "SaveGridMapFromRange - Max coordinates: max_x=" << max_x << ", max_y=" << max_y;
   
   // 生成surface
   submap_slice.surface = cartographer::io::DrawTexture(
@@ -495,12 +520,17 @@ bool MapBuilderBridge::SaveGridMapFromRange(
   // 转换为Image并保存
   ::cartographer::io::Image image(std::move(result.surface));
   
+  // 调试输出：记录关键参数
+  // LOG(INFO) << "SaveGridMapFromRange - Image size: " << image.width() << "x" << image.height()
+  //          << ", PaintResult origin: (" << result.origin.x() << ", " << result.origin.y() << ")"
+  //          << ", Resolution: " << resolution;
+  
   // 保存文件
   cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
   WritePgm(image, resolution, &pgm_writer,
            node_options_.mapping_occ_thresh,
            node_options_.mapping_free_thresh);
-  
+
   cartographer::io::StreamFileWriter png_writer(map_filename + ".png");
   WritePng(image, map_filename + ".png",
            node_options_.mapping_occ_thresh,
@@ -509,6 +539,8 @@ bool MapBuilderBridge::SaveGridMapFromRange(
   const Eigen::Vector2d map_origin(
     -result.origin.x() * resolution,
     (result.origin.y() - image.height()) * resolution);
+
+  // LOG(INFO) << "SaveGridMapFromRange - Final origin: (" << map_origin.x() << ", " << map_origin.y() << ")";
 
   cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
   WriteYaml(resolution, map_origin,
@@ -713,6 +745,11 @@ bool MapBuilderBridge::SaveGridMap(
     ::cartographer::io::PaintSubmapSlices(*submap_slices, resolution);
   // 3. 将PaintSubmapSlices转换为Image，并保存为pgm文件
   ::cartographer::io::Image image(std::move(result.surface));
+  
+  // 调试输出：记录关键参数
+  // LOG(INFO) << "SaveGridMap - Image size: " << image.width() << "x" << image.height()
+  //          << ", PaintResult origin: (" << result.origin.x() << ", " << result.origin.y() << ")"
+  //          << ", Resolution: " << resolution;
   ::cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
   WritePgm(image, resolution, &pgm_writer,
            node_options_.mapping_occ_thresh,
@@ -723,6 +760,9 @@ bool MapBuilderBridge::SaveGridMap(
   const Eigen::Vector2d origin(
     -result.origin.x() * resolution,
     (result.origin.y() - image.height()) * resolution);
+    
+  // LOG(INFO) << "SaveGridMap - Final origin: (" << origin.x() << ", " << origin.y() << ")";
+    
   // 4. 保存yaml文件
   ::cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
   WriteYaml(resolution, origin,
