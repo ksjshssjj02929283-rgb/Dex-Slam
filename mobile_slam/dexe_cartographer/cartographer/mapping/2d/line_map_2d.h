@@ -17,6 +17,8 @@
 #include <vector>
 #include <map>
 #include <utility>
+#include <limits>
+#include <algorithm>
 
 namespace cartographer
 {
@@ -53,7 +55,7 @@ public:
     const sensor::LineData & line_data);
   ~MapLine2D() {}
   const sensor::LineData & line_data() const {return line_data_;}
-  const std::vector<sensor::LineData> line_data_list()
+  const std::vector<sensor::LineData>& line_data_list() const
   {
     return line_data_list_;
   }
@@ -66,6 +68,21 @@ public:
   void SetLoseTime(int lose_time) {lose_time_ = lose_time;}
 
   void UpdateLineData(const sensor::LineData & line_data);
+
+private:
+  // 优化的端点计算方法
+  bool ComputeOptimizedEndpoints(const std::vector<Eigen::Vector2d>& points,
+                                double k, double b,
+                                Eigen::Vector2d& start_point,
+                                Eigen::Vector2d& end_point) const;
+  
+  // 点投影到直线
+  Eigen::Vector2d ProjectPointToLine(const Eigen::Vector2d& point, 
+                                    double k, double b) const;
+  
+  // 简单端点计算（回退方案）
+  sensor::LineData ComputeEndpointsFromFit(const std::vector<Eigen::Vector2d>& points,
+                                          double k, double b) const;
 };
 
 class LineMap2DList
@@ -115,6 +132,7 @@ public:
   void UpdateLineMap(
     int local_id, std::vector<sensor::LineData> line_data);
   void LineDataCulling();
+
   std::map<int, MapLine2D> GetActiveLineData() const
   {
     std::map<int, MapLine2D> res;
