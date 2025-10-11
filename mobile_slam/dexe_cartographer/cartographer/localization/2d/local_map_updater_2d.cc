@@ -118,12 +118,13 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
   double resolution = global_grid_map_->limits().resolution();
   int num_x_cells = (box_.max_x - box_.min_x) / resolution;
   int num_y_cells = (box_.max_y - box_.min_y) / resolution;
-  std::cout << "num_x_cells: " << num_x_cells << ", num_y_cells: " << num_y_cells << std::endl;
-  Eigen::Vector2d max = Eigen::Vector2d(origin_x + 0.5 * num_y_cells * resolution,
-                                        origin_y + 0.5 * num_x_cells * resolution);
-  std::cout << "origin: " << origin_x << ", " << origin_y << std::endl;
-  std::cout << "max: " << max << std::endl;
+  
+  // 以机器人位置为中心构建局部地图边界
+  Eigen::Vector2d max = Eigen::Vector2d(origin_x + 0.5 * num_x_cells * resolution,
+                                        origin_y + 0.5 * num_y_cells * resolution);
 
+  // 注意：CellLimits构造函数的参数顺序是(num_x_cells, num_y_cells)
+  // 但内部索引约定是 cell_index[0]=行(y方向), cell_index[1]=列(x方向)
   mapping::CellLimits cell_limits(num_x_cells, num_y_cells);
   mapping::MapLimits map_limits(resolution, max, cell_limits);
 
@@ -134,14 +135,18 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
                                 global_grid_map_->limits();
 
   // 给submap赋值
-  for (int i = 0; i < num_x_cells; ++i) {
-    for (int j = 0; j < num_y_cells; ++j) {
-      Eigen::Vector2f sub_cell_center = map_limits.GetCellCenter(Eigen::Array2i(i, j));
+  // 注意：Cartographer的索引约定是 Array2i[0]=行(y), Array2i[1]=列(x)
+  // 使用更清晰的变量名：row对应y方向，col对应x方向  
+  for (int row = 0; row < num_y_cells; ++row) {      // row对应y方向(Array2i[0])
+    for (int col = 0; col < num_x_cells; ++col) {    // col对应x方向(Array2i[1])
+      Eigen::Array2i local_cell_index(row, col);  // [0]=row(y), [1]=col(x)
+      Eigen::Vector2f sub_cell_center = map_limits.GetCellCenter(local_cell_index);
       Eigen::Array2i global_cell_index = global_map_limits.GetCellIndex(sub_cell_center);
       if (global_map_limits.Contains(global_cell_index)) {
-        local_grid_map_->SetProbability(Eigen::Array2i(i, j), global_grid_map_->GetProbability(global_cell_index));
+        float prob = global_grid_map_->GetProbability(global_cell_index);
+        local_grid_map_->SetProbability(local_cell_index, prob);
       } else {
-        local_grid_map_->SetProbability(Eigen::Array2i(i, j), mapping::kMinProbability);
+        local_grid_map_->SetProbability(local_cell_index, mapping::kMinProbability);
       }
     }
   }
@@ -153,7 +158,8 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
   //   Eigen::Array2i(0, 0).matrix());
 
   // 5. 将submap的grid map保存为图片，用于调试
-  local_grid_map_->DrawAsImage("/home/fengbro/dexforce/0_slam/data/", "submap.png");
+  // global_grid_map_->DrawAsImage("/home/fengbro/dexforce/0_slam/data/", "global_map.png");
+  // local_grid_map_->DrawAsImage("/home/fengbro/dexforce/0_slam/data/", "loc_map.png");
 }
 
 void LocalMapUpdater2D::UpdateLocalCloudMap()
@@ -183,7 +189,7 @@ void LocalMapUpdater2D::UpdateLocalCloudMap()
   local_cloud_ikdtree_->set_downsample_param(resolution);
   local_cloud_ikdtree_->Build(sub_cloud_pcl->points);
 
-  pcl::io::savePCDFile("/home/fengbro/dexforce/0_slam/dataaa.pcd", *sub_cloud_pcl);
+  // pcl::io::savePCDFile("/home/fengbro/dexforce/0_slam/data/loc_map.pcd", *sub_cloud_pcl);
 }
 
 std::shared_ptr<GridMap2D> LocalMapUpdater2D::global_grid_map()
