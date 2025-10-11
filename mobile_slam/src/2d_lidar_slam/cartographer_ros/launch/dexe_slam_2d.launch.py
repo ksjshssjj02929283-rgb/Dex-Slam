@@ -20,7 +20,7 @@ def generate_launch_description():
         description='Occupancy grid resolution in meters')
     config_file_arg = DeclareLaunchArgument(
         'config_file',
-        default_value='dcm_slam_2d.lua',
+        default_value='dexe_slam_2d.lua',
         description='Configuration file name')
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',

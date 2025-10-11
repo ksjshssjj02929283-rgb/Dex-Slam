@@ -79,7 +79,7 @@ def generate_launch_description():
     # RViz configuration file
     rviz_config_file = PathJoinSubstitution([
         cartographer_ros_share,
-        'configuration_files',
+        'rviz',
         'B1-2d_mapping_indoor.rviz'
     ])
 
@@ -95,7 +95,7 @@ def generate_launch_description():
         ],
         arguments=[
             '-configuration_directory', configuration_directory,
-            '-configuration_basename', 'dcm_localiztion_2d.lua',
+            '-configuration_basename', 'dexe_localization_2d.lua',
             '-map_folder', map_folder,
             '-map_name', map_name,
             '-collect_metrics', 'false'

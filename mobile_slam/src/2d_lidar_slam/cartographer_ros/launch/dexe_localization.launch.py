@@ -66,7 +66,7 @@ def generate_launch_description():
         ],
         arguments=[
             '-configuration_directory', configuration_directory,
-            '-configuration_basename', 'dcm_localiztion_2d.lua',
+            '-configuration_basename', 'dexe_localization_2d.lua',
             '-map_folder', map_folder,
             '-map_name', map_name,
             '-collect_metrics', 'false'
