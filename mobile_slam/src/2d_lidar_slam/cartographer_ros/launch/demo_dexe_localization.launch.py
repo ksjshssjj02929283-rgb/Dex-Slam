@@ -80,7 +80,7 @@ def generate_launch_description():
     rviz_config_file = PathJoinSubstitution([
         cartographer_ros_share,
         'rviz',
-        'B1-2d_mapping_indoor.rviz'
+        '2d_localization_indoor.rviz'
     ])
 
     # Localization node

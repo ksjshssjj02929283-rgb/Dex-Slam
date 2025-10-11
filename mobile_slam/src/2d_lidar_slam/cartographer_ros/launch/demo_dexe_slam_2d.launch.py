@@ -47,7 +47,7 @@ def generate_launch_description():
   )
 
   # RViz2 node with a config file path
-  rviz_config = PathJoinSubstitution([carto_share, 'rviz', 'B1-2d_mapping_indoor.rviz'])
+  rviz_config = PathJoinSubstitution([carto_share, 'rviz', '2d_mapping_indoor.rviz'])
   rviz_node = Node(
     package='rviz2',
     executable='rviz2',
