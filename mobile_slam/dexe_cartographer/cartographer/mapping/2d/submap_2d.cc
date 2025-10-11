@@ -211,8 +211,6 @@ void Submap2D::InsertRangeData(
   CHECK(highlight_cloud_);
   CHECK(!insertion_finished());
   range_data_inserter->Insert(range_data, grid_.get());
-
-  set_num_range_data(num_range_data() + 1);
 }
 
 void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
@@ -414,15 +412,16 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
   
   // TODO: 增加角速度过大时候，不增加submap的操作(旋转中增加submap会增大建图的误差)
   if (submaps_.empty() ||
-      submaps_.back()->num_range_data() == options_.num_range_data()) {
+      submaps_.back()->num_range_data() >= options_.num_range_data()) {
     AddSubmap(first_range_data.origin.head<2>());
   }
   
   // 批量插入所有range data
-  for (const auto& range_data : range_data_vector) {
-    for (auto& submap : submaps_) {
+  for (auto& submap : submaps_) {
+    for (const auto& range_data : range_data_vector) {
       submap->InsertRangeData(range_data, range_data_inserter_.get());
     }
+    submap->set_num_range_data(submap->num_range_data() + 1);
   }
 
   if (!submaps_.empty() && submaps_.front()->num_range_data() >= 2 * options_.num_range_data()) {
