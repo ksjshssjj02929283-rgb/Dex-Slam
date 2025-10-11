@@ -61,38 +61,156 @@ MapLine2D::MapLine2D(LineMapTpye type, const int global_id, const sensor::LineDa
 void MapLine2D::UpdateLineData(const sensor::LineData & line_data)
 {
   line_data_list_.push_back(line_data);
+  
+  // 动态历史数据管理 - 基于数据质量而非固定数量
   if (line_data_list_.size() > 200) {
-    line_data_list_.erase(line_data_list_.begin(), line_data_list_.begin() + 100);
+    // 保留最近的150个数据点，删除最旧的50个
+    line_data_list_.erase(line_data_list_.begin(), line_data_list_.begin() + 50);
   }
-  // 根据所有的xy拟合出直线的参数，然后更新直线的端点
-  Eigen::Vector2d max_point = {-1e5, -1e5}, min_point = {1e5, 1e5};
-  std::vector<double> xs;
-  std::vector<double> ys;
-  for (int i = 0; i < static_cast<int>(line_data_list_.size()); i++) {
-    xs.push_back(line_data_list_[i].begin()[0]);
-    ys.push_back(line_data_list_[i].begin()[1]);
-    if (line_data_list_[i].begin()[0] > max_point[0]) {
-      max_point = line_data_list_[i].begin();
-    }
-    if (line_data_list_[i].begin()[0] < min_point[0]) {
-      min_point = line_data_list_[i].begin();
-    }
-    xs.push_back(line_data_list_[i].end()[0]);
-    ys.push_back(line_data_list_[i].end()[1]);
-    if (line_data_list_[i].end()[0] > max_point[0]) {
-      max_point = line_data_list_[i].end();
-    }
-    if (line_data_list_[i].end()[0] < min_point[0]) {
-      min_point = line_data_list_[i].end();
-    }
+  
+  // 收集所有端点用于拟合
+  std::vector<double> xs, ys;
+  std::vector<Eigen::Vector2d> all_points;
+  
+  // 预分配内存提高性能
+  const size_t total_points = line_data_list_.size() * 2;
+  xs.reserve(total_points);
+  ys.reserve(total_points);
+  all_points.reserve(total_points);
+  
+  for (const auto& data : line_data_list_) {
+    // 收集起点
+    xs.push_back(data.begin()[0]);
+    ys.push_back(data.begin()[1]);
+    all_points.push_back(data.begin());
+    
+    // 收集终点
+    xs.push_back(data.end()[0]);
+    ys.push_back(data.end()[1]);
+    all_points.push_back(data.end());
   }
+  
+  // 使用RANSAC进行鲁棒拟合
   double k, b, r;
-  // LineFitting(xs, ys, &k, &b, &r);
   inliers_ = LineFittingRANSAC(xs, ys, &k, &b, &r);
-  max_point[1] = k * max_point[0] + b;
-  min_point[1] = k * min_point[0] + b;
-  line_data_ = sensor::LineData(max_point, min_point);
+  
+  // 改进的端点选择策略
+  Eigen::Vector2d optimized_start, optimized_end;
+  if (ComputeOptimizedEndpoints(all_points, k, b, optimized_start, optimized_end)) {
+    line_data_ = sensor::LineData(optimized_start, optimized_end);
+  } else {
+    // 回退到简单的端点选择
+    line_data_ = sensor::LineData(ComputeEndpointsFromFit(all_points, k, b));
+  }
+  
   lose_time_ = 0;
+}
+
+// 计算优化的端点
+bool MapLine2D::ComputeOptimizedEndpoints(const std::vector<Eigen::Vector2d>& points,
+                                         double k, double b,
+                                         Eigen::Vector2d& start_point,
+                                         Eigen::Vector2d& end_point) const
+{
+  if (points.empty()) return false;
+  
+  // 检查是否为垂直线
+  const double eps = 1e-8;
+  bool is_vertical = std::abs(k) > 1e6;  // 斜率过大认为是垂直线
+  
+  if (is_vertical) {
+    // 垂直线：按Y坐标排序
+    double min_y = std::numeric_limits<double>::max();
+    double max_y = std::numeric_limits<double>::lowest();
+    double avg_x = 0.0;
+    
+    for (const auto& point : points) {
+      min_y = std::min(min_y, point[1]);
+      max_y = std::max(max_y, point[1]);
+      avg_x += point[0];
+    }
+    avg_x /= points.size();
+    
+    start_point = Eigen::Vector2d(avg_x, min_y);
+    end_point = Eigen::Vector2d(avg_x, max_y);
+  } else {
+    // 非垂直线：投影到拟合直线上并找到最远的两个点
+    std::vector<std::pair<double, Eigen::Vector2d>> projections;
+    projections.reserve(points.size());
+    
+    for (const auto& point : points) {
+      // 将点投影到拟合直线上
+      Eigen::Vector2d projected = ProjectPointToLine(point, k, b);
+      
+      // 计算投影点在直线上的参数t（沿直线方向的距离）
+      double t = (std::abs(k) < eps) ? projected[0] : projected[0]; // 水平线用x坐标
+      if (std::abs(k) > eps) {
+        // 对于有斜率的直线，使用更稳定的参数化
+        t = projected[0] + k * projected[1];
+      }
+      
+      projections.emplace_back(t, projected);
+    }
+    
+    // 找到参数t的最小值和最大值对应的点
+    auto minmax = std::minmax_element(projections.begin(), projections.end(),
+                                     [](const auto& a, const auto& b) {
+                                       return a.first < b.first;
+                                     });
+    
+    start_point = minmax.first->second;
+    end_point = minmax.second->second;
+  }
+  
+  // 验证端点有效性
+  double distance = (end_point - start_point).norm();
+  return distance > eps && distance < 100.0;  // 合理的距离范围
+}
+
+// 将点投影到直线上
+Eigen::Vector2d MapLine2D::ProjectPointToLine(const Eigen::Vector2d& point, 
+                                             double k, double b) const
+{
+  const double eps = 1e-8;
+  
+  if (std::abs(k) > 1e6) {
+    // 垂直线 x = c，投影就是 (c, point_y)
+    double x_line = -b;  // 对于垂直线，通常表示为 x = -b/a
+    return Eigen::Vector2d(x_line, point[1]);
+  } else if (std::abs(k) < eps) {
+    // 水平线 y = b，投影就是 (point_x, b)
+    return Eigen::Vector2d(point[0], b);
+  } else {
+    // 一般直线 y = kx + b
+    // 点到直线的投影公式
+    double x_proj = (point[0] + k * (point[1] - b)) / (1 + k * k);
+    double y_proj = k * x_proj + b;
+    return Eigen::Vector2d(x_proj, y_proj);
+  }
+}
+
+// 简单的端点计算作为回退方案
+sensor::LineData MapLine2D::ComputeEndpointsFromFit(const std::vector<Eigen::Vector2d>& points,
+                                                   double k, double b) const
+{
+  if (points.empty()) {
+    return line_data_;  // 返回原有数据
+  }
+  
+  // 找到X坐标的最小值和最大值对应的点
+  auto x_minmax = std::minmax_element(points.begin(), points.end(),
+                                     [](const Eigen::Vector2d& a, const Eigen::Vector2d& b) {
+                                       return a[0] < b[0];
+                                     });
+  
+  Eigen::Vector2d min_point = *x_minmax.first;
+  Eigen::Vector2d max_point = *x_minmax.second;
+  
+  // 将Y坐标投影到拟合直线上
+  min_point[1] = k * min_point[0] + b;
+  max_point[1] = k * max_point[0] + b;
+  
+  return sensor::LineData(min_point, max_point);
 }
 
 LineMap2DList::LineMap2DList(
@@ -253,23 +371,36 @@ void LineMap2DList::SetCullingParam(
 
 void LineMap2DList::LineDataCulling()
 {
-  for (auto it = line_map_data_list_.begin(); it != line_map_data_list_.end();)
-  {
-    const int local_id = it->first;
-    const double length = it->second.line_data().length();
-    const int inliers = it->second.inliers();
-    if (observations_[local_id] < culling_obs_ ||
+  std::vector<int> to_remove;
+  
+  // 收集需要删除的线段ID
+  for (const auto& it : line_map_data_list_) {
+    const int local_id = it.first;
+    const double length = it.second.line_data().length();
+    const int inliers = it.second.inliers();
+    
+    // 检查观测次数
+    auto obs_it = observations_.find(local_id);
+    const size_t obs_count = (obs_it != observations_.end()) ? obs_it->second : 0;
+    
+    // 删除条件：观测次数不足、长度超出范围、内点数量过少
+    if (obs_count < static_cast<size_t>(culling_obs_) ||
         length < min_line_length_ ||
-        length > max_line_length_)
-    {
-      it = line_map_data_list_.erase(it);
-    } else {
-      ++it;
+        length > max_line_length_ ||
+        inliers < 3) {  // 添加内点数量检查
+      to_remove.push_back(local_id);
     }
   }
-  LOG(INFO) << "line size after culling : " << line_map_data_list_.size() << std::endl;
+  
+  // 批量删除
+  for (int local_id : to_remove) {
+    line_map_data_list_.erase(local_id);
+    observations_.erase(local_id);  // 同步清理observations_
+  }
+  // LOG(INFO) << "Line culling: removed " << to_remove.size() 
+  //       << "/" << line_map_data_list_.size() + to_remove.size() << " lines, remaining: " << line_map_data_list_.size()
+  //       << " (removal rate: " << (100.0 * to_remove.size() / (line_map_data_list_.size() + to_remove.size())) << "%)";
 }
-
 
 void LinearRegression(const std::vector<double> &xs, const std::vector<double> &ys, double &a, double &b) {
   double xmean = 0.0, ymean = 0.0;  
