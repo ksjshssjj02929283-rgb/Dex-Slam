@@ -220,7 +220,7 @@ bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double res
   // 2. 使用同一个submap保存不同格式的地图，避免重复计算（resolution从submap中获取）
   SaveGridMapFromRange(map_filename, final_submap);
   SaveCloudMap(map_filename, final_submap);
-  SaveLineMap(map_filename);
+  SaveLineMap(map_filename, final_submap);
   
   LOG(INFO) << "Optimized SaveMap process completed for " << map_filename;
   return true;
@@ -299,6 +299,7 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
       final_submap->InsertRangeData(global_range_data, range_data_inserter.get());
     }
 
+    // 5b. 处理点云数据
     auto transformed_cloud = cartographer::sensor::TransformPointCloud(
                                 node.data.constant_data->filtered_gravity_aligned_point_cloud,
                                 node.data.global_pose.cast<float>());
@@ -306,6 +307,30 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
                                         node.data.constant_data->highlight_point_cloud,
                                         node.data.global_pose.cast<float>());
     final_submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
+
+    // 5c. 处理线特征数据（参考local_trajectory_builder_2d.cc中的处理）
+    const auto& lines = node.data.constant_data->lines;
+    if (!lines.empty()) {
+      cartographer::transform::Rigid2d global_pose_2d = 
+          cartographer::transform::Project2D(node.data.global_pose);
+
+      // 将线数据转换到global坐标系
+      std::map<int, std::vector<cartographer::sensor::LineData>> transformed_lines;
+      for (const auto& line_data_element : lines) {
+        if (line_data_element.first < 0 || line_data_element.second.empty()) {
+          continue;
+        }
+        
+        for (const auto& line : line_data_element.second) {
+          cartographer::sensor::LineData transformed_line = 
+              cartographer::sensor::TransformLineData(global_pose_2d, line);
+          transformed_lines[line_data_element.first].push_back(transformed_line);
+        }
+      }
+      
+      // 插入线数据到final submap
+      final_submap->InsertLineData(transformed_lines);
+    }
   }
 
   // 6. 完成submap构建
@@ -500,40 +525,20 @@ bool MapBuilderBridge::SaveCloudMap(
   return true;
 }
 
-bool MapBuilderBridge::SaveLineMap(const std::string& map_filename)
+bool MapBuilderBridge::SaveLineMap(const std::string& map_filename,
+                                   std::shared_ptr<cartographer::mapping::Submap2D> submap)
 {
-  cartographer::mapping::MapById<
-    cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
-  nodes = map_builder_->pose_graph()->GetTrajectoryNodes();
-  // 这里的每个节点中的线特征都是跟踪到的线特征
-  cartographer::mapping::LineMap2DList line_map_2d_list;
-  for (const auto& node : nodes) {
-    // 获取每个节点的线特征
-    const auto& lines = node.data.constant_data->lines;
-    if (lines.empty()) {
-      continue;
-    }
-
-    cartographer::transform::Rigid2d global_pose_2d =
-            cartographer::transform::Project2D(node.data.global_pose);
-
-    for (const auto& line_data_element : lines) {
-      if (line_data_element.first < 0 ||
-          line_data_element.second.empty())
-      {
-        continue;
-      }
-      // 获取每个节点的位姿
-      std::map<int, std::vector<cartographer::sensor::LineData>> line_in_local;
-      for (const auto& line: line_data_element.second) {
-        line_map_2d_list.UpdateLineMap(
-                            line_data_element.first,
-                            {cartographer::sensor::TransformLineData(global_pose_2d, line)});
-      }
-    }
+  LOG(INFO) << "Starting SaveLineMap with provided submap for " << map_filename;
+  
+  if (!submap) {
+    LOG(ERROR) << "Provided submap is null";
+    return false;
   }
-  line_map_2d_list.SetCullingParam(0.3, 7.0, 1);
-  line_map_2d_list.LineDataCulling();
+
+  // 直接从submap中获取line map数据
+  const cartographer::mapping::LineMap2DList& line_map_2d_list = *submap->line_map_2d_list();
+  
+  LOG(INFO) << "Extracted " << line_map_2d_list.size() << " lines from submap";
 
   std::string line_map_filename = map_filename + "_line_map.json";
 

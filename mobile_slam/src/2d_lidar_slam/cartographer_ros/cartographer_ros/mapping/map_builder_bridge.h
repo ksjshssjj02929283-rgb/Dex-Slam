@@ -102,7 +102,8 @@ class MapBuilderBridge {
                            std::shared_ptr<cartographer::mapping::Submap2D> submap);
   bool SaveCloudMap(const std::string& map_filename,
                    std::shared_ptr<cartographer::mapping::Submap2D> submap);
-  bool SaveLineMap(const std::string& map_filename);
+  bool SaveLineMap(const std::string& map_filename,
+                   std::shared_ptr<cartographer::mapping::Submap2D> submap);
 
   // 生成最终的统一submap，包含所有range data和point cloud数据
   std::shared_ptr<cartographer::mapping::Submap2D> GenerateFinalSubmap(const double resolution);
