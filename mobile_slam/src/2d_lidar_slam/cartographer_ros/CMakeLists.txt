@@ -186,7 +186,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 # endif()
 
 # 安装共享资源（ROS 2：安装到 share/${PROJECT_NAME}）
-install(DIRECTORY launch urdf configuration_files
+install(DIRECTORY launch urdf configuration_files rviz
   DESTINATION share/${PROJECT_NAME}
 )
 
