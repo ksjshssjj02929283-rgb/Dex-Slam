@@ -104,13 +104,13 @@ TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_angle_radians = math.rad(3
 
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.hit_probability = 0.65
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.miss_probability = 0.48
-TRAJECTORY_BUILDER_2D.submaps.num_range_data = 100
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 50
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.04
 
 -- [[回环检测参数]]
 POSE_GRAPH.constraint_builder.min_score = 0.55
 POSE_GRAPH.constraint_builder.max_constraint_distance = 10.
-POSE_GRAPH.optimize_every_n_nodes = 100
+POSE_GRAPH.optimize_every_n_nodes = 50
 POSE_GRAPH.optimization_problem.local_slam_pose_translation_weight = 1e5
 POSE_GRAPH.optimization_problem.local_slam_pose_rotation_weight = 1e5
 POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e4
