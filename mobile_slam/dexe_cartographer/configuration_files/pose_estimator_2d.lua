@@ -87,13 +87,13 @@ POSE_ESTIMATOR_2D = {
   },
 
   local_map_updater = {
-    min_x = -10.,
-    max_x = 10.,
-    min_y = -10.,
-    max_y = 10.,
+    min_x = -15.,
+    max_x = 15.,
+    min_y = -15.,
+    max_y = 15.,
     min_z = -1.,
     max_z = 1.,
-    update_threshold = 5.,
+    update_threshold = 7.5,
   },
 
   use_online_correlative_scan_matching = true,

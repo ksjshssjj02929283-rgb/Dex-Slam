@@ -156,7 +156,7 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
 
   local_map_updater_->UpdateRobotPose(transform::Project2D(initial_pose));
   if (!local_map_updater_->IsLocalMapUpdated()) {
-    LOG(ERROR) << "Local map is not updated! This should not happen!";
+    LOG(WARNING) << "There is no need to update local map for initial pose setting!";
     return false;
   }
 
@@ -423,7 +423,7 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
   // 重定位逻辑
   if (loc_state_ == LocalizationState::RELOCALIZING) {
     CHECK(pose_initializer_ != nullptr);
-    pose_initializer_->UpdateSensorData(merged_data.merged_range_data.returns,
+    pose_initializer_->UpdateSensorData(merged_data.merged_filtered_cloud,
                                         merged_data.merged_line_data);
 
     PoseInitializerStatus initializer_status =

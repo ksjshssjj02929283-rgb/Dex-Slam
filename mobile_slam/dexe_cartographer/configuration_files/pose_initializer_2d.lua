@@ -14,10 +14,10 @@
 
 POSE_INITIALIZER_2D = {
   use_global_matching = false,
-  global_localization_min_score = 0.3,
+  global_localization_min_score = 0.5,
   fast_correlative_scan_matcher = {
-    linear_search_window = 1.,
-    angular_search_window = math.rad(30.),
+    linear_search_window = 5.,
+    angular_search_window = math.rad(360.),
     branch_and_bound_depth = 7,
   },
 
