@@ -8,6 +8,7 @@ Panels:
         - /RobotModel1/Description Topic1
         - /TF1/Tree1
         - /MappingMap1/Topic1
+        - /MatchedCloud1
         - /SubmapsDisplay1/Submaps1
         - /Trajectories1/Namespaces1
         - /Constraints1/Namespaces1
@@ -17,7 +18,7 @@ Panels:
         - /Odometry1/Covariance1/Orientation1
         - /FeatureMap1
       Splitter Ratio: 0.42203986644744873
-    Tree Height: 2348
+    Tree Height: 1641
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -40,7 +41,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: ""
+    SyncSource: MatchedCloud
 Visualization Manager:
   Class: ""
   Displays:
@@ -75,13 +76,40 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: false
+        base_footprint:
+          Value: true
+        base_link:
+          Value: true
+        camera_01_depth_optical_frame:
+          Value: true
+        camera_02_depth_optical_frame:
+          Value: true
+        camera_03_depth_optical_frame:
+          Value: true
+        camera_04_depth_optical_frame:
+          Value: true
+        camera_04_link_color:
+          Value: true
+        imu_link:
+          Value: true
+        laser_back_link:
+          Value: true
+        laser_forward_link:
+          Value: true
+        map:
+          Value: true
+        merged_laser_link:
+          Value: true
+        odom:
+          Value: true
       Marker Scale: 0.30000001192092896
       Name: TF
       Show Arrows: true
       Show Axes: true
       Show Names: true
       Tree:
-        {}
+        map:
+          {}
       Update Interval: 0
       Value: true
     - Alpha: 0.699999988079071
@@ -96,13 +124,13 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /mapping_map
+        Value: /map
       Update Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mapping_map_updates
+        Value: /map_updates
       Use Timestamp: false
       Value: false
     - Alpha: 1
@@ -127,7 +155,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.03999999910593033
+      Size (m): 0.05000000074505806
       Style: Flat Squares
       Topic:
         Depth: 5
@@ -149,6 +177,25 @@ Visualization Manager:
       Submaps:
         All: true
         All Submap Pose Markers: true
+        Trajectory 0:
+          0.100: true
+          1.100: true
+          10.100: true
+          11.100: true
+          12.100: true
+          13.100: true
+          14.69: true
+          15.19: true
+          2.100: true
+          3.100: true
+          4.100: true
+          5.100: true
+          6.100: true
+          7.100: true
+          8.100: true
+          9.100: true
+          Submap Pose Markers: true
+          Value: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -162,7 +209,7 @@ Visualization Manager:
       Enabled: true
       Name: Trajectories
       Namespaces:
-        {}
+        Trajectory 0: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -174,7 +221,12 @@ Visualization Manager:
       Enabled: true
       Name: Constraints
       Namespaces:
-        {}
+        Inter constraints, different trajectories: true
+        Inter constraints, same trajectory: true
+        Inter residuals, different trajectories: true
+        Inter residuals, same trajectory: true
+        Intra constraints: false
+        Intra residuals: false
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -319,7 +371,7 @@ Visualization Manager:
           Enabled: true
           Name: LocalFeatureMap
           Namespaces:
-            {}
+            global_line: true
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -331,7 +383,7 @@ Visualization Manager:
           Enabled: true
           Name: MatchedFeature
           Namespaces:
-            {}
+            global_line: true
           Topic:
             Depth: 5
             Durability Policy: Volatile
@@ -341,6 +393,27 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: FeatureMap
+    - Alpha: 1
+      Arrow Length: 0.30000001192092896
+      Axes Length: 0.30000001192092896
+      Axes Radius: 0.009999999776482582
+      Class: rviz_default_plugins/PoseArray
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.07000000029802322
+      Head Radius: 0.029999999329447746
+      Name: PoseArray
+      Shaft Length: 0.23000000417232513
+      Shaft Radius: 0.009999999776482582
+      Shape: Arrow (Flat)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /particle_poses
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -387,29 +460,34 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -1.7350003719329834
-      Class: rviz_default_plugins/TopDownOrtho
+      Class: rviz_default_plugins/Orbit
+      Distance: 42.21797180175781
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
+      Focal Point:
+        X: 5.8836774826049805
+        Y: 4.790468692779541
+        Z: -0.43588703870773315
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 68.66041564941406
+      Pitch: 1.5697963237762451
       Target Frame: map
-      Value: TopDownOrtho (rviz_default_plugins)
-      X: 6.838924407958984
-      Y: 0.11849687993526459
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 2.9273626804351807
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 2752
+  Height: 2045
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000004000000000000041200000a24fc020000000cfb0000001200530065006c0065006300740069006f006e00000001e10000009b000000b000fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000006e00000a240000018200fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb00000018004e0061007600690067006100740069006f006e002000320000000324000000b70000000000000000fb0000000c00540065006c0065006f007000000002af00000164000000d400fffffffb00000008005700790063006100000003a500000100000000d400fffffffb0000000800540069006d00650000000484000000bf0000005a00ffffff000000010000015f00000a24fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000006e00000a240000013200fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004420000003efc0100000001fb0000000800540069006d0065010000000000000450000000000000000000000deb00000a2400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000004000000000000041200000761fc020000000cfb0000001200530065006c0065006300740069006f006e00000001e10000009b000000b000fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000006e000007610000018200fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb00000018004e0061007600690067006100740069006f006e002000320000000324000000b70000000000000000fb0000000c00540065006c0065006f007000000002af00000164000000d400fffffffb00000008005700790063006100000003a500000100000000d400fffffffb0000000800540069006d00650000000484000000bf0000005a00ffffff000000010000015f00000761fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000006e000007610000013200fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004420000003efc0100000001fb0000000800540069006d006501000000000000045000000000000000000000090e0000076100000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Teleop:
@@ -420,8 +498,8 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: false
-  Width: 4980
+  Width: 3735
   Wyca:
     collapsed: false
-  X: 5260
-  Y: 54
+  X: 6268
+  Y: 231

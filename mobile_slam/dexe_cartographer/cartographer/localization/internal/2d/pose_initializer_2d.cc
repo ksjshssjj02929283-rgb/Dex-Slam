@@ -359,7 +359,11 @@ std::shared_ptr<transform::Rigid2d> PoseInitializer::GetEstimatedPose()
     return nullptr;
   }
 
-  return global_pose_estimate_;
+  // 返回全局估计位姿的副本
+  if (global_pose_estimate_) {
+    return std::make_shared<transform::Rigid2d>(*global_pose_estimate_);
+  }
+  return nullptr;
 }
 
 bool PoseInitializer::IsPoseValid(const transform::Rigid2d& pose,

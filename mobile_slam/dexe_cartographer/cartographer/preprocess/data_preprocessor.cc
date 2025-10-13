@@ -372,8 +372,8 @@ absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(con
     odom_copy.assign(odom_data_buff_.begin(), odom_data_buff_.end());
   } // 释放锁
   
-  LOG(INFO) << "UndistortPointCloud: Processing cloud with time: " << cloud_in.time
-            << ", odom_buff_size: " << odom_copy.size();
+  // LOG(INFO) << "UndistortPointCloud: Processing cloud with time: " << cloud_in.time
+  //           << ", odom_buff_size: " << odom_copy.size();
   
   // 2. 获取第一个点的时间戳进行检查（使用复制的数据）
   const common::Time& time = cloud_in.time;
@@ -666,8 +666,8 @@ void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data
     add_count = 0;
   }
   
-  std::cout << "DataPreprocessor: Added odometry data at time: " << odometry_data.time
-            << ", odom_buff_size: " << odom_data_buff_.size() << std::endl;
+  // std::cout << "DataPreprocessor: Added odometry data at time: " << odometry_data.time
+  //           << ", odom_buff_size: " << odom_data_buff_.size() << std::endl;
 }
 
 void DataPreprocessor::TrimOdomData()

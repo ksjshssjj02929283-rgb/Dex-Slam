@@ -58,7 +58,7 @@ POSE_INITIALIZER_2D.use_global_matching = false
 POSE_ESTIMATOR_2D.data_preprocessor.min_range = 0.2
 POSE_ESTIMATOR_2D.data_preprocessor.max_range = 15.
 POSE_ESTIMATOR_2D.data_preprocessor.missing_data_ray_length = 5.
-POSE_ESTIMATOR_2D.data_preprocessor.use_deskew = false
+POSE_ESTIMATOR_2D.data_preprocessor.use_deskew = true
 POSE_ESTIMATOR_2D.data_preprocessor.use_odometry = true
 POSE_ESTIMATOR_2D.data_preprocessor.enable_feature_detection = true
 
