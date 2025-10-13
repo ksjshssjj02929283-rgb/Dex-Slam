@@ -224,31 +224,40 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   // The online correlative scan matcher will refine the initial estimate for
   // the Ceres scan matcher.
 
-  // LOG(INFO) << "prediction: "<< pose_prediction;
+  // LOG(INFO) << "Initial prediction: " << pose_prediction;
 
-  // 3. 如果使用correlative方法，则先用correlative方法进行位姿估计
-  //    相关性扫描匹配器，速度快，但是精度低
-  transform::Rigid2d correlative_pose = pose_prediction;
-  transform::Rigid2d initial_ceres_pose = pose_prediction;
-
-  common::TicToc tic_correlative;
+  // 3. 进行correlative scan matching以获得更好的初始位姿估计
+  transform::Rigid2d optimized_pose_prediction = pose_prediction;
+  bool correlative_success = false;
+  
   if (options_.use_online_correlative_scan_matching()) {
+    common::TicToc tic_correlative;
+    transform::Rigid2d correlative_pose = pose_prediction;
     const double score = real_time_correlative_scan_matcher_.Match(
-      pose_prediction, filtered_gravity_aligned_point_cloud,
-      *matching_submap->grid(), &correlative_pose);
-      kRealTimeCorrelativeScanMatcherScoreMetric->Observe(score);
-    // LOG(INFO) << "correlative score: " << score;
-    if (score > 0.4) {
-      transform::Rigid2d temp(pose_prediction.translation(), correlative_pose.rotation());
-      initial_ceres_pose = temp;
+        pose_prediction, filtered_gravity_aligned_point_cloud,
+        *matching_submap->grid(), &correlative_pose);
+    
+    kRealTimeCorrelativeScanMatcherScoreMetric->Observe(score);
+    
+    // 根据匹配分数决定是否使用correlative结果
+    if (score > 0.4 && correlative_pose.IsValid()) {
+      // 使用correlative的旋转，但保持预测的位置（更保守的策略）
+      optimized_pose_prediction = transform::Rigid2d(
+          pose_prediction.translation(), 
+          correlative_pose.rotation());
+      correlative_success = true;
+      LOG(INFO) << "Correlative matching successful, score: " << score 
+                << ", optimized pose: " << optimized_pose_prediction;
     } else {
-      initial_ceres_pose = pose_prediction;
-      LOG(WARNING) << "Correlative scan matching score is too small, abond correlative pose";
+      LOG(WARNING) << "Correlative matching failed or low score: " << score 
+                   << ", using original prediction";
     }
+    double correlative_time = tic_correlative.toc();
+    LOG(INFO) << "Correlative scan matcher cost: " << correlative_time << " ms";
   }
-  double correlative_time = tic_correlative.toc();
-  // LOG(INFO) << "correlative scan matcher cost time: " << correlative_time << " ms";
-  // std::cout << "initial_ceres_pose: " << initial_ceres_pose << std::endl;
+  
+  // 最终用于Ceres优化的初始位姿
+  transform::Rigid2d initial_ceres_pose = optimized_pose_prediction;
 
   // LOG(INFO) << "csm: " << initial_ceres_pose;
   std::map<int, std::vector<sensor::LineData>> global_tracked_lane_data;
@@ -485,36 +494,51 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     return nullptr;
   }
 
-  // 根据激光雷达时间戳获取delta pose（关键帧之间的位姿增量）
-  const transform::Rigid3d odom_delta_pose = GetOdomDeltaPose(time);
-  const auto pose_prediction_odom = transform::Project2D(local_pose_ * odom_delta_pose);
+  // 计算位姿预测值，确保有效性
+  transform::Rigid2d pose_prediction;
+  bool pose_prediction_valid = false;
   
-  // 更新AMCL
-  if (!amcl_core_->IsInitialized()) {
-    amcl_core_->SetInitialPose(transform::Project2D(local_pose_));
-  } else {
-    // 获取当前里程计数据用于AMCL更新
-    auto current_odom = GetOdometryAtTime(time);
-    if (current_odom.has_value()) {
-      amcl_core_->UpdateWithSensorData(time,
-                                       merged_data.merged_filtered_cloud,
-                                       *current_odom);
+  // 1. 尝试从里程计获取delta pose预测
+  const transform::Rigid3d odom_delta_pose = GetOdomDeltaPose(time);
+  if (local_pose_.IsValid() && odom_delta_pose.IsValid()) {
+    const auto pose_prediction_odom = transform::Project2D(local_pose_ * odom_delta_pose);
+    if (pose_prediction_odom.IsValid()) {
+      pose_prediction = pose_prediction_odom;
+      pose_prediction_valid = true;
+      LOG(INFO) << "Using odometry prediction: " << pose_prediction;
     }
   }
-
-  const auto amcl_pose = amcl_core_->GetPose2D();
-
-  transform::Rigid2d pose_prediction;
-  if (amcl_pose) {
-    double delta_dist = (pose_prediction_odom.translation() - amcl_pose->translation()).norm();
-    if (delta_dist > 0.1) {
-      LOG(INFO) << "predict pose by odom";
-      pose_prediction = pose_prediction_odom;
-    } else {
-      pose_prediction = *amcl_pose;
+  
+  // 2. 尝试从AMCL获取位姿预测
+  if (!amcl_core_->IsInitialized() && pose_prediction_valid) {
+    amcl_core_->SetInitialPose(pose_prediction);
+  } else if (amcl_core_->IsInitialized()) {
+    auto current_odom = GetOdometryAtTime(time);
+    if (current_odom.has_value()) {
+      amcl_core_->UpdateWithSensorData(time, merged_data.merged_filtered_cloud, *current_odom);
     }
-  } else {
-    pose_prediction = pose_prediction_odom;
+    
+    const auto amcl_pose = amcl_core_->GetPose2D();
+    if (amcl_pose && amcl_pose->IsValid() && pose_prediction_valid) {
+      double delta_dist = (pose_prediction.translation() - amcl_pose->translation()).norm();
+      if (delta_dist < 0.1) {  // AMCL和里程计预测接近，使用AMCL
+        pose_prediction = *amcl_pose;
+        LOG(INFO) << "Using AMCL prediction: " << pose_prediction;
+      } else {
+        LOG(WARNING) << "AMCL pose differs too much from odom prediction, delta: " << delta_dist;
+      }
+    }
+  }
+  
+  // 3. 如果没有有效的预测位姿，使用上次的位姿作为初始值
+  if (!pose_prediction_valid) {
+    if (local_pose_.IsValid()) {
+      pose_prediction = transform::Project2D(local_pose_);
+      LOG(WARNING) << "Using last known pose as prediction: " << pose_prediction;
+    } else {
+      LOG(ERROR) << "No valid pose prediction available, using identity";
+      pose_prediction = transform::Rigid2d::Identity();
+    }
   }
 
   const sensor::PointCloud& filtered_gravity_aligned_point_cloud = merged_data.merged_filtered_cloud;
@@ -541,21 +565,28 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   const transform::Rigid3d pose_estimate =
       transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
   local_pose_ = pose_estimate;
-  
+
   // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
   UpdateLastOdomForDelta(time);
 
   local_map_updater_->UpdateRobotPose(*pose_estimate_2d);
 
-  if (amcl_pose != nullptr) {
-    double delta_dist = (amcl_pose->translation() - pose_estimate_2d->translation()).norm();
-    // 检查距离计算结果是否有效
-    if (!std::isfinite(delta_dist)) {
-      LOG(WARNING) << "Delta distance calculation resulted in invalid value, resetting AMCL";
-      amcl_core_->SetInitialPose(*pose_estimate_2d);
-    } else if (delta_dist > 0.1) {
-      LOG(WARNING) << "delta_dist: " << delta_dist << ", resetting AMCL pose";
-      amcl_core_->SetInitialPose(*pose_estimate_2d);
+  // 在AMCL已初始化时进行位姿校验
+  if (amcl_core_->IsInitialized()) {
+    const auto amcl_pose = amcl_core_->GetPose2D();
+    if (amcl_pose && amcl_pose->IsValid() && pose_estimate_2d->IsValid()) {
+      double delta_dist = (amcl_pose->translation() - pose_estimate_2d->translation()).norm();
+      
+      if (!std::isfinite(delta_dist)) {
+        LOG(WARNING) << "Invalid delta distance, resetting AMCL";
+        amcl_core_->SetInitialPose(*pose_estimate_2d);
+      } else if (delta_dist > 0.15) {  // 稍微放宽阈值
+        LOG(WARNING) << "AMCL pose diverged from scan match result, delta: " << delta_dist 
+                     << ", resetting AMCL";
+        amcl_core_->SetInitialPose(*pose_estimate_2d);
+      } else {
+        LOG(INFO) << "AMCL and scan match poses are consistent, delta: " << delta_dist;
+      }
     }
   }
 
@@ -607,9 +638,14 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   last_thread_cpu_time_seconds_ = thread_cpu_time_seconds;
   
   // 返回匹配结果
+  std::vector<transform::Rigid2d> particle_poses;
+  if (amcl_core_->IsInitialized()) {
+    particle_poses = amcl_core_->GetParticlePoses();
+  }
+  
   return absl::make_unique<MatchingResult>(
       MatchingResult{time, local_pose_,
-                     std::move(amcl_core_->GetParticlePoses()),
+                     std::move(particle_poses),
                      std::move(range_data_in_local),
                      std::move(lines_in_local),
                      std::move(insertion_result)});
