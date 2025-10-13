@@ -127,6 +127,11 @@ class Rigid2 {
                             translation().y(), rotation().angle());
   }
 
+  bool IsValid() const {
+    return !std::isnan(translation_.x()) && !std::isnan(translation_.y()) &&
+           !std::isnan(rotation_.angle());
+  }
+
  private:
   Vector translation_;
   Rotation2D rotation_;
