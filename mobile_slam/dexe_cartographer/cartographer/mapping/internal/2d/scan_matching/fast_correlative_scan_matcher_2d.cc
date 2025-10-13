@@ -252,10 +252,11 @@ bool FastCorrelativeScanMatcher2D::MatchWithSearchParameters(
       precomputation_grid_stack_->max_depth(), min_score);
   if (best_candidate.score > min_score) {
     *score = best_candidate.score;
+    const Eigen::Rotation2Dd final_rotation = initial_rotation * Eigen::Rotation2Dd(best_candidate.orientation);
     *pose_estimate = transform::Rigid2d(
         {initial_pose_estimate.translation().x() + best_candidate.x,
          initial_pose_estimate.translation().y() + best_candidate.y},
-        initial_rotation * Eigen::Rotation2Dd(best_candidate.orientation));
+        common::NormalizeAngleDifference(final_rotation.angle()));
     return true;
   }
   return false;
