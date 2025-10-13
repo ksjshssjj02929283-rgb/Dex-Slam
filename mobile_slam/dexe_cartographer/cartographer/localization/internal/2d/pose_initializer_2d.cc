@@ -60,6 +60,7 @@ void PoseInitializer::Initialize()
 
 void PoseInitializer::ResetStatus()
 {
+  // 注意：此函数现在期望在锁内被调用
   need_apply_initial_pose_ = false;
 
   initial_pose_.reset();
@@ -79,6 +80,8 @@ void PoseInitializer::InitGlobalGridMap(const std::shared_ptr<GridMap2D>& grid_m
 {
   std::unique_lock<std::mutex> lock(data_mutex_);
   global_grid_map_ = grid_map;
+  // 地图更新时重置快速匹配器，下次使用时重新创建
+  fast_correlative_scan_matcher_.reset();
 }
 
 void PoseInitializer::InitGlobalCloudMap(const std::shared_ptr<CloudMap2D>& cloud_map)
@@ -111,6 +114,7 @@ void PoseInitializer::InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2D
 
 bool PoseInitializer::SetInitialPose(const transform::Rigid2d &initial_pose)
 {
+  std::unique_lock<std::mutex> lock(data_mutex_);
   // 将3为的位姿变成二维的
   initial_pose_ = std::make_shared<transform::Rigid2d>(initial_pose);
   global_pose_estimate_.reset();
@@ -129,6 +133,10 @@ void PoseInitializer::UpdateSensorData(const sensor::PointCloud& scan_cloud,
 void PoseInitializer::start()
 {
   std::unique_lock<std::mutex> lock(data_mutex_);
+  if (working_) {
+    LOG(WARNING) << "PoseInitializer is already working";
+    return;
+  }
   Initialize();
   working_ = true;
   CreateRelocalzationThread();
@@ -136,11 +144,18 @@ void PoseInitializer::start()
 
 void PoseInitializer::stop()
 {
-  std::unique_lock<std::mutex> lock(data_mutex_);
-  working_ = false;
+  {
+    std::unique_lock<std::mutex> lock(data_mutex_);
+    working_ = false;
+    data_cv_.notify_all();  // 唤醒等待线程以便退出
+  }
+  
+  // 在锁外等待线程结束，避免死锁
   if (relocalization_thread_ && relocalization_thread_->joinable()) {
       relocalization_thread_->join();
   }
+  
+  std::unique_lock<std::mutex> lock(data_mutex_);
   ResetStatus();
 }
 
@@ -153,15 +168,31 @@ void PoseInitializer::CreateRelocalzationThread()
 
 void PoseInitializer::Run()
 {
+  LOG(INFO) << "PoseInitializer relocalization thread started";
+  
   while (working_) {
-    RelocalzationOnce();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::unique_lock<std::mutex> lock(data_mutex_);
+    
+    // 等待超时（500ms）或者停止信号
+    data_cv_.wait_for(lock, std::chrono::milliseconds(500), [this] {
+      return !working_;
+    });
+    
+    if (!working_) {
+      break;
+    }
+    
+    // 检查是否有数据并且需要重新定位
+    if (curr_cloud_ != nullptr && !curr_cloud_->empty() && need_apply_initial_pose_) {
+      RelocalzationOnce();  // 在锁内执行定位，保证数据一致性
+    }
   }
+  
+  LOG(INFO) << "PoseInitializer relocalization thread stopped";
 }
 
 void PoseInitializer::RelocalzationOnce()
 {
-  std::unique_lock<std::mutex> lock(data_mutex_);
   if (global_grid_map_ == nullptr) {
     LOG(ERROR) << "Global grid map is not initialized, please set global grid map first.";
     initializer_status_ = PoseInitializerStatus::NotInitialized;

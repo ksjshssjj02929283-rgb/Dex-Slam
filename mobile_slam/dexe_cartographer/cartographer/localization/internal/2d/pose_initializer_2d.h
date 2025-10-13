@@ -130,6 +130,7 @@ private:
 
   std::unique_ptr<std::thread> relocalization_thread_;
   std::mutex data_mutex_;
+  std::condition_variable data_cv_;
   std::shared_ptr<sensor::PointCloud> curr_cloud_;
   std::shared_ptr<std::vector<sensor::LineData>> curr_line_data_;
 
