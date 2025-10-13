@@ -246,8 +246,10 @@ void PoseInitializer::RelocalzationOnce()
   LOG(INFO) << "fast scan matcher score: " << score;
   LOG(INFO) << "fast scan matcher pose: " << fast_correlative_pose;
 
+  const double fast_dist_th = options_.fast_correlative_scan_matcher_options().linear_search_window();
+  const double angular_th = options_.fast_correlative_scan_matcher_options().angular_search_window();
   // 确保 fast_correlative_scan_matcher 不会得到一个离谱的值
-  if (!IsPoseValid(*initial_pose_, fast_correlative_pose, 1.0)) {
+  if (!IsPoseValid(*initial_pose_, fast_correlative_pose, fast_dist_th, angular_th)) {
     LOG(ERROR) << "initial pose is not valid, apply initial pose failed.";
     initializer_status_ = PoseInitializerStatus::Failed;
     return;
