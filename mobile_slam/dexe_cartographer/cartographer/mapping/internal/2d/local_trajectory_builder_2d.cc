@@ -152,19 +152,37 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
 
   // 4. 使用ceres进行位姿估计，得到pose_observation
   //    使用点到地图的误差作为cost function
+  
+  // 构建地图数据结构
+  scan_matching::CeresScanMatcher2D::MapData map_data;
+  map_data.grid = matching_submap->grid();
+  map_data.line_map = matching_submap->line_map_2d_list();
+  map_data.cloud_ikdtree = matching_submap->cloud_ikdtree();
+  map_data.highlight_cloud_ikdtree = matching_submap->highlight_cloud_ikdtree();
+  map_data.tracked_line_data = &tracked_lane_data;
+  
   auto pose_observation = absl::make_unique<transform::Rigid2d>();
   ceres::Solver::Summary summary;
-  ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
-                            filtered_gravity_aligned_point_cloud,
-                            highlight_point_cloud,
-                            tracked_lane_data,
-                            *matching_submap->grid(), *matching_submap->line_map_2d_list(),
-                            *matching_submap->cloud_ikdtree(),
-                            *matching_submap->highlight_cloud_ikdtree(),
-                            pose_observation.get(),
-                            &summary);
+  
+  // 使用新的优化接口进行建图匹配
+  ceres_scan_matcher_.Match(
+      initial_ceres_pose,
+      filtered_gravity_aligned_point_cloud,
+      highlight_point_cloud,
+      map_data,
+      pose_observation.get(),
+      &cov,  // 现在协方差会被正确计算
+      &summary);
 
   // LOG(INFO) << "scan match: " << *pose_observation;
+  
+  // 可选：记录匹配质量
+  if (summary.IsSolutionUsable()) {
+    double pos_uncertainty = std::sqrt(cov(0,0) + cov(1,1));
+    double ang_uncertainty = std::sqrt(cov(2,2));
+    VLOG(2) << "Scan match uncertainty - pos: " << pos_uncertainty 
+            << " m, ang: " << ang_uncertainty << " rad";
+  }
 
   // 5. 如果匹配成功，向Metric中增加观测信息
   if (pose_observation) {

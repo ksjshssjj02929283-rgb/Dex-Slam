@@ -317,38 +317,71 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 
   // 4. 使用ceres进行位姿估计，得到pose_observation
   //    使用点到地图的误差作为cost function
+  
+  // 构建局部地图数据结构
+  mapping::scan_matching::CeresScanMatcher2D::MapData local_map;
+  local_map.grid = matching_submap->grid();
+  local_map.line_map = matching_submap->line_map_2d_list();
+  local_map.cloud_ikdtree = matching_submap->cloud_ikdtree();
+  local_map.tracked_line_data = &tracked_lane_data;
+  
+  // 构建全局地图数据结构
+  auto local_grid_map = local_map_updater_->local_grid_map();
+  auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
+  
+  mapping::scan_matching::CeresScanMatcher2D::MapData global_map;
+  global_map.grid = local_grid_map.get();
+  global_map.line_map = global_line_map_.get();
+  global_map.cloud_ikdtree = local_cloud_ikdtree.get();
+  global_map.highlight_cloud_ikdtree = global_highlight_cloud_ikdtree_.get();
+  global_map.tracked_line_data = &global_tracked_lane_data;
+  
   auto pose_observation = absl::make_unique<transform::Rigid2d>();
   ceres::Solver::Summary summary;
 
-  auto local_grid_map = local_map_updater_->local_grid_map();
-  auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
   common::TicToc tic_toc;
 
-  ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
-                          filtered_gravity_aligned_point_cloud,
-                          highlight_point_cloud,
-                          tracked_lane_data,
-                          global_tracked_lane_data,
-                          *matching_submap->grid(), *local_grid_map,
-                          *matching_submap->line_map_2d_list(), *global_line_map_,
-                          *matching_submap->cloud_ikdtree(),
-                          *local_cloud_ikdtree,
-                          *global_highlight_cloud_ikdtree_,
-                          pose_observation.get(), cov,
-                          &summary);
+  // 使用新的优化接口进行定位匹配
+  ceres_scan_matcher_.MatchForLocalization(
+      initial_ceres_pose,
+      filtered_gravity_aligned_point_cloud,
+      highlight_point_cloud,
+      local_map,
+      global_map,
+      pose_observation.get(),
+      &cov,  // 协方差会被正确计算
+      &summary);
+  
   double match_time = tic_toc.toc();
   // LOG(INFO) << "ceres scan matcher cost time: " << match_time << " ms";
   // time_file_ << match_time << std::endl;
 
-  // ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
-  //                           filtered_gravity_aligned_point_cloud,
-  //                           *laser_perception_->getHighlightCloud(),
-  //                           *global_grid_map_,
-  //                           *local_cloud_ikdtree.get(),
-  //                           *global_highlight_cloud_ikdtree_,
-  //                           pose_observation.get(),
-  //                           &summary);
-  cov = amcl_core_->GetCovariance();
+  // 使用AMCL的协方差（如果可用）
+  Eigen::Matrix3d amcl_cov = amcl_core_->GetCovariance();
+  if (amcl_cov.norm() > 1e-6) {
+    cov = amcl_cov;
+  }
+  
+  // 评估定位质量
+  if (summary.IsSolutionUsable()) {
+    double pos_uncertainty = std::sqrt(cov(0,0) + cov(1,1));
+    double ang_uncertainty = std::sqrt(cov(2,2));
+    
+    VLOG(2) << "Localization uncertainty - pos: " << pos_uncertainty 
+            << " m, ang: " << ang_uncertainty << " rad";
+    
+    // 根据不确定性更新定位状态
+    if (pos_uncertainty < 0.05 && ang_uncertainty < 0.02) {
+      // 高质量定位
+      if (loc_state_ != LocalizationState::LOCALIZED) {
+        LOG(INFO) << "High quality localization achieved";
+      }
+      loc_state_ = LocalizationState::LOCALIZED;
+    } else if (pos_uncertainty > 0.2 || ang_uncertainty > 0.1) {
+      LOG(WARNING) << "High localization uncertainty detected";
+    }
+  }
+  
   if (!summary.IsSolutionUsable() || summary.final_cost == -1 ||
       std::isinf(summary.final_cost) || std::isnan(summary.final_cost))
   {
@@ -358,14 +391,20 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
       initial_ceres_pose, filtered_gravity_aligned_point_cloud,
       *local_grid_map, &initial_ceres_pose);
 
-    ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
-                              filtered_gravity_aligned_point_cloud,
-                              highlight_point_cloud,
-                              *local_grid_map,
-                              *local_cloud_ikdtree,
-                              *global_highlight_cloud_ikdtree_,
-                              pose_observation.get(),
-                              &summary);
+    // 构建简化的地图数据用于回退策略
+    mapping::scan_matching::CeresScanMatcher2D::MapData fallback_map;
+    fallback_map.grid = local_grid_map.get();
+    fallback_map.cloud_ikdtree = local_cloud_ikdtree.get();
+    fallback_map.highlight_cloud_ikdtree = global_highlight_cloud_ikdtree_.get();
+    
+    ceres_scan_matcher_.Match(
+        initial_ceres_pose,
+        filtered_gravity_aligned_point_cloud,
+        highlight_point_cloud,
+        fallback_map,
+        pose_observation.get(),
+        nullptr,  // 回退模式不计算协方差以节省时间
+        &summary);
 
     active_submaps_.clear();
     if (!summary.IsSolutionUsable() || summary.final_cost == -1 ||

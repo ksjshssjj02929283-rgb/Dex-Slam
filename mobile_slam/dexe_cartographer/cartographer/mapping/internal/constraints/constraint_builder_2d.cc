@@ -312,14 +312,23 @@ void ConstraintBuilder2D::ComputeConstraint(
                                     *submap_scan_matcher.line_map_2d_list,
                                     tracked_line_data);
   
-  ceres_scan_matcher_.Match(pose_estimate.translation(), pose_estimate,
-                            constant_data->filtered_gravity_aligned_point_cloud,
-                            tracked_line_data,
-                            *submap_scan_matcher.grid,
-                            *submap_scan_matcher.line_map_2d_list,
-                            *submap_scan_matcher.cloud_ikdtree,
-                            &pose_estimate,
-                            &unused_summary);
+  // Use new optimized interface for mapping
+  scan_matching::CeresScanMatcher2D::MapData map_data;
+  map_data.grid = submap_scan_matcher.grid;
+  map_data.line_map = submap_scan_matcher.line_map_2d_list;
+  map_data.tracked_line_data = &tracked_line_data;
+  map_data.cloud_ikdtree = submap_scan_matcher.cloud_ikdtree;
+  
+  sensor::PointCloud empty_highlight_cloud;  // No highlight points in constraint building
+  Eigen::Matrix3d covariance;  // Not used here
+  
+  ceres_scan_matcher_.Match(pose_estimate,
+                           constant_data->filtered_gravity_aligned_point_cloud,
+                           empty_highlight_cloud,
+                           map_data,
+                           &pose_estimate,
+                           &covariance,
+                           &unused_summary);
 
   // Step:4 获取节点到submap坐标系原点间的坐标变换
   const transform::Rigid2d constraint_transform =

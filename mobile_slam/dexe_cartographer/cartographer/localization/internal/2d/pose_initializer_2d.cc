@@ -311,15 +311,23 @@ void PoseInitializer::RelocalzationOnce()
                                     tracked_lane_data);
   }
 
-  ceres_scan_matcher_->Match(initial_pose_->translation(),
-                            *initial_pose_,
-                            *curr_cloud_,
-                            tracked_lane_data,
-                            *global_grid_map_,
-                            *global_line_map_,
-                            *global_cloud_ikdtree_,
-                            global_pose_estimate_.get(),
-                            &summary);
+  // Use new optimized interface
+  mapping::scan_matching::CeresScanMatcher2D::MapData map_data;
+  map_data.grid = global_grid_map_.get();
+  map_data.line_map = global_line_map_.get();
+  map_data.tracked_line_data = &tracked_lane_data;
+  map_data.cloud_ikdtree = global_cloud_ikdtree_.get();
+  
+  sensor::PointCloud empty_highlight_cloud;
+  Eigen::Matrix3d covariance;
+  
+  ceres_scan_matcher_->Match(*initial_pose_,
+                              *curr_cloud_,
+                              empty_highlight_cloud,
+                              map_data,
+                              global_pose_estimate_.get(),
+                              &covariance,
+                              &summary);
 
   if (!IsRelocalizationSuccess()) {
     global_pose_estimate_.reset();
@@ -422,15 +430,23 @@ void PoseInitializer::GlobalRelocalzationOnce()
                                     tracked_lane_data);
   }
 
-  ceres_scan_matcher_->Match(initial_pose_->translation(),
-                            *initial_pose_,
-                            *curr_cloud_,
-                            tracked_lane_data,
-                            *global_grid_map_,
-                            *global_line_map_,
-                            *global_cloud_ikdtree_,
-                            global_pose_estimate_.get(),
-                            &summary);
+  // Use new optimized interface
+  mapping::scan_matching::CeresScanMatcher2D::MapData map_data;
+  map_data.grid = global_grid_map_.get();
+  map_data.line_map = global_line_map_.get();
+  map_data.tracked_line_data = &tracked_lane_data;
+  map_data.cloud_ikdtree = global_cloud_ikdtree_.get();
+  
+  sensor::PointCloud empty_highlight_cloud;
+  Eigen::Matrix3d covariance;
+  
+  ceres_scan_matcher_->Match(*initial_pose_,
+                              *curr_cloud_,
+                              empty_highlight_cloud,
+                              map_data,
+                              global_pose_estimate_.get(),
+                              &covariance,
+                              &summary);
 
   if (!IsRelocalizationSuccess()) {
     global_pose_estimate_.reset();

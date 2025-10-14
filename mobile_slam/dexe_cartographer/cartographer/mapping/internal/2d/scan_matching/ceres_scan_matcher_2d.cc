@@ -74,1365 +74,530 @@ CeresScanMatcher2D::CeresScanMatcher2D(
 
 CeresScanMatcher2D::~CeresScanMatcher2D() {}
 
-// for localization
-void CeresScanMatcher2D::Match(
-  const Eigen::Vector2d & target_translation,
-  const transform::Rigid2d & initial_pose_estimate,
-  const sensor::PointCloud & point_cloud,
-  const sensor::PointCloud & highlight_point_cloud,
-  const std::map<int, std::vector<sensor::LineData>> & local_tracked_line_data,
-  const std::map<int, std::vector<sensor::LineData>> & global_tracked_line_data,
-  const Grid2D & local_grid, const Grid2D & global_grid,
-  const LineMap2DList & local_line_map, const LineMap2DList & global_line_map,
-  ikd_tree::iKdTree<pcl::PointXYZ> & local_cloud_ikdtree,
-  ikd_tree::iKdTree<pcl::PointXYZ> & global_cloud_ikdtree,
-  ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
-  transform::Rigid2d * const pose_estimate,
-  Eigen::Matrix3d& cov,
-  ceres::Solver::Summary * const summary) const
+void CeresScanMatcher2D::MatchForLocalization(
+    const transform::Rigid2d& initial_pose_estimate,
+    const sensor::PointCloud& point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
+    const MapData& local_map,
+    const MapData& global_map,
+    transform::Rigid2d* const pose_estimate,
+    Eigen::Matrix3d* const covariance,
+    ceres::Solver::Summary* const summary) const
 {
-  // 添加断言，确保输入点云不为空
-  assert(point_cloud.size() > 0 && "point_cloud must not be empty");
-  assert(highlight_point_cloud.size() > 0 && "highlight_point_cloud must not be empty");
-  assert(pose_estimate != nullptr && "pose_estimate pointer must not be null");
-  assert(summary != nullptr && "summary pointer must not be null");
+  CHECK(pose_estimate != nullptr);
+  CHECK(summary != nullptr);
+  CHECK(!point_cloud.empty()) << "point_cloud must not be empty";
 
-  double ceres_pose_estimate[3] = {initial_pose_estimate.translation().x(),
-    initial_pose_estimate.translation().y(),
-    initial_pose_estimate.rotation().angle()};
-  
-  // std::cout << "initial_pose_estimate: " << initial_pose_estimate << std::endl;
-  CHECK_GT(options_.occupied_space_weight(), 0.);
-  CHECK_GT(options_.line_weight(), 0.);
-  CHECK_GT(options_.point_weight(), 0.);
+  double ceres_pose_estimate[3] = {
+      initial_pose_estimate.translation().x(),
+      initial_pose_estimate.translation().y(),
+      initial_pose_estimate.rotation().angle()
+  };
 
+  // Two-pass optimization for better convergence
   for (size_t opti_counter = 0; opti_counter < 2; ++opti_counter) {
     ceres::Problem problem;
-    if (options_.local_weight_factor() > 1e-3) {
-      // LOG(WARNING) << "Using local grid ";
-      switch (local_grid.GetGridType()) {
-        case GridType::PROBABILITY_GRID:
-          problem.AddResidualBlock(
-            CreateOccupiedSpaceCostFunction2D(
-              options_.occupied_space_weight() * options_.local_weight_factor() /
-              std::sqrt(static_cast<double>(point_cloud.size())),
-              point_cloud, local_grid),
-            nullptr /* loss function */, ceres_pose_estimate);
-          break;
-        case GridType::TSDF:
-          problem.AddResidualBlock(
-            CreateTSDFMatchCostFunction2D(
-              options_.occupied_space_weight() * options_.local_weight_factor() /
-              std::sqrt(static_cast<double>(point_cloud.size())),
-              point_cloud, static_cast<const TSDF2D &>(local_grid)),
-            nullptr /* loss function */, ceres_pose_estimate);
-          break;
+
+    // Add local map constraints if available
+    if (local_map.grid != nullptr && options_.local_weight_factor() > 1e-3) {
+      AddGridConstraints(problem, point_cloud, *local_map.grid,
+                        options_.occupied_space_weight() * options_.local_weight_factor(),
+                        ceres_pose_estimate);
+      
+      if (local_map.line_map != nullptr && local_map.tracked_line_data != nullptr) {
+        AddLineConstraints(problem, *local_map.tracked_line_data, *local_map.line_map,
+                          options_.line_weight() * options_.local_weight_factor(),
+                          ceres_pose_estimate);
+      }
+      
+      if (local_map.cloud_ikdtree != nullptr) {
+        AddPointToLineConstraints(problem, point_cloud, *local_map.cloud_ikdtree,
+                                 options_.point_weight() * options_.local_weight_factor(),
+                                 ceres_pose_estimate);
       }
     }
-    switch (global_grid.GetGridType()) {
-      case GridType::PROBABILITY_GRID:
-        problem.AddResidualBlock(
-          CreateOccupiedSpaceCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, global_grid),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
-      case GridType::TSDF:
-        problem.AddResidualBlock(
-          CreateTSDFMatchCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, static_cast<const TSDF2D &>(global_grid)),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
+
+    // Add global map constraints
+    if (global_map.grid != nullptr) {
+      AddGridConstraints(problem, point_cloud, *global_map.grid,
+                        options_.occupied_space_weight(),
+                        ceres_pose_estimate);
+      
+      if (global_map.line_map != nullptr && global_map.tracked_line_data != nullptr) {
+        AddLineConstraints(problem, *global_map.tracked_line_data, *global_map.line_map,
+                          options_.line_weight(),
+                          ceres_pose_estimate);
+      }
+      
+      if (global_map.cloud_ikdtree != nullptr) {
+        AddPointToLineConstraints(problem, point_cloud, *global_map.cloud_ikdtree,
+                                 options_.point_weight(),
+                                 ceres_pose_estimate);
+      }
     }
 
-    CHECK_GT(options_.translation_weight(), 0.);
+    // Add highlight point constraints
+    if (global_map.highlight_cloud_ikdtree != nullptr && !highlight_point_cloud.empty()) {
+      AddHighlightPointConstraints(problem, highlight_point_cloud,
+                                   *global_map.highlight_cloud_ikdtree,
+                                   options_.point_weight() * 3.0,
+                                   ceres_pose_estimate);
+    }
 
+    // Add regularization constraints
+    CHECK_GT(options_.translation_weight(), 0.);
     problem.AddResidualBlock(
-      TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.translation_weight(),
-        initial_pose_estimate.translation()),
-      nullptr /* loss function */, ceres_pose_estimate);
+        TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.translation_weight(),
+            initial_pose_estimate.translation()),
+        nullptr, ceres_pose_estimate);
 
     CHECK_GT(options_.rotation_weight(), 0.);
     problem.AddResidualBlock(
-      RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.rotation_weight(), ceres_pose_estimate[2]),
-      nullptr /* loss function */, ceres_pose_estimate);
+        RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.rotation_weight(), ceres_pose_estimate[2]),
+        nullptr, ceres_pose_estimate);
 
-    if (options_.local_weight_factor() > 1e-3) {
-      // LOG(WARNING) << "Using local line ";
-      // 对于每一个跟踪到的线特征
-      double local_line_parallel_weight
-                = options_.line_weight() / 2 / static_cast<double>(local_tracked_line_data.size());
-      double local_line_angle_weight
-                = options_.line_weight() * 2 / static_cast<double>(local_tracked_line_data.size());
-      for (auto iter : local_tracked_line_data) {
-        // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
-        if (iter.first < 0 ||
-          local_line_map.GetLineMapData2DList().count(iter.first) == 0)
-        {
-          continue;
-        }
-        // 地图中匹配的线特征id
-        // // std::cout << "iter.first: " << iter.first << std::endl;
-        auto it = local_line_map.GetLineMapData2DList().find(iter.first);
-        const sensor::LineData target_line = it->second.line_data();
-        // // std::cout << "iter.second.size(): " << iter.second.size() << std::endl;
-        if (static_cast<int>(iter.second.size()) == 1) {
-          // 如果只匹配了一个线特征，则直接构建残差
-          problem.AddResidualBlock(
-            CreateLineDeltaWithoutInitPoseCostFunction2D(
-              local_line_parallel_weight * options_.local_weight_factor(),
-              local_line_angle_weight * options_.local_weight_factor(),
-              iter.second[0], target_line),
-            nullptr, ceres_pose_estimate);
-        } else {
-          // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
-          double min_dis = 10.0;
-          for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-            Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-            if (matching_dis[0] < min_dis) {
-              min_dis = matching_dis[0];
-            }
-          }
-          for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-            Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-            if (fabs(matching_dis[0] - min_dis) < 0.005) {
-              problem.AddResidualBlock(
-                CreateLineDeltaWithoutInitPoseCostFunction2D(
-                  local_line_parallel_weight * options_.local_weight_factor(),
-                  local_line_angle_weight * options_.local_weight_factor(),
-                  iter.second[i], target_line),
-                nullptr, ceres_pose_estimate);
-            }
-          }
-        }
-      }
-    }
-
-    // 对于每一个跟踪到的线特征
-    double global_line_parallel_weight
-              = options_.line_weight() / 2 / static_cast<double>(global_tracked_line_data.size());
-    double global_line_angle_weight
-              = options_.line_weight() * 2 / static_cast<double>(global_tracked_line_data.size());
-    for (auto iter : global_tracked_line_data) {
-      // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
-      if (iter.first < 0 ||
-        global_line_map.GetLineMapData2DList().count(iter.first) == 0)
-      {
-        continue;
-      }
-      // 地图中匹配的线特征id
-      // // std::cout << "iter.first: " << iter.first << std::endl;
-      auto it = global_line_map.GetLineMapData2DList().find(iter.first);
-      const sensor::LineData target_line = it->second.line_data();
-      // // std::cout << "iter.second.size(): " << iter.second.size() << std::endl;
-      if (static_cast<int>(iter.second.size()) == 1) {
-        // 如果只匹配了一个线特征，则直接构建残差
-        problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
-            global_line_parallel_weight, global_line_angle_weight,
-            iter.second[0], target_line),
-          nullptr, ceres_pose_estimate);
-      } else {
-        // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
-        double min_dis = 10.0;
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (matching_dis[0] < min_dis) {
-            min_dis = matching_dis[0];
-          }
-        }
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (fabs(matching_dis[0] - min_dis) < 0.005) {
-            problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
-                global_line_parallel_weight,
-                global_line_angle_weight,
-                iter.second[i], target_line),
-              nullptr, ceres_pose_estimate);
-          }
-        }
-      }
-    }
-
-    if (options_.local_weight_factor() > 1e-3) {
-      // LOG(WARNING) << "Using local cloud ";
-      // local point constraint
-      if (local_cloud_ikdtree.Root_Node == nullptr ||
-          local_cloud_ikdtree.validnum() < 10)
-      {
-        LOG(WARNING) << "No local points in the submap.";
-      } else {
-        const auto pose_estimate_temp = transform::Rigid2d(
-          {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-
-        auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-        ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-        std::vector<sensor::PointCloud::PointType> p_src_vec;
-        std::vector<sensor::PointCloud::PointType> p_a_vec;
-        std::vector<sensor::PointCloud::PointType> p_b_vec;
-        size_t step = std::max(size_t(1), point_cloud.size() / 25);
-        for (size_t i = 0; i < point_cloud.size(); i += step) {
-          const auto& p_src = point_cloud[i];
-          const Eigen::Vector3d p_transformed =
-                                        pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                        * p_src.position.cast<double>()
-                                        + pose_estimate_temp_3d.translation();
-
-          // KD-tree查找最近的点
-          pcl::PointXYZ query_point(p_transformed.x(),
-                                    p_transformed.y(),
-                                    p_transformed.z());
-
-          std::vector<float> squared_distances(10, -1);
-          ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-          local_cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
-
-          // 如果最近点不是地图点，则跳过
-          double distance = std::sqrt(squared_distances[19]);
-          if (distance > 0.15) {
-            continue;
-          }
-
-          std::vector<Eigen::Vector3f> nearCorners;
-          Eigen::Vector3f center(0, 0, 0);
-          for (int j = 0; j < 10; j++) {
-            sensor::PointCloud::PointType p_tmp;
-            p_tmp.position.x() = points_near[j].x;
-            p_tmp.position.y() = points_near[j].y;
-            p_tmp.position.z() = points_near[j].z;
-
-            center = center + p_tmp.position;
-            nearCorners.push_back(p_tmp.position);
-          }
-          center = center / 10.0;
-
-          Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-          for (int j = 0; j < 10; j++) {
-            Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
-            covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
-          }
-          Eigen::SelfAdjointEigenSolver<Eigen::Matrix2f> saes(covMat);
-
-          // if is indeed line feature
-          // note Eigen library sort eigenvalues in increasing order
-          Eigen::Vector3f unit_direction = Eigen::Vector3f::Zero();
-          unit_direction.head<2>() = saes.eigenvectors().col(1);
-
-          if (saes.eigenvalues()[1] > 3 * saes.eigenvalues()[0])
-          { 
-            Eigen::Vector3f point_on_line = center;
-            sensor::PointCloud::PointType point_a, point_b;
-            point_a.position = 0.1 * unit_direction + point_on_line;
-            point_b.position = -0.1 * unit_direction + point_on_line;
-
-            p_src_vec.push_back(p_src);
-            p_a_vec.push_back(point_a);
-            p_b_vec.push_back(point_b);
-          }
-        }
-
-        for (size_t i = 0; i < p_src_vec.size(); i++) {
-          problem.AddResidualBlock(
-            CreatePointLineCostFunction2D(
-              options_.point_weight() /
-              static_cast<double>(p_src_vec.size()) *
-              options_.local_weight_factor(),
-              p_src_vec[i], p_a_vec[i], p_b_vec[i]),
-            loss_function /* loss function */, ceres_pose_estimate);
-        }
-      }
-    }
-
-    // global point constraint
-    if (global_cloud_ikdtree.Root_Node == nullptr ||
-        global_cloud_ikdtree.validnum() < 10)
-    {
-      LOG(WARNING) << "No global points in the submap.";
-    } else {
-      const auto pose_estimate_temp = transform::Rigid2d(
-        {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-      auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-      
-      ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      std::vector<sensor::PointCloud::PointType> p_src_vec;
-      std::vector<sensor::PointCloud::PointType> p_a_vec;
-      std::vector<sensor::PointCloud::PointType> p_b_vec;
-      size_t step = std::max(size_t(1), point_cloud.size() / 25);
-      for (size_t i = 0; i < point_cloud.size(); i += step) {
-        const auto& p_src = point_cloud[i];
-        const Eigen::Vector3d p_transformed =
-                                      pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                      * p_src.position.cast<double>()
-                                      + pose_estimate_temp_3d.translation();
-        // KD-tree查找最近的点
-        pcl::PointXYZ query_point(p_transformed.x(),
-                                  p_transformed.y(),
-                                  p_transformed.z());
-      
-        std::vector<float> squared_distances(10, -1);
-        ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        global_cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
-
-        // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[19]);
-        if (distance > 0.15) {
-          continue;
-        }
-        std::vector<Eigen::Vector3f> nearCorners;
-        Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 10; j++) {
-          sensor::PointCloud::PointType p_tmp;
-          p_tmp.position.x() = points_near[j].x;
-          p_tmp.position.y() = points_near[j].y;
-          p_tmp.position.z() = points_near[j].z;
-
-          center = center + p_tmp.position;
-          nearCorners.push_back(p_tmp.position);
-        }
-        center = center / 10.0;
-
-        Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 10; j++) {
-          Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
-          covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
-        }
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2f> saes(covMat);
-
-        // if is indeed line feature
-        // note Eigen library sort eigenvalues in increasing order
-        Eigen::Vector3f unit_direction = Eigen::Vector3f::Zero();
-        unit_direction.head<2>() = saes.eigenvectors().col(1);
-        
-        if (saes.eigenvalues()[1] > 3 * saes.eigenvalues()[0])
-        { 
-          Eigen::Vector3f point_on_line = center;
-          sensor::PointCloud::PointType point_a, point_b;
-          point_a.position = 0.1 * unit_direction + point_on_line;
-          point_b.position = -0.1 * unit_direction + point_on_line;
-
-          p_src_vec.push_back(p_src);
-          p_a_vec.push_back(point_a);
-          p_b_vec.push_back(point_b);
-        }
-      }
-
-      for (size_t i = 0; i < p_src_vec.size(); i++) {
-        problem.AddResidualBlock(
-          CreatePointLineCostFunction2D(
-            options_.point_weight() /
-            static_cast<double>(p_src_vec.size()),
-            p_src_vec[i], p_a_vec[i], p_b_vec[i]),
-          loss_function /* loss function */, ceres_pose_estimate);
-      }
-    }
-
-    if (highlight_cloud_ikdtree.Root_Node == nullptr ||
-        highlight_cloud_ikdtree.validnum() < 10)
-    {
-      // LOG(WARNING) << "No points in the submap.";
-    } else {
-      const auto pose_estimate_temp = transform::Rigid2d(
-        {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-      auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-      // 点云误差
-      ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      std::vector<sensor::PointCloud::PointType> src_points;
-      std::vector<sensor::PointCloud::PointType> nearest_points;
-      size_t step = 1;
-      if (highlight_point_cloud.size() > 200) {
-        step = 2;
-      }
-      for (size_t i = 0; i < highlight_point_cloud.size(); i += step) {
-        const auto& p_src = highlight_point_cloud[i];
-        // // std::cout << p_src.position.transpose() << std::endl;
-        // // std::cout << pose_estimate_temp_3d.rotation().toRotationMatrix().matrix() << std::endl;
-        // // std::cout << pose_estimate_temp_3d.translation().transpose() << std::endl;
-        const Eigen::Vector3d p_transformed =
-                                      pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                      * p_src.position.cast<double>()
-                                      + pose_estimate_temp_3d.translation();
-        // KD-tree查找最近的点
-        pcl::PointXYZ query_point(p_transformed.x(),
-                                  p_transformed.y(),
-                                  p_transformed.z());
-      
-        std::vector<float> squared_distances(1, -1);
-        ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        highlight_cloud_ikdtree.Nearest_Search(query_point, 1, points_near, squared_distances);
-
-        // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[0]);
-        if (distance > options_.max_correspondence_distance()) {
-          continue;
-        }
-
-        src_points.push_back(p_src);
-
-        sensor::PointCloud::PointType p_tmp;
-        p_tmp.position.x() = points_near[0].x;
-        p_tmp.position.y() = points_near[0].y;
-        p_tmp.position.z() = points_near[0].z;
-        nearest_points.push_back(p_tmp);
-      }
-
-      for (size_t i = 0; i < nearest_points.size(); i++) {
-        const auto& p_src = src_points[i];
-        sensor::PointCloud::PointType p_dist;
-        p_dist.position.x() = nearest_points[i].position.x();
-        p_dist.position.y() = nearest_points[i].position.y();
-        p_dist.position.z() = nearest_points[i].position.z();
-
-        problem.AddResidualBlock(
-          CreatePointDeltaCostFunction2D(
-            options_.point_weight() * 3 / 
-            static_cast<double>(src_points.size()),
-            p_src, p_dist),
-          loss_function /* loss function */, ceres_pose_estimate);
-      }
-    }
+    // Solve the optimization problem
     ceres::Solve(ceres_solver_options_, &problem, summary);
-    
-    if (!summary->IsSolutionUsable() || std::isinf(summary->final_cost) || std::isnan(summary->final_cost)) {
+
+    // Check if solution is valid
+    if (!summary->IsSolutionUsable() || std::isinf(summary->final_cost) || 
+        std::isnan(summary->final_cost)) {
       LOG(WARNING) << "Ceres solve failed: " << summary->BriefReport();
       ceres_pose_estimate[0] = initial_pose_estimate.translation().x();
       ceres_pose_estimate[1] = initial_pose_estimate.translation().y();
       ceres_pose_estimate[2] = initial_pose_estimate.rotation().angle();
       break;
     }
-    // if (1) {
-    //   Eigen::Matrix<double, 3, 3, Eigen::RowMajor> cov_pose
-    //     = Eigen::Matrix<double, 3, 3, Eigen::RowMajor>::Zero();
-    //   ceres::Covariance::Options cov_options;
-    //   ceres::Covariance covariance(cov_options);
-    //   std::vector<std::pair<const double*, const double*>> covariance_blocks;
-    //   covariance_blocks.emplace_back(
-    //                       std::make_pair(ceres_pose_estimate,
-    //                                     ceres_pose_estimate));
-    //   CHECK(covariance.Compute(covariance_blocks, &problem));
-    //   covariance.GetCovarianceBlockInTangentSpace(
-    //                                       ceres_pose_estimate,
-    //                                       ceres_pose_estimate,
-    //                                       cov_pose.data());
-    //   cov = cov_pose;
-    // }
   }
 
+  // Output pose estimate
   *pose_estimate = transform::Rigid2d(
-    {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
+      {ceres_pose_estimate[0], ceres_pose_estimate[1]}, 
+      ceres_pose_estimate[2]);
 
-  double delta_dist = (pose_estimate->translation() - initial_pose_estimate.translation()).norm();
-  double delta_yaw = std::abs(pose_estimate->rotation().angle() - initial_pose_estimate.rotation().angle());
-
-  // LOG(INFO) << "ceres_pose_estimate pose validationt: \n delta dist: " << delta_dist << " delta yaw: " << delta_yaw << std::endl;
+  // Validate pose change
+  double delta_dist = (pose_estimate->translation() - 
+                       initial_pose_estimate.translation()).norm();
+  double delta_yaw = std::abs(pose_estimate->rotation().angle() - 
+                              initial_pose_estimate.rotation().angle());
 
   if (delta_dist > 0.2 || delta_yaw > 0.1) {
-    LOG(ERROR) << "ceres_pose_estimate pose is not good.";
+    LOG(ERROR) << "Pose change too large (dist: " << delta_dist 
+               << ", yaw: " << delta_yaw << "), reverting to initial pose";
     *pose_estimate = initial_pose_estimate;
   }
+
+  // Compute covariance if requested
+  if (covariance != nullptr) {
+    // Create a new problem for covariance computation
+    ceres::Problem cov_problem;
+    
+    // Re-add all constraints (same as final iteration)
+    if (global_map.grid != nullptr) {
+      AddGridConstraints(cov_problem, point_cloud, *global_map.grid,
+                        options_.occupied_space_weight(),
+                        ceres_pose_estimate);
+    }
+    
+    cov_problem.AddResidualBlock(
+        TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.translation_weight(),
+            initial_pose_estimate.translation()),
+        nullptr, ceres_pose_estimate);
+    
+    cov_problem.AddResidualBlock(
+        RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.rotation_weight(), ceres_pose_estimate[2]),
+        nullptr, ceres_pose_estimate);
+
+    if (!ComputeCovariance(cov_problem, ceres_pose_estimate, covariance)) {
+      LOG(WARNING) << "Failed to compute covariance, using default values";
+      *covariance = Eigen::Matrix3d::Identity() * 0.01;  // Default uncertainty
+    }
+  }
 }
 
 void CeresScanMatcher2D::Match(
-  const Eigen::Vector2d & target_translation,
-  const transform::Rigid2d & initial_pose_estimate,
-  const sensor::PointCloud & point_cloud,
-  const std::map<int, std::vector<sensor::LineData>> & line_data,
-  const Grid2D & grid, const LineMap2DList & line_map,
-  ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
-  transform::Rigid2d * const pose_estimate,
-  ceres::Solver::Summary * const summary) const
+    const transform::Rigid2d& initial_pose_estimate,
+    const sensor::PointCloud& point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
+    const MapData& map,
+    transform::Rigid2d* const pose_estimate,
+    Eigen::Matrix3d* const covariance,
+    ceres::Solver::Summary* const summary) const
 {
-  double ceres_pose_estimate[3] = {initial_pose_estimate.translation().x(),
-                                   initial_pose_estimate.translation().y(),
-                                   initial_pose_estimate.rotation().angle()};
-  CHECK_GT(options_.occupied_space_weight(), 0.);
-  CHECK_GT(options_.line_weight(), 0.);
-  CHECK_GT(options_.point_weight(), 0.);
+  CHECK(pose_estimate != nullptr);
+  CHECK(summary != nullptr);
+  CHECK(!point_cloud.empty()) << "point_cloud must not be empty";
+  CHECK(map.grid != nullptr) << "Map grid must not be null";
 
+  double ceres_pose_estimate[3] = {
+      initial_pose_estimate.translation().x(),
+      initial_pose_estimate.translation().y(),
+      initial_pose_estimate.rotation().angle()
+  };
+
+  // Two-pass optimization
   for (size_t opti_counter = 0; opti_counter < 2; ++opti_counter) {
     ceres::Problem problem;
-    switch (grid.GetGridType()) {
-      case GridType::PROBABILITY_GRID:
-        problem.AddResidualBlock(
-          CreateOccupiedSpaceCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, grid),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
-      case GridType::TSDF:
-        problem.AddResidualBlock(
-          CreateTSDFMatchCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, static_cast<const TSDF2D &>(grid)),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
-    }
-    CHECK_GT(options_.translation_weight(), 0.);
 
+    // Add grid constraints
+    AddGridConstraints(problem, point_cloud, *map.grid,
+                      options_.occupied_space_weight(),
+                      ceres_pose_estimate);
+
+    // Add line constraints if available
+    if (map.line_map != nullptr && map.tracked_line_data != nullptr) {
+      AddLineConstraints(problem, *map.tracked_line_data, *map.line_map,
+                        options_.line_weight(),
+                        ceres_pose_estimate);
+    }
+
+    // Add point-to-line constraints if KD-tree available
+    if (map.cloud_ikdtree != nullptr) {
+      AddPointToLineConstraints(problem, point_cloud, *map.cloud_ikdtree,
+                               options_.point_weight(),
+                               ceres_pose_estimate);
+    }
+
+    // Add highlight point constraints if available
+    if (map.highlight_cloud_ikdtree != nullptr && !highlight_point_cloud.empty()) {
+      AddHighlightPointConstraints(problem, highlight_point_cloud,
+                                   *map.highlight_cloud_ikdtree,
+                                   options_.point_weight() * 3.0,
+                                   ceres_pose_estimate);
+    }
+
+    // Add regularization constraints
+    CHECK_GT(options_.translation_weight(), 0.);
     problem.AddResidualBlock(
-      TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.translation_weight(),
-        initial_pose_estimate.translation()),
-      nullptr /* loss function */, ceres_pose_estimate);
+        TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.translation_weight(),
+            initial_pose_estimate.translation()),
+        nullptr, ceres_pose_estimate);
 
     CHECK_GT(options_.rotation_weight(), 0.);
     problem.AddResidualBlock(
-      RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.rotation_weight(), ceres_pose_estimate[2]),
-      nullptr /* loss function */, ceres_pose_estimate);
+        RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.rotation_weight(), ceres_pose_estimate[2]),
+        nullptr, ceres_pose_estimate);
 
-    // 对于每一个跟踪到的线特征
-    double line_parallel_weight
-              = options_.line_weight() / 2 / static_cast<double>(line_data.size());
-    double line_angle_weight
-              = options_.line_weight() * 2 / static_cast<double>(line_data.size());
-    for (auto iter : line_data) {
-      // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
-      if (iter.first < 0 ||
-        line_map.GetLineMapData2DList().count(iter.first) == 0)
-      {
-        continue;
-      }
-      // 地图中匹配的线特征id
-      // // std::cout << "iter.first: " << iter.first << std::endl;
-      auto it = line_map.GetLineMapData2DList().find(iter.first);
-      const sensor::LineData target_line = it->second.line_data();
-      // // std::cout << "iter.second.size(): " << iter.second.size() << std::endl;
-      if (static_cast<int>(iter.second.size()) == 1) {
-        // 如果只匹配了一个线特征，则直接构建残差
-        problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
-            line_parallel_weight, line_angle_weight,
-            iter.second[0], target_line),
-          nullptr, ceres_pose_estimate);
-      } else {
-        // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
-        double min_dis = 10.0;
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (matching_dis[0] < min_dis) {
-            min_dis = matching_dis[0];
-          }
-        }
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (fabs(matching_dis[0] - min_dis) < 0.005) {
-            problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
-                line_parallel_weight, line_angle_weight,
-                iter.second[i], target_line),
-              nullptr, ceres_pose_estimate);
-          }
-        }
-      }
-    }
-    if (cloud_ikdtree.Root_Node == nullptr ||
-        cloud_ikdtree.validnum() < 10)
-    {
-      // LOG(WARNING) << "No points in the submap.";
-    } else {
-      const auto pose_estimate_temp = transform::Rigid2d(
-        {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-      auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-      
-      // TODO: 使用sharp point进行残差计算，而不是使用普通的点云
-      ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      std::vector<sensor::PointCloud::PointType> p_src_vec;
-      std::vector<sensor::PointCloud::PointType> p_a_vec;
-      std::vector<sensor::PointCloud::PointType> p_b_vec;
-      size_t step = std::max(size_t(1), point_cloud.size() / 50);
-      for (size_t i = 0; i < point_cloud.size(); i += step) {
-        const auto& p_src = point_cloud[i];
-        const Eigen::Vector3d p_transformed =
-                                      pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                      * p_src.position.cast<double>()
-                                      + pose_estimate_temp_3d.translation();
-        // KD-tree查找最近的点
-        pcl::PointXYZ query_point(p_transformed.x(),
-                                  p_transformed.y(),
-                                  p_transformed.z());
-
-        std::vector<float> squared_distances(10, -1);
-        ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
-
-        // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[19]);
-        if (distance > 0.15) {
-          continue;
-        }
-        std::vector<Eigen::Vector3f> nearCorners;
-        Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 10; j++) {
-          sensor::PointCloud::PointType p_tmp;
-          p_tmp.position.x() = points_near[j].x;
-          p_tmp.position.y() = points_near[j].y;
-          p_tmp.position.z() = points_near[j].z;
-
-          center = center + p_tmp.position;
-          nearCorners.push_back(p_tmp.position);
-        }
-        center = center / 10.0;
-
-        Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 10; j++) {
-          Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
-          covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
-        }
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2f> saes(covMat);
-
-        // if is indeed line feature
-        // note Eigen library sort eigenvalues in increasing order
-        Eigen::Vector3f unit_direction = Eigen::Vector3f::Zero();
-        unit_direction.head<2>() = saes.eigenvectors().col(1);
-        
-        if (saes.eigenvalues()[1] > 3 * saes.eigenvalues()[0])
-        { 
-          Eigen::Vector3f point_on_line = center;
-          sensor::PointCloud::PointType point_a, point_b;
-          point_a.position = 0.1 * unit_direction + point_on_line;
-          point_b.position = -0.1 * unit_direction + point_on_line;
-
-          p_src_vec.push_back(p_src);
-          p_a_vec.push_back(point_a);
-          p_b_vec.push_back(point_b);
-        }
-      }
-
-      for (size_t i = 0; i < p_src_vec.size(); i++) {
-        problem.AddResidualBlock(
-          CreatePointLineCostFunction2D(
-            options_.point_weight() /
-            static_cast<double>(p_src_vec.size()),
-            p_src_vec[i], p_a_vec[i], p_b_vec[i]),
-          loss_function /* loss function */, ceres_pose_estimate);
-      }
-    }
-
+    // Solve
     ceres::Solve(ceres_solver_options_, &problem, summary);
+
+    // Check solution validity
+    if (!summary->IsSolutionUsable() || std::isinf(summary->final_cost) || 
+        std::isnan(summary->final_cost)) {
+      LOG(WARNING) << "Ceres solve failed: " << summary->BriefReport();
+      ceres_pose_estimate[0] = initial_pose_estimate.translation().x();
+      ceres_pose_estimate[1] = initial_pose_estimate.translation().y();
+      ceres_pose_estimate[2] = initial_pose_estimate.rotation().angle();
+      break;
+    }
   }
 
+  // Output pose estimate
   *pose_estimate = transform::Rigid2d(
-    {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-}
+      {ceres_pose_estimate[0], ceres_pose_estimate[1]}, 
+      ceres_pose_estimate[2]);
 
-void CeresScanMatcher2D::Match(
-  const Eigen::Vector2d & target_translation,
-  const transform::Rigid2d & initial_pose_estimate,
-  const sensor::PointCloud & point_cloud,
-  const sensor::PointCloud & highlight_point_cloud,
-  const std::map<int, std::vector<sensor::LineData>> & line_data,
-  const Grid2D & grid, const LineMap2DList & line_map,
-  ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
-  ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
-  transform::Rigid2d * const pose_estimate,
-  ceres::Solver::Summary * const summary) const
-{
-  double ceres_pose_estimate[3] = {initial_pose_estimate.translation().x(),
-                                   initial_pose_estimate.translation().y(),
-                                   initial_pose_estimate.rotation().angle()};
-  CHECK_GT(options_.occupied_space_weight(), 0.);
-  CHECK_GT(options_.line_weight(), 0.);
-  CHECK_GT(options_.point_weight(), 0.);
+  // Compute covariance if requested
+  if (covariance != nullptr) {
+    ceres::Problem cov_problem;
+    
+    AddGridConstraints(cov_problem, point_cloud, *map.grid,
+                      options_.occupied_space_weight(),
+                      ceres_pose_estimate);
+    
+    cov_problem.AddResidualBlock(
+        TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.translation_weight(),
+            initial_pose_estimate.translation()),
+        nullptr, ceres_pose_estimate);
+    
+    cov_problem.AddResidualBlock(
+        RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
+            options_.rotation_weight(), ceres_pose_estimate[2]),
+        nullptr, ceres_pose_estimate);
 
-  for (size_t opti_counter = 0; opti_counter < 2; ++opti_counter) {
-    ceres::Problem problem;
-    switch (grid.GetGridType()) {
-      case GridType::PROBABILITY_GRID:
-        problem.AddResidualBlock(
-          CreateOccupiedSpaceCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, grid),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
-      case GridType::TSDF:
-        problem.AddResidualBlock(
-          CreateTSDFMatchCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, static_cast<const TSDF2D &>(grid)),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
+    if (!ComputeCovariance(cov_problem, ceres_pose_estimate, covariance)) {
+      LOG(WARNING) << "Failed to compute covariance, using default values";
+      *covariance = Eigen::Matrix3d::Identity() * 0.01;
     }
-    CHECK_GT(options_.translation_weight(), 0.);
-
-    problem.AddResidualBlock(
-      TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.translation_weight(),
-        initial_pose_estimate.translation()),
-      nullptr /* loss function */, ceres_pose_estimate);
-
-    CHECK_GT(options_.rotation_weight(), 0.);
-    problem.AddResidualBlock(
-      RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.rotation_weight(), ceres_pose_estimate[2]),
-      nullptr /* loss function */, ceres_pose_estimate);
-
-    // 对于每一个跟踪到的线特征
-    double line_parallel_weight
-              = options_.line_weight() / 2 / static_cast<double>(line_data.size());
-    double line_angle_weight
-              = options_.line_weight() * 2 / static_cast<double>(line_data.size());
-    for (auto iter : line_data) {
-      // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
-      if (iter.first < 0 ||
-        line_map.GetLineMapData2DList().count(iter.first) == 0)
-      {
-        continue;
-      }
-      // 地图中匹配的线特征id
-      // // std::cout << "iter.first: " << iter.first << std::endl;
-      auto it = line_map.GetLineMapData2DList().find(iter.first);
-      const sensor::LineData target_line = it->second.line_data();
-      // // std::cout << "iter.second.size(): " << iter.second.size() << std::endl;
-      if (static_cast<int>(iter.second.size()) == 1) {
-        // 如果只匹配了一个线特征，则直接构建残差
-        problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
-            line_parallel_weight, line_angle_weight,
-            iter.second[0], target_line),
-          nullptr, ceres_pose_estimate);
-      } else {
-        // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
-        double min_dis = 10.0;
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (matching_dis[0] < min_dis) {
-            min_dis = matching_dis[0];
-          }
-        }
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (fabs(matching_dis[0] - min_dis) < 0.005) {
-            problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
-                line_parallel_weight, line_angle_weight,
-                iter.second[i], target_line),
-              nullptr, ceres_pose_estimate);
-          }
-        }
-      }
-    }
-
-    if (cloud_ikdtree.Root_Node == nullptr ||
-        cloud_ikdtree.validnum() < 10)
-    {
-      // LOG(WARNING) << "No points in the submap.";
-    } else {
-      const auto pose_estimate_temp = transform::Rigid2d(
-        {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-      auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-      
-      // TODO: 使用sharp point进行残差计算，而不是使用普通的点云
-      ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      std::vector<sensor::PointCloud::PointType> p_src_vec;
-      std::vector<sensor::PointCloud::PointType> p_a_vec;
-      std::vector<sensor::PointCloud::PointType> p_b_vec;
-      size_t step = std::max(size_t(1), point_cloud.size() / 50);
-      for (size_t i = 0; i < point_cloud.size(); i += step) {
-        const auto& p_src = point_cloud[i];
-        const Eigen::Vector3d p_transformed =
-                                      pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                      * p_src.position.cast<double>()
-                                      + pose_estimate_temp_3d.translation();
-        // KD-tree查找最近的点
-        pcl::PointXYZ query_point(p_transformed.x(),
-                                  p_transformed.y(),
-                                  p_transformed.z());
-      
-        std::vector<float> squared_distances(10, -1);
-        ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
-
-        // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[19]);
-        if (distance > 0.15) {
-          continue;
-        }
-        std::vector<Eigen::Vector3f> nearCorners;
-        Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 10; j++) {
-          sensor::PointCloud::PointType p_tmp;
-          p_tmp.position.x() = points_near[j].x;
-          p_tmp.position.y() = points_near[j].y;
-          p_tmp.position.z() = points_near[j].z;
-
-          center = center + p_tmp.position;
-          nearCorners.push_back(p_tmp.position);
-        }
-        center = center / 10.0;
-
-        Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 10; j++) {
-          Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
-          covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
-        }
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2f> saes(covMat);
-
-        // if is indeed line feature
-        // note Eigen library sort eigenvalues in increasing order
-        Eigen::Vector3f unit_direction = Eigen::Vector3f::Zero();
-        unit_direction.head<2>() = saes.eigenvectors().col(1);
-        
-        if (saes.eigenvalues()[1] > 3 * saes.eigenvalues()[0])
-        { 
-          Eigen::Vector3f point_on_line = center;
-          sensor::PointCloud::PointType point_a, point_b;
-          point_a.position = 0.1 * unit_direction + point_on_line;
-          point_b.position = -0.1 * unit_direction + point_on_line;
-
-          p_src_vec.push_back(p_src);
-          p_a_vec.push_back(point_a);
-          p_b_vec.push_back(point_b);
-        }
-      }
-
-      for (size_t i = 0; i < p_src_vec.size(); i++) {
-        problem.AddResidualBlock(
-          CreatePointLineCostFunction2D(
-            options_.point_weight() /
-            static_cast<double>(p_src_vec.size()),
-            p_src_vec[i], p_a_vec[i], p_b_vec[i]),
-          loss_function /* loss function */, ceres_pose_estimate);
-      }
-    }
-
-    if (highlight_cloud_ikdtree.Root_Node == nullptr ||
-        highlight_cloud_ikdtree.validnum() < 10)
-    {
-      // LOG(WARNING) << "No points in the submap.";
-    } else {
-      const auto pose_estimate_temp = transform::Rigid2d(
-        {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-      auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-      // 点云误差
-      ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      std::vector<sensor::PointCloud::PointType> src_points;
-      std::vector<sensor::PointCloud::PointType> nearest_points;
-      size_t step = 1;
-      if (highlight_point_cloud.size() > 200) {
-        step = 2;
-      }
-
-      for (size_t i = 0; i < highlight_point_cloud.size(); i += step) {
-        const auto& p_src = highlight_point_cloud[i];
-        // // std::cout << p_src.position.transpose() << std::endl;
-        // // std::cout << pose_estimate_temp_3d.rotation().toRotationMatrix().matrix() << std::endl;
-        // // std::cout << pose_estimate_temp_3d.translation().transpose() << std::endl;
-        const Eigen::Vector3d p_transformed =
-                                      pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                      * p_src.position.cast<double>()
-                                      + pose_estimate_temp_3d.translation();
-        // KD-tree查找最近的点
-        pcl::PointXYZ query_point(p_transformed.x(),
-                                  p_transformed.y(),
-                                  p_transformed.z());
-      
-        std::vector<float> squared_distances(1, -1);
-        ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        highlight_cloud_ikdtree.Nearest_Search(query_point, 1, points_near, squared_distances);
-
-        // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[0]);
-        if (distance > options_.max_correspondence_distance()) {
-          continue;
-        }
-
-        src_points.push_back(p_src);
-
-        sensor::PointCloud::PointType p_tmp;
-        p_tmp.position.x() = points_near[0].x;
-        p_tmp.position.y() = points_near[0].y;
-        p_tmp.position.z() = points_near[0].z;
-        nearest_points.push_back(p_tmp);
-      }
-
-      for (size_t i = 0; i < nearest_points.size(); i++) {
-        const auto& p_src = src_points[i];
-        sensor::PointCloud::PointType p_dist;
-        p_dist.position.x() = nearest_points[i].position.x();
-        p_dist.position.y() = nearest_points[i].position.y();
-        p_dist.position.z() = nearest_points[i].position.z();
-
-        problem.AddResidualBlock(
-          CreatePointDeltaCostFunction2D(
-            options_.point_weight() * 3 / 
-            static_cast<double>(src_points.size()),
-            p_src, p_dist),
-          loss_function /* loss function */, ceres_pose_estimate);
-      }
-    }
-
-    ceres::Solve(ceres_solver_options_, &problem, summary);
   }
-
-  *pose_estimate = transform::Rigid2d(
-    {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
 }
 
-void CeresScanMatcher2D::Match(
-  const Eigen::Vector2d & target_translation,
-  const transform::Rigid2d & initial_pose_estimate,
-  const sensor::PointCloud & point_cloud,
-  const sensor::PointCloud & highlight_point_cloud,
-  const Grid2D & grid,
-  ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
-  ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
-  transform::Rigid2d * const pose_estimate,
-  ceres::Solver::Summary * const summary) const
+// ========== Helper Methods ==========
+
+void CeresScanMatcher2D::AddGridConstraints(
+    ceres::Problem& problem,
+    const sensor::PointCloud& point_cloud,
+    const Grid2D& grid,
+    double weight,
+    double* ceres_pose_estimate) const
 {
-  double ceres_pose_estimate[3] = {initial_pose_estimate.translation().x(),
-                                   initial_pose_estimate.translation().y(),
-                                   initial_pose_estimate.rotation().angle()};
-  CHECK_GT(options_.occupied_space_weight(), 0.);
-  CHECK_GT(options_.line_weight(), 0.);
-  CHECK_GT(options_.point_weight(), 0.);
-
-  for (size_t opti_counter = 0; opti_counter < 2; ++opti_counter) {
-    ceres::Problem problem;
-    switch (grid.GetGridType()) {
-      case GridType::PROBABILITY_GRID:
-        problem.AddResidualBlock(
-          CreateOccupiedSpaceCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, grid),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
-      case GridType::TSDF:
-        problem.AddResidualBlock(
-          CreateTSDFMatchCostFunction2D(
-            options_.occupied_space_weight() /
-            std::sqrt(static_cast<double>(point_cloud.size())),
-            point_cloud, static_cast<const TSDF2D &>(grid)),
-          nullptr /* loss function */, ceres_pose_estimate);
-        break;
-    }
-    CHECK_GT(options_.translation_weight(), 0.);
-
-    problem.AddResidualBlock(
-      TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.translation_weight(),
-        initial_pose_estimate.translation()),
-      nullptr /* loss function */, ceres_pose_estimate);
-
-    CHECK_GT(options_.rotation_weight(), 0.);
-    problem.AddResidualBlock(
-      RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-        options_.rotation_weight(), ceres_pose_estimate[2]),
-      nullptr /* loss function */, ceres_pose_estimate);
-
-    if (cloud_ikdtree.Root_Node == nullptr ||
-        cloud_ikdtree.validnum() < 10)
-    {
-      // LOG(WARNING) << "No points in the submap.";
-    } else {
-      const auto pose_estimate_temp = transform::Rigid2d(
-        {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-      auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-      
-      // TODO: 使用sharp point进行残差计算，而不是使用普通的点云
-      ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      std::vector<sensor::PointCloud::PointType> p_src_vec;
-      std::vector<sensor::PointCloud::PointType> p_a_vec;
-      std::vector<sensor::PointCloud::PointType> p_b_vec;
-      size_t step = std::max(size_t(1), point_cloud.size() / 50);
-      for (size_t i = 0; i < point_cloud.size(); i += step) {
-        const auto& p_src = point_cloud[i];
-        const Eigen::Vector3d p_transformed =
-                                      pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                      * p_src.position.cast<double>()
-                                      + pose_estimate_temp_3d.translation();
-        // KD-tree查找最近的点
-        pcl::PointXYZ query_point(p_transformed.x(),
-                                  p_transformed.y(),
-                                  p_transformed.z());
-      
-        std::vector<float> squared_distances(10, -1);
-        ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
-
-        // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[19]);
-        if (distance > 0.15) {
-          continue;
-        }
-        std::vector<Eigen::Vector3f> nearCorners;
-        Eigen::Vector3f center(0, 0, 0);
-        for (int j = 0; j < 10; j++) {
-          sensor::PointCloud::PointType p_tmp;
-          p_tmp.position.x() = points_near[j].x;
-          p_tmp.position.y() = points_near[j].y;
-          p_tmp.position.z() = points_near[j].z;
-
-          center = center + p_tmp.position;
-          nearCorners.push_back(p_tmp.position);
-        }
-        center = center / 10.0;
-
-        Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
-        for (int j = 0; j < 10; j++) {
-          Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
-          covMat = covMat + tmpZeroMean * tmpZeroMean.transpose();
-        }
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2f> saes(covMat);
-
-        // if is indeed line feature
-        // note Eigen library sort eigenvalues in increasing order
-        Eigen::Vector3f unit_direction = Eigen::Vector3f::Zero();
-        unit_direction.head<2>() = saes.eigenvectors().col(1);
-        
-        if (saes.eigenvalues()[1] > 3 * saes.eigenvalues()[0])
-        { 
-          Eigen::Vector3f point_on_line = center;
-          sensor::PointCloud::PointType point_a, point_b;
-          point_a.position = 0.1 * unit_direction + point_on_line;
-          point_b.position = -0.1 * unit_direction + point_on_line;
-
-          p_src_vec.push_back(p_src);
-          p_a_vec.push_back(point_a);
-          p_b_vec.push_back(point_b);
-        }
-      }
-
-      for (size_t i = 0; i < p_src_vec.size(); i++) {
-        problem.AddResidualBlock(
-          CreatePointLineCostFunction2D(
-            options_.point_weight() /
-            static_cast<double>(p_src_vec.size()),
-            p_src_vec[i], p_a_vec[i], p_b_vec[i]),
-          loss_function /* loss function */, ceres_pose_estimate);
-      }
-    }
-
-    if (highlight_cloud_ikdtree.Root_Node == nullptr ||
-        highlight_cloud_ikdtree.validnum() < 10)
-    {
-      // LOG(WARNING) << "No points in the submap.";
-    } else {
-      const auto pose_estimate_temp = transform::Rigid2d(
-        {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-      auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
-      // 点云误差
-      ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      std::vector<sensor::PointCloud::PointType> src_points;
-      std::vector<sensor::PointCloud::PointType> nearest_points;
-      size_t step = 1;
-      if (highlight_point_cloud.size() > 200) {
-        step = 2;
-      }
-
-      for (size_t i = 0; i < highlight_point_cloud.size(); i += step) {
-        const auto& p_src = highlight_point_cloud[i];
-        // // std::cout << p_src.position.transpose() << std::endl;
-        // // std::cout << pose_estimate_temp_3d.rotation().toRotationMatrix().matrix() << std::endl;
-        // // std::cout << pose_estimate_temp_3d.translation().transpose() << std::endl;
-        const Eigen::Vector3d p_transformed =
-                                      pose_estimate_temp_3d.rotation().toRotationMatrix()
-                                      * p_src.position.cast<double>()
-                                      + pose_estimate_temp_3d.translation();
-        // KD-tree查找最近的点
-        pcl::PointXYZ query_point(p_transformed.x(),
-                                  p_transformed.y(),
-                                  p_transformed.z());
-      
-        std::vector<float> squared_distances(1, -1);
-        ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
-        highlight_cloud_ikdtree.Nearest_Search(query_point, 1, points_near, squared_distances);
-
-        // 如果最近点不是地图点，则跳过
-        double distance = std::sqrt(squared_distances[0]);
-        if (distance > options_.max_correspondence_distance()) {
-          continue;
-        }
-
-        src_points.push_back(p_src);
-
-        sensor::PointCloud::PointType p_tmp;
-        p_tmp.position.x() = points_near[0].x;
-        p_tmp.position.y() = points_near[0].y;
-        p_tmp.position.z() = points_near[0].z;
-        nearest_points.push_back(p_tmp);
-      }
-
-      for (size_t i = 0; i < nearest_points.size(); i++) {
-        const auto& p_src = src_points[i];
-        sensor::PointCloud::PointType p_dist;
-        p_dist.position.x() = nearest_points[i].position.x();
-        p_dist.position.y() = nearest_points[i].position.y();
-        p_dist.position.z() = nearest_points[i].position.z();
-
-        problem.AddResidualBlock(
-          CreatePointDeltaCostFunction2D(
-            options_.point_weight() * 3 / 
-            static_cast<double>(src_points.size()),
-            p_src, p_dist),
-          loss_function /* loss function */, ceres_pose_estimate);
-      }
-    }
-
-    ceres::Solve(ceres_solver_options_, &problem, summary);
-  }
-
-  *pose_estimate = transform::Rigid2d(
-    {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
-}
-
-void CeresScanMatcher2D::Match(
-  const Eigen::Vector2d & target_translation,
-  const transform::Rigid2d & initial_pose_estimate,
-  const sensor::PointCloud & point_cloud,
-  const std::map<int, std::vector<sensor::LineData>> & line_data,
-  const Grid2D & grid, const LineMap2DList & line_map,
-  transform::Rigid2d * const pose_estimate,
-  ceres::Solver::Summary * const summary) const
-{
-  double ceres_pose_estimate[3] = {initial_pose_estimate.translation().x(),
-    initial_pose_estimate.translation().y(),
-    initial_pose_estimate.rotation().angle()};
-  ceres::Problem problem;
-  CHECK_GT(options_.occupied_space_weight(), 0.);
+  const double normalized_weight = weight / std::sqrt(static_cast<double>(point_cloud.size()));
+  
   switch (grid.GetGridType()) {
     case GridType::PROBABILITY_GRID:
       problem.AddResidualBlock(
-        CreateOccupiedSpaceCostFunction2D(
-          options_.occupied_space_weight() /
-          std::sqrt(static_cast<double>(point_cloud.size())),
-          point_cloud, grid),
-        nullptr /* loss function */, ceres_pose_estimate);
+          CreateOccupiedSpaceCostFunction2D(normalized_weight, point_cloud, grid),
+          nullptr, ceres_pose_estimate);
       break;
     case GridType::TSDF:
       problem.AddResidualBlock(
-        CreateTSDFMatchCostFunction2D(
-          options_.occupied_space_weight() /
-          std::sqrt(static_cast<double>(point_cloud.size())),
-          point_cloud, static_cast<const TSDF2D &>(grid)),
-        nullptr /* loss function */, ceres_pose_estimate);
+          CreateTSDFMatchCostFunction2D(normalized_weight, point_cloud,
+                                       static_cast<const TSDF2D&>(grid)),
+          nullptr, ceres_pose_estimate);
       break;
   }
-  CHECK_GT(options_.translation_weight(), 0.);
+}
 
-  problem.AddResidualBlock(
-    TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-      options_.translation_weight(),
-      initial_pose_estimate.translation()),
-    nullptr /* loss function */, ceres_pose_estimate);
+void CeresScanMatcher2D::AddLineConstraints(
+    ceres::Problem& problem,
+    const std::map<int, std::vector<sensor::LineData>>& tracked_line_data,
+    const LineMap2DList& line_map,
+    double weight,
+    double* ceres_pose_estimate) const
+{
+  if (tracked_line_data.empty()) {
+    return;
+  }
 
-  CHECK_GT(options_.rotation_weight(), 0.);
-  problem.AddResidualBlock(
-    RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-      options_.rotation_weight(), ceres_pose_estimate[2]),
-    nullptr /* loss function */, ceres_pose_estimate);
+  const double line_parallel_weight = weight / 2.0 / static_cast<double>(tracked_line_data.size());
+  const double line_angle_weight = weight * 2.0 / static_cast<double>(tracked_line_data.size());
 
-  // 对于每一个跟踪到的线特征
-   double line_parallel_weight
-              = options_.line_weight() / 2 / static_cast<double>(line_data.size());
-  double line_angle_weight
-              = options_.line_weight() * 2 / static_cast<double>(line_data.size());
-  for (auto iter : line_data) {
-    // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
-    if (iter.first < 0 ||
-      line_map.GetLineMapData2DList().count(iter.first) == 0)
-    {
+  for (const auto& iter : tracked_line_data) {
+    // Skip new line features or features not in map
+    if (iter.first < 0 || line_map.GetLineMapData2DList().count(iter.first) == 0) {
       continue;
     }
-    // 地图中匹配的线特征id
-    // // std::cout << "iter.first: " << iter.first << std::endl;
-    auto it = line_map.GetLineMapData2DList().find(iter.first);
-    const sensor::LineData target_line = it->second.line_data();
-    // // std::cout << "iter.second.size(): " << iter.second.size() << std::endl;
-    if (static_cast<int>(iter.second.size()) == 1) {
-      // 如果只匹配了一个线特征，则直接构建残差
+
+    const auto it = line_map.GetLineMapData2DList().find(iter.first);
+    const sensor::LineData& target_line = it->second.line_data();
+
+    if (iter.second.size() == 1) {
+      // Single match - add directly
       problem.AddResidualBlock(
-        CreateLineDeltaWithoutInitPoseCostFunction2D(
-          line_parallel_weight, line_angle_weight,
-          iter.second[0], target_line),
-        nullptr, ceres_pose_estimate);
+          CreateLineDeltaWithoutInitPoseCostFunction2D(
+              line_parallel_weight, line_angle_weight,
+              iter.second[0], target_line),
+          nullptr, ceres_pose_estimate);
     } else {
-      // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
+      // Multiple matches - find closest and add those
       double min_dis = 10.0;
-      for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-        Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
+      for (const auto& line : iter.second) {
+        Eigen::Vector3d matching_dis = line.GetMatchingDis();
         if (matching_dis[0] < min_dis) {
           min_dis = matching_dis[0];
         }
       }
-      for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-        Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-        if (fabs(matching_dis[0] - min_dis) < 0.005) {
+      
+      for (const auto& line : iter.second) {
+        Eigen::Vector3d matching_dis = line.GetMatchingDis();
+        if (std::abs(matching_dis[0] - min_dis) < 0.005) {
           problem.AddResidualBlock(
-            CreateLineDeltaWithoutInitPoseCostFunction2D(
-              line_parallel_weight, line_angle_weight,
-              iter.second[i], target_line),
-            nullptr, ceres_pose_estimate);
+              CreateLineDeltaWithoutInitPoseCostFunction2D(
+                  line_parallel_weight, line_angle_weight,
+                  line, target_line),
+              nullptr, ceres_pose_estimate);
         }
       }
     }
-    // for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-    //   // std::cout << "target_line begin x: " << target_line.begin()[0]
-    //             << " y:
-    //                " << target_line.begin()[1] << std::endl; // std::cout "
-    //                "<< " target_line end x : " << target_line.end()[0] << " y
-    //       : " << target_line.end()[1] <<
-    //         std::endl;
-    //   Eigen::Matrix<double, 2, 1> translation(ceres_pose_estimate[0],
-    //                                           ceres_pose_estimate[1]);
-    //   Eigen::Rotation2D<double> rotation(ceres_pose_estimate[2]);
-    //   Eigen::Matrix<double, 2, 2> rotation_matrix = rotation.toRotationMatrix();
-    //   Eigen::Matrix<double, 3, 3> transform;
-    //   transform << rotation_matrix, translation, 0., 0., 1.;
-
-    //   Eigen::Matrix<double, 3, 1> point_begin(iter.second[i].begin()[0],
-    //                                           iter.second[i].begin()[1], 1.0);
-    //   Eigen::Matrix<double, 3, 1> point_end(iter.second[i].end()[0],
-    //                                         iter.second[i].end()[1], 1.0);
-    //   const Eigen::Matrix<double, 3, 1> world_b = transform * point_begin;
-    //   const Eigen::Matrix<double, 3, 1> world_e = transform * point_end;
-    //   // std::cout << "data begin x: " << iter.second[i].begin()[0]
-    //             << " y: " << iter.second[i].begin()[1] << std::endl;
-    //   // std::cout << "data end x: " << iter.second[i].end()[0]
-    //             << " y: " << iter.second[i].end()[1] << std::endl;
-    //   // std::cout << "world data begin x: " << world_b[0] << " y: " << world_b[1]
-    //             << std::endl;
-    //   // std::cout << "world data end x: " << world_e[0] << " y: " << world_e[1]
-    //             << std::endl;
-    //   problem.AddResidualBlock(
-    //       CreateLineDeltaWithoutInitPoseCostFunction2D(
-    //           options_.line_weight() / 2, options_.line_weight() * 2,
-    //           iter.second[i], target_line),
-    //       nullptr, ceres_pose_estimate);
-    // }
   }
-
-  ceres::Solve(ceres_solver_options_, &problem, summary);
-
-  //   // std::cout << summary->BriefReport() << "\n";
-  //   // std::cout << ceres_pose_estimate[0] << " " << ceres_pose_estimate[1] << "
-  //   " << ceres_pose_estimate[2] << std::endl; for (auto iter : line_data) {
-  //     for (int i = 0; i < iter.second.size(); i++) {
-  //       Eigen::Matrix<double, 2, 1> translation(ceres_pose_estimate[0],
-  //       ceres_pose_estimate[1]); Eigen::Rotation2D<double>
-  //       rotation(ceres_pose_estimate[2]); Eigen::Matrix<double, 2, 2>
-  //       rotation_matrix = rotation.toRotationMatrix(); Eigen::Matrix<double,
-  //       3, 3> transform; transform << rotation_matrix, translation, 0.,
-  //       0., 1.;
-
-  //       Eigen::Matrix<double, 3, 1> point_begin(iter.second[i].begin()[0],
-  //       iter.second[i].begin()[1], 1.0); Eigen::Matrix<double, 3, 1>
-  //       point_end(iter.second[i].end()[0], iter.second[i].end()[1], 1.0);
-  //       const Eigen::Matrix<double, 3, 1> world_b = transform * point_begin;
-  //       const Eigen::Matrix<double, 3, 1> world_e = transform * point_end;
-  //       // std::cout << "data begin x: " << world_b[0] << " y: " << world_b[1]
-  //       << std::endl; // std::cout << "data end x: " << world_e[0] << " y: " <<
-  //       world_e[1] << std::endl;
-  //     }
-  //   }
-  *pose_estimate = transform::Rigid2d(
-    {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
 }
 
-void CeresScanMatcher2D::Match(const Eigen::Vector2d& target_translation,
-                 const transform::Rigid2d& initial_pose_estimate,
-                 const sensor::PointCloud& point_cloud,
-                 const Grid2D& grid,
-                 transform::Rigid2d* const pose_estimate,
-                 ceres::Solver::Summary* const summary) const {
-  double ceres_pose_estimate[3] = {initial_pose_estimate.translation().x(),
-                   initial_pose_estimate.translation().y(),
-                   initial_pose_estimate.rotation().angle()};
-  ceres::Problem problem;
-  CHECK_GT(options_.occupied_space_weight(), 0.);
-  switch (grid.GetGridType()) {
-  case GridType::PROBABILITY_GRID:
-    problem.AddResidualBlock(
-      CreateOccupiedSpaceCostFunction2D(
-        options_.occupied_space_weight() /
-          std::sqrt(static_cast<double>(point_cloud.size())),
-        point_cloud, grid),
-      nullptr /* loss function */, ceres_pose_estimate);
-    break;
-  case GridType::TSDF:
-    problem.AddResidualBlock(
-      CreateTSDFMatchCostFunction2D(
-        options_.occupied_space_weight() /
-          std::sqrt(static_cast<double>(point_cloud.size())),
-        point_cloud, static_cast<const TSDF2D&>(grid)),
-      nullptr /* loss function */, ceres_pose_estimate);
-    break;
+void CeresScanMatcher2D::AddPointToLineConstraints(
+    ceres::Problem& problem,
+    const sensor::PointCloud& point_cloud,
+    ikd_tree::iKdTree<pcl::PointXYZ>& cloud_ikdtree,
+    double weight,
+    const double* ceres_pose_estimate) const
+{
+  if (cloud_ikdtree.Root_Node == nullptr || cloud_ikdtree.validnum() < 10) {
+    return;
   }
-  CHECK_GT(options_.translation_weight(), 0.);
-  problem.AddResidualBlock(
-    TranslationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-      options_.translation_weight(), target_translation),
-    nullptr /* loss function */, ceres_pose_estimate);
-  CHECK_GT(options_.rotation_weight(), 0.);
-  problem.AddResidualBlock(
-    RotationDeltaCostFunctor2D::CreateAutoDiffCostFunction(
-      options_.rotation_weight(), ceres_pose_estimate[2]),
-    nullptr /* loss function */, ceres_pose_estimate);
 
-  ceres::Solve(ceres_solver_options_, &problem, summary);
+  const auto pose_estimate_temp = transform::Rigid2d(
+      {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
+  const auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
 
-  *pose_estimate = transform::Rigid2d(
-    {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
+  ceres::LossFunction* loss_function = new ceres::HuberLoss(0.1);
+  std::vector<sensor::PointCloud::PointType> p_src_vec;
+  std::vector<sensor::PointCloud::PointType> p_a_vec;
+  std::vector<sensor::PointCloud::PointType> p_b_vec;
+
+  const size_t step = std::max(size_t(1), point_cloud.size() / 50);
+  
+  for (size_t i = 0; i < point_cloud.size(); i += step) {
+    const auto& p_src = point_cloud[i];
+    const Eigen::Vector3d p_transformed =
+        pose_estimate_temp_3d.rotation().toRotationMatrix() * 
+        p_src.position.cast<double>() + pose_estimate_temp_3d.translation();
+
+    // KD-tree search
+    pcl::PointXYZ query_point(p_transformed.x(), p_transformed.y(), p_transformed.z());
+    std::vector<float> squared_distances(10, -1);
+    ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
+    cloud_ikdtree.Nearest_Search(query_point, 10, points_near, squared_distances);
+
+    // Skip if too far
+    if (std::sqrt(squared_distances[9]) > 0.15) {
+      continue;
+    }
+
+    // Compute local covariance
+    std::vector<Eigen::Vector3f> nearCorners;
+    Eigen::Vector3f center(0, 0, 0);
+    for (int j = 0; j < 10; j++) {
+      Eigen::Vector3f p_tmp(points_near[j].x, points_near[j].y, points_near[j].z);
+      center += p_tmp;
+      nearCorners.push_back(p_tmp);
+    }
+    center /= 10.0;
+
+    Eigen::Matrix2f covMat = Eigen::Matrix2f::Zero();
+    for (int j = 0; j < 10; j++) {
+      Eigen::Matrix<float, 2, 1> tmpZeroMean = (nearCorners[j] - center).head<2>();
+      covMat += tmpZeroMean * tmpZeroMean.transpose();
+    }
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix2f> saes(covMat);
+    
+    // Check if it's a line feature (largest eigenvalue >> smallest)
+    if (saes.eigenvalues()[1] > 3 * saes.eigenvalues()[0]) {
+      Eigen::Vector3f unit_direction = Eigen::Vector3f::Zero();
+      unit_direction.head<2>() = saes.eigenvectors().col(1);
+      
+      sensor::PointCloud::PointType point_a, point_b;
+      point_a.position = 0.1 * unit_direction + center;
+      point_b.position = -0.1 * unit_direction + center;
+
+      p_src_vec.push_back(p_src);
+      p_a_vec.push_back(point_a);
+      p_b_vec.push_back(point_b);
+    }
+  }
+
+  // Add residuals
+  if (!p_src_vec.empty()) {
+    const double normalized_weight = weight / static_cast<double>(p_src_vec.size());
+    for (size_t i = 0; i < p_src_vec.size(); i++) {
+      problem.AddResidualBlock(
+          CreatePointLineCostFunction2D(normalized_weight, 
+                                       p_src_vec[i], p_a_vec[i], p_b_vec[i]),
+          loss_function, const_cast<double*>(ceres_pose_estimate));
+    }
+  }
+}
+
+void CeresScanMatcher2D::AddHighlightPointConstraints(
+    ceres::Problem& problem,
+    const sensor::PointCloud& highlight_point_cloud,
+    ikd_tree::iKdTree<pcl::PointXYZ>& highlight_cloud_ikdtree,
+    double weight,
+    const double* ceres_pose_estimate) const
+{
+  if (highlight_cloud_ikdtree.Root_Node == nullptr || 
+      highlight_cloud_ikdtree.validnum() < 10) {
+    return;
+  }
+
+  const auto pose_estimate_temp = transform::Rigid2d(
+      {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
+  const auto pose_estimate_temp_3d = transform::Embed3D(pose_estimate_temp);
+
+  ceres::LossFunction* loss_function = new ceres::HuberLoss(0.1);
+  std::vector<sensor::PointCloud::PointType> src_points;
+  std::vector<sensor::PointCloud::PointType> nearest_points;
+
+  const size_t step = highlight_point_cloud.size() > 200 ? 2 : 1;
+
+  for (size_t i = 0; i < highlight_point_cloud.size(); i += step) {
+    const auto& p_src = highlight_point_cloud[i];
+    const Eigen::Vector3d p_transformed =
+        pose_estimate_temp_3d.rotation().toRotationMatrix() * 
+        p_src.position.cast<double>() + pose_estimate_temp_3d.translation();
+
+    // KD-tree search
+    pcl::PointXYZ query_point(p_transformed.x(), p_transformed.y(), p_transformed.z());
+    std::vector<float> squared_distances(1, -1);
+    ikd_tree::iKdTree<pcl::PointXYZ>::PointVector points_near;
+    highlight_cloud_ikdtree.Nearest_Search(query_point, 1, points_near, squared_distances);
+
+    // Skip if too far
+    if (std::sqrt(squared_distances[0]) > options_.max_correspondence_distance()) {
+      continue;
+    }
+
+    src_points.push_back(p_src);
+    
+    sensor::PointCloud::PointType p_tmp;
+    p_tmp.position.x() = points_near[0].x;
+    p_tmp.position.y() = points_near[0].y;
+    p_tmp.position.z() = points_near[0].z;
+    nearest_points.push_back(p_tmp);
+  }
+
+  // Add residuals
+  if (!src_points.empty()) {
+    const double normalized_weight = weight / static_cast<double>(src_points.size());
+    for (size_t i = 0; i < src_points.size(); i++) {
+      problem.AddResidualBlock(
+          CreatePointDeltaCostFunction2D(normalized_weight, 
+                                        src_points[i], nearest_points[i]),
+          loss_function, const_cast<double*>(ceres_pose_estimate));
+    }
+  }
+}
+
+bool CeresScanMatcher2D::ComputeCovariance(
+    const ceres::Problem& problem,
+    const double* ceres_pose_estimate,
+    Eigen::Matrix3d* covariance) const
+{
+  CHECK(covariance != nullptr);
+  
+  Eigen::Matrix<double, 3, 3, Eigen::RowMajor> cov_pose = 
+      Eigen::Matrix<double, 3, 3, Eigen::RowMajor>::Zero();
+  
+  ceres::Covariance::Options cov_options;
+  cov_options.algorithm_type = ceres::DENSE_SVD;
+  cov_options.null_space_rank = -1;  // Automatic determination
+  
+  ceres::Covariance covariance_estimator(cov_options);
+  
+  std::vector<std::pair<const double*, const double*>> covariance_blocks;
+  covariance_blocks.emplace_back(
+      std::make_pair(ceres_pose_estimate, ceres_pose_estimate));
+  
+  // Need to const_cast because Ceres API expects non-const pointer
+  if (!covariance_estimator.Compute(covariance_blocks, const_cast<ceres::Problem*>(&problem))) {
+    LOG(WARNING) << "Covariance computation failed";
+    return false;
+  }
+  
+  if (!covariance_estimator.GetCovarianceBlockInTangentSpace(
+          ceres_pose_estimate, ceres_pose_estimate, cov_pose.data())) {
+    LOG(WARNING) << "Failed to get covariance block in tangent space";
+    return false;
+  }
+  
+  *covariance = cov_pose;
+  
+  // Validate covariance (should be positive semi-definite)
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(*covariance);
+  if (es.eigenvalues().minCoeff() < -1e-6) {
+    LOG(WARNING) << "Covariance matrix is not positive semi-definite, "
+                 << "min eigenvalue: " << es.eigenvalues().minCoeff();
+    return false;
+  }
+  
+  return true;
 }
 
 }  // namespace scan_matching
 }  // namespace mapping
 }  // namespace cartographer
-
-
-      // 点云误差
-      // ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-      // std::vector<std::pair<int,int>> index_buff;
-      // size_t step = std::max(size_t(1), point_cloud.size() / 50);
-      // 下面这段代码是点到点的误差，已经被点到线的误差替换掉了
-      // for (size_t i = 0; i < point_cloud.size(); i += step) {
-      //   const auto& p_src = point_cloud[i];
-      //   // // std::cout << p_src.position.transpose() << std::endl;
-      //   // // std::cout << pose_estimate_temp_3d.rotation().toRotationMatrix().matrix() << std::endl;
-      //   // // std::cout << pose_estimate_temp_3d.translation().transpose() << std::endl;
-      //   const Eigen::Vector3d p_transformed =
-      //                                 pose_estimate_temp_3d.rotation().toRotationMatrix()
-      //                                 * p_src.position.cast<double>()
-      //                                 + pose_estimate_temp_3d.translation();
-      //   // KD-tree查找最近的点
-      //   pcl::PointXYZ query_point(p_transformed.x(),
-      //                             p_transformed.y(),
-      //                             p_transformed.z());
-      
-      //   std::vector<int> indices(1);
-      //   std::vector<float> squared_distances(1);
-      //   cloud_kdtree.nearestKSearch(query_point, 1, indices, squared_distances);
-      //   // 如果最近点不是地图点，则跳过
-      //   double distance = std::sqrt(squared_distances[0]);
-      //   if (distance > options_.max_correspondence_distance()) {
-      //     continue;
-      //   }
-      //   // // std::cout << "p_transformed: " << p_transformed.transpose() << std::endl;
-      //   // // std::cout << "distance: " << distance << std::endl;
-      //   // // std::cout << "nearest point: " << cloud_kdtree.getInputCloud()->points[indices[0]] << std::endl;
-      //   index_buff.push_back(std::make_pair(i, indices[0]));
-      // }
-      // for (size_t i = 0; i < index_buff.size(); i++) {
-      //   const auto& p_src = point_cloud[index_buff[i].first];
-      //   const int& indices = index_buff[i].second;
-      //   sensor::PointCloud::PointType p_dist;
-      //   p_dist.position.x() = cloud_kdtree.getInputCloud()->points[indices].x;
-      //   p_dist.position.y() = cloud_kdtree.getInputCloud()->points[indices].y;
-      //   p_dist.position.z() = cloud_kdtree.getInputCloud()->points[indices].z;
-      //   problem.AddResidualBlock(
-      //     CreatePointDeltaCostFunction2D(
-      //       options_.point_weight() / 
-      //       static_cast<double>(index_buff.size()),
-      //       p_src, p_dist),
-      //     loss_function /* loss function */, ceres_pose_estimate);
-      // }

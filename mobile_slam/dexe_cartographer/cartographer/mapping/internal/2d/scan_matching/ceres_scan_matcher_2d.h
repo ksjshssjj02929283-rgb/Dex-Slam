@@ -45,79 +45,77 @@ class CeresScanMatcher2D {
 
   CeresScanMatcher2D(const CeresScanMatcher2D&) = delete;
   CeresScanMatcher2D& operator=(const CeresScanMatcher2D&) = delete;
+  
+  // Structure to hold map data for matching
+  struct MapData {
+    const Grid2D* grid = nullptr;
+    const LineMap2DList* line_map = nullptr;
+    ikd_tree::iKdTree<pcl::PointXYZ>* cloud_ikdtree = nullptr;
+    ikd_tree::iKdTree<pcl::PointXYZ>* highlight_cloud_ikdtree = nullptr;
+    const std::map<int, std::vector<sensor::LineData>>* tracked_line_data = nullptr;
+    double weight_factor = 1.0;  // Weight factor for this map (used for local vs global)
+  };
 
-  // Aligns 'point_cloud' within the 'grid' given an
-  // 'initial_pose_estimate' and returns a 'pose_estimate' and the solver
-  // 'summary'.
-  // grid, local line, global line, local cloud, global cloud, highlight_point_cloud
-  void Match(const Eigen::Vector2d & target_translation,
-             const transform::Rigid2d & initial_pose_estimate,
-             const sensor::PointCloud & point_cloud,
-             const sensor::PointCloud & highlight_point_cloud,
-             const std::map<int, std::vector<sensor::LineData>> & local_tracked_line_data,
-             const std::map<int, std::vector<sensor::LineData>> & global_tracked_line_data,
-             const Grid2D & local_grid,
-             const Grid2D & global_grid,
-             const LineMap2DList & local_line_map,
-             const LineMap2DList & global_line_map,
-             ikd_tree::iKdTree<pcl::PointXYZ> & local_cloud_ikdtree,
-             ikd_tree::iKdTree<pcl::PointXYZ> & global_cloud_ikdtree,
-             ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
-             transform::Rigid2d * const pose_estimate,
-             Eigen::Matrix3d& cov,
-             ceres::Solver::Summary * const summary) const;
+  // Unified Match method for localization
+  // Uses both local and global maps with configurable weights
+  void MatchForLocalization(
+      const transform::Rigid2d& initial_pose_estimate,
+      const sensor::PointCloud& point_cloud,
+      const sensor::PointCloud& highlight_point_cloud,
+      const MapData& local_map,
+      const MapData& global_map,
+      transform::Rigid2d* const pose_estimate,
+      Eigen::Matrix3d* const covariance,
+      ceres::Solver::Summary* const summary) const;
 
-  // gird, line, point cloud
-  void Match(const Eigen::Vector2d & target_translation,
-            const transform::Rigid2d & initial_pose_estimate,
-            const sensor::PointCloud & point_cloud,
-            const std::map<int, std::vector<sensor::LineData>> & line_data,
-            const Grid2D & grid, const LineMap2DList & line_map,
-            ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
-            transform::Rigid2d * const pose_estimate,
-            ceres::Solver::Summary * const summary) const;
-
-  // gird, line, point cloud, highlight_point_cloud
-  void Match(const Eigen::Vector2d & target_translation,
-            const transform::Rigid2d & initial_pose_estimate,
-            const sensor::PointCloud & point_cloud,
-            const sensor::PointCloud & highlight_point_cloud,
-            const std::map<int, std::vector<sensor::LineData>> & line_data,
-            const Grid2D & grid, const LineMap2DList & line_map,
-            ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
-            ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
-            transform::Rigid2d * const pose_estimate,
-            ceres::Solver::Summary * const summary) const;
-
-  // gird, point cloud, highlight_point_cloud
-  void Match(const Eigen::Vector2d & target_translation,
-            const transform::Rigid2d & initial_pose_estimate,
-            const sensor::PointCloud & point_cloud,
-            const sensor::PointCloud & highlight_point_cloud,
-            const Grid2D & grid,
-            ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
-            ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
-            transform::Rigid2d * const pose_estimate,
-            ceres::Solver::Summary * const summary) const;
-
-  // grid, line
-  void Match(const Eigen::Vector2d & target_translation,
-            const transform::Rigid2d & initial_pose_estimate,
-            const sensor::PointCloud & point_cloud,
-            const std::map<int, std::vector<sensor::LineData>> & line_data,
-            const Grid2D & grid, const LineMap2DList & line_map,
-            transform::Rigid2d * const pose_estimate,
-            ceres::Solver::Summary * const summary) const;
-
-  // grid
-  void Match(const Eigen::Vector2d& target_translation,
-            const transform::Rigid2d& initial_pose_estimate,
-            const sensor::PointCloud& point_cloud,
-            const Grid2D& grid,
-            transform::Rigid2d* const pose_estimate,
-            ceres::Solver::Summary* const summary) const;
+  void Match(
+      const transform::Rigid2d& initial_pose_estimate,
+      const sensor::PointCloud& point_cloud,
+      const sensor::PointCloud& highlight_point_cloud,
+      const MapData& map,
+      transform::Rigid2d* const pose_estimate,
+      Eigen::Matrix3d* const covariance,
+      ceres::Solver::Summary* const summary) const;
 
  private:
+  // Helper method to add grid constraints
+  void AddGridConstraints(
+      ceres::Problem& problem,
+      const sensor::PointCloud& point_cloud,
+      const Grid2D& grid,
+      double weight,
+      double* ceres_pose_estimate) const;
+
+  // Helper method to add line constraints
+  void AddLineConstraints(
+      ceres::Problem& problem,
+      const std::map<int, std::vector<sensor::LineData>>& tracked_line_data,
+      const LineMap2DList& line_map,
+      double weight,
+      double* ceres_pose_estimate) const;
+
+  // Helper method to add point-to-line constraints from KD-tree
+  void AddPointToLineConstraints(
+      ceres::Problem& problem,
+      const sensor::PointCloud& point_cloud,
+      ikd_tree::iKdTree<pcl::PointXYZ>& cloud_ikdtree,
+      double weight,
+      const double* ceres_pose_estimate) const;
+
+  // Helper method to add highlight point constraints
+  void AddHighlightPointConstraints(
+      ceres::Problem& problem,
+      const sensor::PointCloud& highlight_point_cloud,
+      ikd_tree::iKdTree<pcl::PointXYZ>& highlight_cloud_ikdtree,
+      double weight,
+      const double* ceres_pose_estimate) const;
+
+  // Helper method to compute covariance from Ceres problem
+  bool ComputeCovariance(
+      const ceres::Problem& problem,
+      const double* ceres_pose_estimate,
+      Eigen::Matrix3d* covariance) const;
+
   const proto::CeresScanMatcherOptions2D options_;
   ceres::Solver::Options ceres_solver_options_;
 };
