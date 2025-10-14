@@ -42,11 +42,8 @@ find_package(Boost REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 find_package(Ceres REQUIRED COMPONENTS SuiteSparse)
 find_package(Eigen3 REQUIRED)
 find_package(LuaGoogle REQUIRED)
-<<<<<<< HEAD:mobile_slam/dexe_cartographer/CMakeLists.txt
-=======
 find_package(OpenCV 4 REQUIRED)
 find_package(PCL REQUIRED)
->>>>>>> e6e0f79 (更新cartographer core):mobile_slam/src/2d_lidar_slam/dexe_cartographer/CMakeLists.txt
 if(WIN32)
   # On Windows, Protobuf is incorrectly found by the bundled CMake module, so prefer native CMake config.
   set(protobuf_MODULE_COMPATIBLE TRUE CACHE INTERNAL "")
@@ -237,11 +234,7 @@ target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
 target_link_libraries(${PROJECT_NAME} PUBLIC ${EIGEN3_LIBRARIES})
 
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-<<<<<<< HEAD:mobile_slam/dexe_cartographer/CMakeLists.txt
-  "${CERES_INCLUDE_DIR}")
-=======
   "${CERES_INCLUDE_DIRS}")
->>>>>>> e6e0f79 (更新cartographer core):mobile_slam/src/2d_lidar_slam/dexe_cartographer/CMakeLists.txt
 target_link_libraries(${PROJECT_NAME} PUBLIC ${CERES_LIBRARIES})
 
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
