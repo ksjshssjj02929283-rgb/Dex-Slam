@@ -74,7 +74,7 @@ TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.angle_rec = false
 TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.intensity_threshold = 30
 TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.connect_threshold = 0.05
 TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.min_cluster_points = 5
-TRAJECTORY_BUILDER_2D.use_imu_data = false
+TRAJECTORY_BUILDER_2D.use_imu_data = true
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 
 -- [[局部匹配参数]]

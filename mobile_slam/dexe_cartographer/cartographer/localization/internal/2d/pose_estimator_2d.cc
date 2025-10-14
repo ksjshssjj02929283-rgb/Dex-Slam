@@ -56,6 +56,19 @@ PoseEstimator2D::PoseEstimator2D(
       laser_synchronizer_(expected_range_sensor_ids),
       expected_range_sensor_ids_(expected_range_sensor_ids)
 {
+  // 初始化位姿插值器（如果使用IMU）
+  if (options_.use_imu_data()) {
+    CHECK(!options_.pose_extrapolator_options().use_imu_based());
+    extrapolator_ = std::make_shared<mapping::PoseExtrapolator>(
+        ::cartographer::common::FromSeconds(options_.pose_extrapolator_options()
+                                                .constant_velocity()
+                                                .pose_queue_duration()),
+        options_.pose_extrapolator_options()
+            .constant_velocity()
+            .imu_gravity_time_constant());
+    LOG(INFO) << "PoseExtrapolator initialized for gravity alignment";
+  }
+  
   LOG(INFO) << "Creating single data preprocessor for all sensors";
   data_preprocessor_ = absl::make_unique<preprocess::DataPreprocessor>(
       options_.data_preprocessor_options());
@@ -519,12 +532,27 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
     return nullptr;
   }
   
+  // 估计重力对齐（如果使用IMU）
+  transform::Rigid3d gravity_alignment = transform::Rigid3d::Identity();
+  if (options_.use_imu_data() && extrapolator_ && is_exptrapolator_initialized_) {
+    const Eigen::Quaterniond gravity_orientation = 
+        extrapolator_->EstimateGravityOrientation(sync_time);
+    // 在2D SLAM中，我们只需要补偿roll和pitch，不改变yaw
+    const Eigen::Vector3d rpy = transform::RotationQuaternionToAngleAxisVector(gravity_orientation);
+    const double roll = rpy.x();
+    const double pitch = rpy.y();
+    // yaw保持为0，只使用roll和pitch构建重力对齐
+    const Eigen::Quaterniond gravity_alignment_2d = 
+        transform::RollPitchYaw(roll, pitch, 0.);
+    gravity_alignment = transform::Rigid3d::Rotation(gravity_alignment_2d);
+  }
+  
   // 使用融合后的数据进行位姿估计和地图更新
   return ProcessDataAndEstimatePose(
       "merged_sensors",  // 使用一个标识来表示这是合并的传感器数据
       current_sensor_time,
       merged_data,
-      transform::Rigid3d::Identity(), 
+      gravity_alignment, 
       sensor_duration,
       data_preprocessor_.get());
 }
@@ -666,7 +694,8 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       time,
       merged_data,
       tracked_lane_data,
-      pose_estimate,gravity_alignment.rotation());
+      pose_estimate,
+      gravity_alignment.rotation());
 
   if (insertion_result) {
     amcl_core_->SetGrid(active_submaps_.submaps().front()->grid());
@@ -824,6 +853,18 @@ PoseEstimator2D::InsertIntoSubmap(
  */
 void PoseEstimator2D::AddImuData(const sensor::ImuData& imu_data) {
   CHECK(options_.use_imu_data()) << "An unexpected IMU packet was added.";
+  
+  // 初始化位姿插值器（第一次收到IMU数据时）
+  if (extrapolator_ && !is_exptrapolator_initialized_) {
+    extrapolator_->AddPose(imu_data.time, local_pose_);
+    is_exptrapolator_initialized_ = true;
+    LOG(INFO) << "PoseExtrapolator initialized at time: " << imu_data.time;
+  }
+  
+  // 向位姿插值器中加入IMU数据
+  if (extrapolator_) {
+    extrapolator_->AddImuData(imu_data);
+  }
 }
 
 /**
@@ -837,6 +878,11 @@ void PoseEstimator2D::AddOdometryData(
   // 将里程计数据添加到数据预处理器
   if (data_preprocessor_) {
     data_preprocessor_->AddOdometryData(odometry_data);
+  }
+  
+  // 将里程计数据添加到位姿插值器
+  if (extrapolator_) {
+    extrapolator_->AddOdometryData(odometry_data);
   }
 }
 

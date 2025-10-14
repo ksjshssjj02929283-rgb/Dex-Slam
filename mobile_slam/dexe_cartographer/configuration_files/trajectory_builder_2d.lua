@@ -13,7 +13,7 @@
 -- limitations under the License.
 
 TRAJECTORY_BUILDER_2D = {
-  use_imu_data = false,
+  use_imu_data = true,
   min_z = -0.8,
   max_z = 2.,
   voxel_filter_size = 0.04,

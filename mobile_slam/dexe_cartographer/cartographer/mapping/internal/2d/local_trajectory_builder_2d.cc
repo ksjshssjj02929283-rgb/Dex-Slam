@@ -249,6 +249,21 @@ LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
     return nullptr;
   }
   
+  // 估计重力对齐（如果使用IMU）
+  transform::Rigid3d gravity_alignment = transform::Rigid3d::Identity();
+  if (options_.use_imu_data() && extrapolator_ && is_exptrapolator_initialized_) {
+    const Eigen::Quaterniond gravity_orientation = 
+        extrapolator_->EstimateGravityOrientation(sync_time);
+    // 在2D SLAM中，我们只需要补偿roll和pitch，不改变yaw
+    const Eigen::Vector3d rpy = transform::RotationQuaternionToAngleAxisVector(gravity_orientation);
+    const double roll = rpy.x();
+    const double pitch = rpy.y();
+    // yaw保持为0，只使用roll和pitch构建重力对齐
+    const Eigen::Quaterniond gravity_alignment_2d = 
+        transform::RollPitchYaw(roll, pitch, 0.);
+    gravity_alignment = transform::Rigid3d::Rotation(gravity_alignment_2d);
+  }
+  
   // 更新传感器时间信息
   const common::Time current_sensor_time = sync_time;
   absl::optional<common::Duration> sensor_duration;
@@ -261,7 +276,7 @@ LocalTrajectoryBuilder2D::ProcessSynchronizedLaserData(
       "merged_sensors",  // 使用一个标识来表示这是合并的传感器数据
       current_sensor_time,
       merged_data,
-      transform::Rigid3d::Identity(), 
+      gravity_alignment, 
       sensor_duration,
       data_preprocessor_.get());
 }
@@ -317,9 +332,17 @@ LocalTrajectoryBuilder2D::ProcessDataAndEstimatePose(
     return nullptr;
   }
   
+  // pose_estimate_2d 是在 gravity-aligned frame 中的位姿
+  // 需要转换回 tracking frame (local frame)
   const transform::Rigid3d pose_estimate =
-      transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
+      transform::Embed3D(*pose_estimate_2d) * gravity_alignment.inverse();
   local_pose_ = pose_estimate;
+  
+  // 更新位姿插值器
+  if (extrapolator_) {
+    extrapolator_->AddPose(time, pose_estimate);
+  }
+  
   // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
   UpdateLastOdomForDelta(time);
 
@@ -502,6 +525,9 @@ void LocalTrajectoryBuilder2D::AddImuData(const sensor::ImuData& imu_data) {
   // 当使用IMU数据的时候，在第一次加入IMU数据时，初始化位姿插值器
   InitializeExtrapolator(imu_data.time);
   // 向位姿插值器中加入IMU数据
+  if (extrapolator_) {
+    extrapolator_->AddImuData(imu_data);
+  }
 }
 
 /**
@@ -521,17 +547,28 @@ void LocalTrajectoryBuilder2D::AddOdometryData(
   if (data_preprocessor_) {
     data_preprocessor_->AddOdometryData(curr_odom_data_);
   }
+  
+  // 将里程计数据添加到位姿插值器
+  if (extrapolator_) {
+    extrapolator_->AddOdometryData(curr_odom_data_);
+  }
 }
 
 void LocalTrajectoryBuilder2D::InitializeExtrapolator(const common::Time time) {
+  // 如果已经初始化过，直接返回
   if (extrapolator_ == nullptr) {
+    return;
+  }
+  
+  // 如果已经初始化过，不要重复初始化
+  if (is_exptrapolator_initialized_) {
     return;
   }
 
   // 设定初始位姿为单位阵
   extrapolator_->AddPose(time, local_pose_);
   is_exptrapolator_initialized_ = true;
-  std::cout << "init extrapolator at : " << time << std::endl;
+  LOG(INFO) << "Extrapolator initialized at time: " << time;
 }
 
 /**

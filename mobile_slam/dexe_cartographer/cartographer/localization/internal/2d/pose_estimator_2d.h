@@ -30,6 +30,7 @@
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/internal/range_data_collator.h"
+#include "cartographer/mapping/pose_extrapolator.h"
 #include "cartographer/preprocess/laser_synchronizer.h"
 #include "cartographer/preprocess/data_preprocessor.h"
 
@@ -226,6 +227,10 @@ private:
   std::unique_ptr<mapping::scan_matching::LineMatcher2D> line_matcher_;
 
   std::unique_ptr<amcl::AMCLCore> amcl_core_;
+  
+  // 位姿插值器，用于IMU数据处理和重力对齐估计
+  std::shared_ptr<mapping::PoseExtrapolator> extrapolator_;
+  bool is_exptrapolator_initialized_ = false;
 
   std::mutex data_mutex_;
   
