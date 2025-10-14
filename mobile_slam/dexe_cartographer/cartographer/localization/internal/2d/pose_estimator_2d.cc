@@ -276,14 +276,14 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
           pose_prediction.translation(), 
           correlative_pose.rotation());
       correlative_success = true;
-      LOG(INFO) << "Correlative matching successful, score: " << score 
-                << ", optimized pose: " << optimized_pose_prediction;
+      // LOG(INFO) << "Correlative matching successful, score: " << score 
+      //           << ", optimized pose: " << optimized_pose_prediction;
     } else {
       LOG(WARNING) << "Correlative matching failed or low score: " << score 
                    << ", using original prediction";
     }
     double correlative_time = tic_correlative.toc();
-    LOG(INFO) << "Correlative scan matcher cost: " << correlative_time << " ms";
+    // LOG(INFO) << "Correlative scan matcher cost: " << correlative_time << " ms";
   }
   
   // 最终用于Ceres优化的初始位姿
@@ -564,7 +564,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     if (pose_prediction_odom.IsValid()) {
       pose_prediction = pose_prediction_odom;
       pose_prediction_valid = true;
-      LOG(INFO) << "Using odometry prediction: " << pose_prediction;
+      // LOG(INFO) << "Using odometry prediction: " << pose_prediction;
     }
   }
   
@@ -582,7 +582,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       double delta_dist = (pose_prediction.translation() - amcl_pose->translation()).norm();
       if (delta_dist < 0.1) {  // AMCL和里程计预测接近，使用AMCL
         pose_prediction = *amcl_pose;
-        LOG(INFO) << "Using AMCL prediction: " << pose_prediction;
+        // LOG(INFO) << "Using AMCL prediction: " << pose_prediction;
       } else {
         LOG(WARNING) << "AMCL pose differs too much from odom prediction, delta: " << delta_dist;
       }
@@ -644,7 +644,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
                      << ", resetting AMCL";
         amcl_core_->SetInitialPose(*pose_estimate_2d);
       } else {
-        LOG(INFO) << "AMCL and scan match poses are consistent, delta: " << delta_dist;
+        // LOG(INFO) << "AMCL and scan match poses are consistent, delta: " << delta_dist;
       }
     }
   }
