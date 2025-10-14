@@ -17,7 +17,7 @@ POSE_INITIALIZER_2D = {
   global_localization_min_score = 0.5,
   fast_correlative_scan_matcher = {
     linear_search_window = 5.,
-    angular_search_window = math.rad(360.),
+    angular_search_window = math.rad(180.),
     branch_and_bound_depth = 7,
   },
 

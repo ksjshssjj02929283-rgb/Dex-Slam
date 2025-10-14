@@ -67,7 +67,8 @@ enum class PoseInitializerStatus {
   NotInitialized = -2,
   Failed = -1,
   Idle = 0,
-  Estimating = 2,
+  LocalEstimating = 1,     // 局部重定位中
+  GlobalEstimating = 2,    // 全局重定位中
   Success = 3
 };
 
@@ -92,6 +93,9 @@ class PoseInitializer {
 
   bool SetInitialPose(const transform::Rigid2d& initial_pose);
 
+  // 触发全局重定位，不需要初始位姿
+  void TriggerGlobalRelocalization();
+
   // 加入点云数据和线特征数据
   void UpdateSensorData(const sensor::PointCloud& scan_cloud,
                      const std::vector<sensor::LineData>& line_data);
@@ -102,14 +106,13 @@ class PoseInitializer {
   void start();
   void stop();
 
-private:
+ private:
   void Run();
   void RelocalzationOnce();
+  void GlobalRelocalzationOnce();
   void CreateRelocalzationThread();
 
-  bool IsRelocalizationSuccess();
-
-  bool IsPoseValid(const transform::Rigid2d& pose,
+  bool IsRelocalizationSuccess();  bool IsPoseValid(const transform::Rigid2d& pose,
                    const transform::Rigid2d& target,
                    const double dist_th = 0.5,
                    const double yaw_th = 0.765 /*45 degrees*/);
@@ -125,6 +128,7 @@ private:
   std::shared_ptr<transform::Rigid2d> initial_pose_;
   std::shared_ptr<transform::Rigid2d> global_pose_estimate_;
   bool need_apply_initial_pose_ = false;
+  bool need_global_relocalization_ = false;  // 标识需要进行全局重定位
 
   bool working_ = false;
 

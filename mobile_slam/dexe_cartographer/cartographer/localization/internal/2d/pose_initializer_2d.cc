@@ -62,6 +62,7 @@ void PoseInitializer::ResetStatus()
 {
   // 注意：此函数现在期望在锁内被调用
   need_apply_initial_pose_ = false;
+  need_global_relocalization_ = false;
 
   initial_pose_.reset();
   global_pose_estimate_.reset();
@@ -119,7 +120,18 @@ bool PoseInitializer::SetInitialPose(const transform::Rigid2d &initial_pose)
   initial_pose_ = std::make_shared<transform::Rigid2d>(initial_pose);
   global_pose_estimate_.reset();
   need_apply_initial_pose_ = true;
+  need_global_relocalization_ = false;  // 有初始位姿时，不需要全局重定位
   return true;
+}
+
+void PoseInitializer::TriggerGlobalRelocalization()
+{
+  std::unique_lock<std::mutex> lock(data_mutex_);
+  initial_pose_.reset();
+  global_pose_estimate_.reset();
+  need_apply_initial_pose_ = false;
+  need_global_relocalization_ = true;  // 触发全局重定位
+  LOG(INFO) << "Triggered global relocalization";
 }
 
 void PoseInitializer::UpdateSensorData(const sensor::PointCloud& scan_cloud,
@@ -183,8 +195,12 @@ void PoseInitializer::Run()
     }
     
     // 检查是否有数据并且需要重新定位
-    if (curr_cloud_ != nullptr && !curr_cloud_->empty() && need_apply_initial_pose_) {
-      RelocalzationOnce();  // 在锁内执行定位，保证数据一致性
+    if (curr_cloud_ != nullptr && !curr_cloud_->empty()) {
+      if (need_apply_initial_pose_) {
+        RelocalzationOnce();  // 局部重定位（有初始位姿）
+      } else if (need_global_relocalization_) {
+        GlobalRelocalzationOnce();  // 全局重定位（无初始位姿）
+      }
     }
   }
   
@@ -214,7 +230,7 @@ void PoseInitializer::RelocalzationOnce()
           *global_grid_map_, options_.fast_correlative_scan_matcher_options());
   }
 
-  initializer_status_ = PoseInitializerStatus::Estimating;
+  initializer_status_ = PoseInitializerStatus::LocalEstimating;
 
   float score;
   if (options_.use_global_matching()) {
@@ -322,6 +338,110 @@ void PoseInitializer::RelocalzationOnce()
   //           << pose_observation->rotation().angle();
 }
 
+void PoseInitializer::GlobalRelocalzationOnce()
+{
+  if (global_grid_map_ == nullptr) {
+    LOG(ERROR) << "Global grid map is not initialized, please set global grid map first.";
+    initializer_status_ = PoseInitializerStatus::NotInitialized;
+    return;
+  }
+
+  if (curr_cloud_ == nullptr || curr_cloud_->empty()) {
+    return;
+  }
+
+  if (!need_global_relocalization_) {
+    LOG(WARNING) << "Global relocalization is not triggered.";
+    return;
+  }
+
+  if (fast_correlative_scan_matcher_ == nullptr) {
+    fast_correlative_scan_matcher_ =
+        std::make_unique<mapping::scan_matching::FastCorrelativeScanMatcher2D>(
+          *global_grid_map_, options_.fast_correlative_scan_matcher_options());
+  }
+
+  initializer_status_ = PoseInitializerStatus::GlobalEstimating;
+
+  // 全局重定位：使用MatchFullSubmap进行全图匹配
+  LOG(INFO) << "Starting global relocalization...";
+  
+  // 创建一个临时位姿用于存储全局匹配结果
+  auto global_match_pose = std::make_shared<transform::Rigid2d>();
+  float global_score = 0.0;
+
+  bool global_match_success = fast_correlative_scan_matcher_->MatchFullSubmap(
+    *curr_cloud_, 
+    options_.global_localization_min_score(), 
+    &global_score, 
+    global_match_pose.get());
+
+  LOG(INFO) << "Global localization score: " << global_score;
+
+  if (!global_match_success || global_score < options_.global_localization_min_score()) {
+    LOG(ERROR) << "Global relocalization failed, score too low: " << global_score;
+    initializer_status_ = PoseInitializerStatus::Failed;
+    return;
+  }
+
+  LOG(INFO) << "Global match pose: " << *global_match_pose;
+
+  // 使用全局匹配的结果作为初始位姿进行精细匹配
+  initial_pose_ = global_match_pose;
+
+  // 进行在线相关扫描匹配以改进位姿
+  transform::Rigid2d online_correlative_pose;
+  if (options_.use_online_correlative_scan_matching()) {
+    const double score = real_time_correlative_scan_matcher_->Match(
+      *initial_pose_, *curr_cloud_,
+      *global_grid_map_, &online_correlative_pose);
+
+    if (score < options_.global_localization_min_score()) {
+      LOG(WARNING) << "Online correlative scan matcher score is too low: " << score;
+      // 不直接失败，继续使用全局匹配结果
+    } else {
+      LOG(INFO) << "Online correlative scan matcher improved pose, score: " << score;
+      initial_pose_ = std::make_shared<transform::Rigid2d>(online_correlative_pose);
+    }
+  }
+
+  // 进行Ceres精细优化
+  global_pose_estimate_ = std::make_unique<transform::Rigid2d>();
+  ceres::Solver::Summary summary;
+  
+  // 使用线特征进行匹配
+  if (curr_line_data_->empty()) {
+    LOG(WARNING) << "No line data in global scan matcher.";
+  }
+  
+  std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
+  if (curr_line_data_->size() != 0 && global_line_map_->size() != 0) {
+    line_matcher_->TrackLineFromMap(*initial_pose_,
+                                    *curr_line_data_,
+                                    *global_line_map_,
+                                    tracked_lane_data);
+  }
+
+  ceres_scan_matcher_->Match(initial_pose_->translation(),
+                            *initial_pose_,
+                            *curr_cloud_,
+                            tracked_lane_data,
+                            *global_grid_map_,
+                            *global_line_map_,
+                            *global_cloud_ikdtree_,
+                            global_pose_estimate_.get(),
+                            &summary);
+
+  if (!IsRelocalizationSuccess()) {
+    global_pose_estimate_.reset();
+    initializer_status_ = PoseInitializerStatus::Failed;
+    LOG(ERROR) << "Global relocalization validation failed";
+  } else {
+    initializer_status_ = PoseInitializerStatus::Success;
+    need_global_relocalization_ = false;  // 全局重定位成功后重置标志
+    LOG(INFO) << "Global relocalization succeeded! Final pose: " << *global_pose_estimate_;
+  }
+}
 
 bool PoseInitializer::IsRelocalizationSuccess()
 {

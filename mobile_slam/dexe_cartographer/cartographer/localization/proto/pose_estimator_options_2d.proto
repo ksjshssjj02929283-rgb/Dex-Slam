@@ -90,4 +90,7 @@ message PoseEstimatorOptions2D {
   AMCLCoreOptions amcl_core_options = 28;
 
   LocalMapUpdaterOptions2D local_map_updater_options = 29;
+  
+  // Whether to automatically trigger global relocalization when no initial pose is provided
+  bool auto_trigger_global_relocalization = 30;
 }

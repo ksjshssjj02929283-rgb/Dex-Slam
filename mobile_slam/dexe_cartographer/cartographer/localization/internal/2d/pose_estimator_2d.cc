@@ -166,8 +166,37 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
   pose_initializer_->SetInitialPose(transform::Project2D(initial_pose));
   pose_initializer_->start();
   loc_state_ = LocalizationState::RELOCALIZING;
+  
+  // 重置全局重定位尝试标志，因为现在有了新的初始位姿
+  has_tried_global_relocalization_ = false;
 
   return true;
+}
+
+void PoseEstimator2D::TriggerGlobalRelocalization()
+{
+  if (global_grid_map_ == nullptr) {
+    LOG(ERROR) << "Global grid map is not initialized, cannot trigger global relocalization.";
+    return;
+  }
+  
+  // 初始化pose_initializer_（如果还没有）
+  if (!pose_initializer_) {
+    pose_initializer_ = std::make_unique<PoseInitializer>(
+                                  options_.pose_initializer_options());
+    pose_initializer_->InitGlobalLineMap(global_line_map_);
+  }
+
+  // 设置全局地图用于全局重定位
+  pose_initializer_->InitGlobalGridMap(global_grid_map_);
+  pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+
+  // 触发全局重定位
+  pose_initializer_->TriggerGlobalRelocalization();
+  pose_initializer_->start();
+  loc_state_ = LocalizationState::RELOCALIZING;
+
+  LOG(INFO) << "Triggered global relocalization without initial pose";
 }
 
 sensor::RangeData
@@ -405,6 +434,14 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
     return nullptr;
   }
   
+  // 如果还没有初始化且没有进行重定位，根据配置决定是否自动触发全局重定位
+  if (loc_state_ == LocalizationState::INITIALIZED && !pose_initializer_ && 
+      options_.auto_trigger_global_relocalization())
+  {
+    LOG(INFO) << "No initial pose provided, triggering global relocalization automatically...";
+    TriggerGlobalRelocalization();
+  }
+  
   // 只有在定位模式下才会用关键帧策略
   if (loc_state_ == LocalizationState::LOCALIZED) {
     if (keyframe_motion_filter_.IsSimilar(sync_time, odom_at_sync_time->pose)) {
@@ -440,7 +477,7 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
     if (initializer_status == PoseInitializerStatus::Success) {
       auto initial_pose = pose_initializer_->GetEstimatedPose();
       if (initial_pose) {
-        LOG(WARNING) << "Initialized pose: " << *initial_pose;
+        LOG(WARNING) << "Relocalization succeeded! Initial pose: " << *initial_pose;
         local_pose_ = transform::Embed3D(*initial_pose);
         // 更新用于计算delta pose的基准里程计数据
         UpdateLastOdomForDelta(sync_time);
@@ -448,11 +485,32 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
         pose_initializer_->stop();
         active_submaps_.clear();
         local_map_updater_->UpdateRobotPose(transform::Project2D(local_pose_));
+        
+        // 重置全局重定位尝试标志
+        has_tried_global_relocalization_ = false;
       }
     } else if (initializer_status == PoseInitializerStatus::Failed) {
       LOG(WARNING) << "Pose initializer failed.";
-      loc_state_ = LocalizationState::LOCALIZATION_FAILED;
-      pose_initializer_->stop();
+      
+      // 检查当前是否是局部重定位失败，如果是，尝试全局重定位
+      if (!has_tried_global_relocalization_) {
+        LOG(INFO) << "Local relocalization failed, trying global relocalization...";
+        pose_initializer_->stop();
+        
+        // 触发全局重定位
+        pose_initializer_->InitGlobalGridMap(global_grid_map_);
+        pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+        pose_initializer_->TriggerGlobalRelocalization();
+        pose_initializer_->start();
+        
+        has_tried_global_relocalization_ = true;
+        // 保持RELOCALIZING状态，等待全局重定位结果
+      } else {
+        LOG(ERROR) << "Both local and global relocalization failed.";
+        loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+        pose_initializer_->stop();
+        has_tried_global_relocalization_ = false;  // 重置标志，以便下次尝试
+      }
     }
   }
 

@@ -109,6 +109,9 @@ class PoseEstimator2D {
 
   LocalizationState GetLocalizationState() const { return loc_state_; }
 
+  // 触发全局重定位，不需要初始位姿
+  void TriggerGlobalRelocalization();
+
   // Returns 'MatchingResult' when range data accumulation completed,
   // otherwise 'nullptr'. Range data must be approximately horizontal
   // for 2D SLAM. `TimedPointCloudData::time` is when the last point in
@@ -225,6 +228,8 @@ private:
   std::unique_ptr<amcl::AMCLCore> amcl_core_;
 
   std::mutex data_mutex_;
+  
+  bool has_tried_global_relocalization_ = false;  // 标志是否已尝试全局重定位
 
   std::fstream time_file_;
 };
