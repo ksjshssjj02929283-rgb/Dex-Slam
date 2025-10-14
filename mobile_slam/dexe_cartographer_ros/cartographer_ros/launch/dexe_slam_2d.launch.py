@@ -3,12 +3,17 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+import os
 
 def generate_launch_description():
+    # Get user home directory
+    home_dir = os.path.expanduser('~')
+    default_data_dir = os.path.join(home_dir, '.dexe', 'data')
+    
     # Launch arguments
     map_folder_arg = DeclareLaunchArgument(
         'map_folder',
-        default_value='/home/fengbro/dexforce/0_slam/data/maps',
+        default_value=os.path.join(default_data_dir, 'maps'),
         description='Directory to save/load maps')
     map_name_arg = DeclareLaunchArgument(
         'map_name',

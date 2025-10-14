@@ -76,7 +76,8 @@ PoseEstimator2D::PoseEstimator2D(
 
   loc_state_ = LocalizationState::NOT_INITIALIZED;
 
-  // time_file_.open("/home/ubt/data/time.txt", std::ios::out);
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // time_file_.open(home_dir + "/.dexe/data/time.txt", std::ios::out);
 }
 
 PoseEstimator2D::~PoseEstimator2D() {}

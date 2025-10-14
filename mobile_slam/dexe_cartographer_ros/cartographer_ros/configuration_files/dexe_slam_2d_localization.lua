@@ -44,7 +44,7 @@ options = {
   publish_tracked_pose = true,
   save_tracked_pose = false,
   tracked_pose_format = "tum",
-  tracked_pose_directory = "/home/fengbro/dexforce/0_slam/data/",
+  tracked_pose_directory = os.getenv("HOME") .. "/.dexe/data/",
   tracked_pose_filename = "tracked_pose.txt",
 }
 

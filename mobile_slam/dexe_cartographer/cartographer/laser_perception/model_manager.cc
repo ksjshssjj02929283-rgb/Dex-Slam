@@ -33,7 +33,8 @@ ModelManager::ModelManager(const proto::LaserPerceptionOptions & config)
 // 加载目标的特征文件列表
 bool ModelManager::loadModelFile(std::string model_file_dir)
 {
-  // model_file_dir = "/home/young/data/model.yaml";
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // model_file_dir = home_dir + "/.dexe/data/model.yaml";
   // model_file_dir = "/root/model.yaml";
   try {
     YAML::Node model_file = YAML::LoadFile(model_file_dir);
