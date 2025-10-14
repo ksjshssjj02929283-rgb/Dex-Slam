@@ -87,6 +87,8 @@ proto::PoseEstimatorOptions2D CreatePoseEstimatorOptions2D(
   *options.mutable_local_map_updater_options() =
     CreateLocalMapUpdaterOptions2D(
       parameter_dictionary->GetDictionary("local_map_updater").get());
+  options.set_auto_trigger_global_relocalization(
+    parameter_dictionary->GetBool("auto_trigger_global_relocalization"));
   return options;
 }
 
