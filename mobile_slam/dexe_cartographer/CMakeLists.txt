@@ -249,14 +249,6 @@ target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   "${OpenCV_INCLUDE_DIRS}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${OpenCV_LIBRARIES})
 
-<<<<<<< HEAD:mobile_slam/dexe_cartographer/CMakeLists.txt
-# message(STATUS "GLOG_INCLUDE_DIR: ${GLOG_INCLUDE_DIR}")
-# message(STATUS "GLOG_LIBRARY_DIR: ${GLOG_LIBRARY_DIR}")
-# message(STATUS "PROJECT_NAME: ${PROJECT_NAME}")
-
-# target_include_directories(${PROJECT_NAME} PUBLIC "${GLOG_INCLUDE_DIR}")
-# end
-=======
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   "${PCL_INCLUDE_DIRS}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${PCL_LIBRARIES})
@@ -269,17 +261,12 @@ if(NEW_YAMLCPP_FOUND)
 endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC yaml-cpp)
 
->>>>>>> e6e0f79 (更新cartographer core):mobile_slam/src/2d_lidar_slam/dexe_cartographer/CMakeLists.txt
 if (WIN32)
   find_package(glog REQUIRED)
   set(GLOG_LIBRARY glog::glog)
 else()
   set(GLOG_LIBRARY glog)
 endif()
-<<<<<<< HEAD:mobile_slam/dexe_cartographer/CMakeLists.txt
-target_link_libraries(${PROJECT_NAME} PUBLIC "${GLOG_LIBRARY}")
-=======
->>>>>>> e6e0f79 (更新cartographer core):mobile_slam/src/2d_lidar_slam/dexe_cartographer/CMakeLists.txt
 
 target_link_libraries(${PROJECT_NAME} PUBLIC ${GLOG_LIBRARY})
 target_link_libraries(${PROJECT_NAME} PUBLIC gflags)
@@ -382,11 +369,6 @@ install(
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
-<<<<<<< HEAD:mobile_slam/dexe_cartographer/CMakeLists.txt
-  # added by hz
-  # INCLUDES DESTINATION "${GLOG_INCLUDE_DIR}"
-=======
->>>>>>> e6e0f79 (更新cartographer core):mobile_slam/src/2d_lidar_slam/dexe_cartographer/CMakeLists.txt
 )
 
 foreach(HDR ${INSTALL_SOURCE_HDRS})
