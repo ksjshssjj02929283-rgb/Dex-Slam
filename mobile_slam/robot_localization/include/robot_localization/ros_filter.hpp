@@ -62,7 +62,6 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/empty.hpp>
-#include <std_srvs/srv/trigger.hpp>
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <diagnostic_updater/publisher.hpp>
@@ -131,26 +130,6 @@ public:
       robot_localization::srv::ToggleFilterProcessing::Request> req,
     const std::shared_ptr<
       robot_localization::srv::ToggleFilterProcessing::Response> resp);
-
-  //! @brief Service callback to start localization (enable filter processing)
-  //! @param[in] request - Trigger request
-  //! @param[out] response - Trigger response with success and message
-  //! @return void
-  //!
-  void startLocalizationCallback(
-    const std::shared_ptr<rmw_request_id_t>/*request_header*/,
-    const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
-    const std::shared_ptr<std_srvs::srv::Trigger::Response> resp);
-
-  //! @brief Service callback to stop localization (disable filter processing)
-  //! @param[in] request - Trigger request
-  //! @param[out] response - Trigger response with success and message
-  //! @return void
-  //!
-  void stopLocalizationCallback(
-    const std::shared_ptr<rmw_request_id_t>/*request_header*/,
-    const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
-    const std::shared_ptr<std_srvs::srv::Trigger::Response> resp);
 
   //! @brief Callback method for receiving all acceleration (IMU) messages
   //! @param[in] msg - The ROS IMU message to take in.
@@ -551,16 +530,6 @@ protected:
   //! @brief Whether the filter is enabled or not. See disabledAtStartup_.
   bool enabled_;
 
-  //! @brief Whether to automatically enable the filter when set_pose is called
-  //!
-  //! If true, calling set_pose will automatically enable the filter if it was disabled
-  bool enable_on_set_pose_;
-
-  //! @brief Whether to automatically start localization when set_pose is called
-  //!
-  //! If true, calling set_pose will automatically start localization (toggled_on_ = true)
-  bool start_localization_on_set_pose_;
-
   //! @brief Whether we'll allow old measurements to cause a re-publication of the updated state
   bool permit_corrected_publication_;
 
@@ -691,37 +660,6 @@ protected:
   //!
   std::map<std::string, bool> remove_gravitational_acceleration_;
 
-  //! @brief Custom pose covariance matrices for each sensor topic
-  //! Keyed by topic name (e.g., "odom0", "pose0")
-  //!
-  std::map<std::string, Eigen::MatrixXd> custom_pose_covariances_;
-
-  //! @brief Custom twist covariance matrices for each sensor topic
-  //! Keyed by topic name (e.g., "odom0", "imu0")
-  //!
-  std::map<std::string, Eigen::MatrixXd> custom_twist_covariances_;
-
-  //! @brief Custom acceleration covariance matrices for each IMU topic
-  //! Keyed by topic name (e.g., "imu0")
-  //!
-  std::map<std::string, Eigen::MatrixXd> custom_acceleration_covariances_;
-
-  //! @brief Flag to track if filter has been initialized with first pose measurement
-  //!
-  bool is_initialized_;
-
-  //! @brief Initial state vector for filter initialization
-  //!
-  Eigen::VectorXd initial_state_;
-
-  //! @brief Initial estimate covariance matrix for filter initialization
-  //!
-  Eigen::MatrixXd initial_estimate_covariance_;
-
-  //! @brief Threshold distance for pose reset (in meters)
-  //!
-  double pose_reset_threshold_;
-
   //! @brief An implicitly time ordered queue of past filter states used for
   //! smoothing.
   //
@@ -790,16 +728,6 @@ protected:
   //!
   rclcpp::Service<robot_localization::srv::ToggleFilterProcessing>::SharedPtr
     toggle_filter_processing_srv_;
-
-  //! @brief Service to start localization (convenience wrapper for toggle)
-  //!
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr
-    start_localization_srv_;
-
-  //! @brief Service to stop localization (convenience wrapper for toggle)
-  //!
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr
-    stop_localization_srv_;
 
   //! @brief Subscribes to the control input topic
   //!

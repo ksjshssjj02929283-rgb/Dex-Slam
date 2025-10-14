@@ -119,15 +119,7 @@ int main(int argc, char ** argv)
     "Robot Localization Listener Node: Ready to handle GetState requests at %s",
     rlln->getService().c_str());
 
-  // 使用多线程执行器以提高服务响应速度
-  // 2个线程：处理服务请求
-  rclcpp::executors::MultiThreadedExecutor executor(
-      rclcpp::ExecutorOptions(), 
-      2  // Listener 节点只需要较少线程
-  );
-  
-  executor.add_node(rlln);
-  executor.spin();
+  rclcpp::spin(rlln);
 
   return 0;
 }

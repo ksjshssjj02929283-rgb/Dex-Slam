@@ -52,7 +52,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include "std_srvs/srv/trigger.hpp"
 
 namespace robot_localization
 {
@@ -72,8 +71,6 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   stamped_control_(false),
   disabled_at_startup_(false),
   enabled_(false),
-  enable_on_set_pose_(true),
-  start_localization_on_set_pose_(true),
   permit_corrected_publication_(false),
   dynamic_diag_error_level_(diagnostic_msgs::msg::DiagnosticStatus::OK),
   static_diag_error_level_(diagnostic_msgs::msg::DiagnosticStatus::OK),
@@ -87,19 +84,10 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   last_set_pose_time_(0, 0, RCL_ROS_TIME),
   latest_control_time_(0, 0, RCL_ROS_TIME),
   tf_timeout_(0ns),
-  tf_time_offset_(0ns),
-  is_initialized_(false),
-  pose_reset_threshold_(0.2)
+  tf_time_offset_(0ns)
 {
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
-
-  // Initialize state vector and covariance matrix
-  initial_state_.resize(STATE_SIZE);
-  initial_state_.setZero();
-  initial_estimate_covariance_.resize(STATE_SIZE, STATE_SIZE);
-  initial_estimate_covariance_.setIdentity();
-  initial_estimate_covariance_ *= 1e-9;
 
   state_variable_names_.push_back("X");
   state_variable_names_.push_back("Y");
@@ -186,50 +174,6 @@ void RosFilter<T>::toggleFilterProcessingCallback(
       "Toggling filter measurement filtering to %s.", req->on ? "On" : "Off");
     toggled_on_ = req->on;
     resp->status = true;
-  }
-}
-
-template<typename T>
-void RosFilter<T>::startLocalizationCallback(
-  const std::shared_ptr<rmw_request_id_t>/*request_header*/,
-  const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
-  const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
-{
-  if (toggled_on_) {
-    resp->success = false;
-    resp->message = "Localization is already running.";
-    RCLCPP_WARN(
-      this->get_logger(),
-      "Start localization service called but localization is already running.");
-  } else {
-    RCLCPP_INFO(
-      this->get_logger(),
-      "Starting localization filter processing.");
-    toggled_on_ = true;
-    resp->success = true;
-    resp->message = "Localization started successfully.";
-  }
-}
-
-template<typename T>
-void RosFilter<T>::stopLocalizationCallback(
-  const std::shared_ptr<rmw_request_id_t>/*request_header*/,
-  const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
-  const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
-{
-  if (!toggled_on_) {
-    resp->success = false;
-    resp->message = "Localization is already stopped.";
-    RCLCPP_WARN(
-      this->get_logger(),
-      "Stop localization service called but localization is already stopped.");
-  } else {
-    RCLCPP_INFO(
-      this->get_logger(),
-      "Stopping localization filter processing.");
-    toggled_on_ = false;
-    resp->success = true;
-    resp->message = "Localization stopped successfully.";
   }
 }
 
@@ -734,72 +678,6 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
         restored_measurement_count--;
       }
 
-      // Initialize filter with first pose measurement (similar to ROS1 logic)
-      if (!is_initialized_) {
-        // Only use pose0 topic for initialization
-        if (measurement->topic_name_ != "pose0") {
-          continue;
-        }
-
-        // Set initial state from the first pose measurement
-        initial_state_(StateMemberX) = measurement->measurement_(StateMemberX);
-        initial_state_(StateMemberY) = measurement->measurement_(StateMemberY);
-        initial_state_(StateMemberZ) = measurement->measurement_(StateMemberZ);
-        initial_state_(StateMemberRoll) = measurement->measurement_(StateMemberRoll);
-        initial_state_(StateMemberPitch) = measurement->measurement_(StateMemberPitch);
-        initial_state_(StateMemberYaw) = measurement->measurement_(StateMemberYaw);
-
-        filter_.setState(initial_state_);
-        filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
-        is_initialized_ = true;
-
-        RCLCPP_INFO(
-          this->get_logger(),
-          "Initialized filter with pose0 at [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-          initial_state_(StateMemberX), initial_state_(StateMemberY), initial_state_(StateMemberZ),
-          initial_state_(StateMemberRoll), initial_state_(StateMemberPitch), initial_state_(StateMemberYaw));
-      }
-
-      // Check if we need to reset the filter (pose0 with large error)
-      if (measurement->topic_name_ == "pose0") {
-        // Update initial_state_ for reference
-        initial_state_(StateMemberX) = measurement->measurement_(StateMemberX);
-        initial_state_(StateMemberY) = measurement->measurement_(StateMemberY);
-        initial_state_(StateMemberZ) = measurement->measurement_(StateMemberZ);
-        initial_state_(StateMemberRoll) = measurement->measurement_(StateMemberRoll);
-        initial_state_(StateMemberPitch) = measurement->measurement_(StateMemberPitch);
-        initial_state_(StateMemberYaw) = measurement->measurement_(StateMemberYaw);
-
-        // Get current filtered position
-        nav_msgs::msg::Odometry filtered_position;
-        if (getFilteredOdometryMessage(&filtered_position)) {
-          double err_x = filtered_position.pose.pose.position.x - measurement->measurement_(StateMemberX);
-          double err_y = filtered_position.pose.pose.position.y - measurement->measurement_(StateMemberY);
-          double err_dist = std::sqrt(err_x * err_x + err_y * err_y);
-
-          if (err_dist > pose_reset_threshold_) {
-            RCLCPP_WARN(
-              this->get_logger(),
-              "Large pose error detected (%.3f m). Resetting filter state.", err_dist);
-            RCLCPP_INFO(
-              this->get_logger(),
-              "Filtered position: [%.3f, %.3f], Measured position: [%.3f, %.3f]",
-              filtered_position.pose.pose.position.x, filtered_position.pose.pose.position.y,
-              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY));
-
-            filter_.setState(measurement->measurement_);
-            filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
-
-            RCLCPP_INFO(
-              this->get_logger(),
-              "Reset filter pose to [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY),
-              measurement->measurement_(StateMemberZ), measurement->measurement_(StateMemberRoll),
-              measurement->measurement_(StateMemberPitch), measurement->measurement_(StateMemberYaw));
-          }
-        }
-      }
-
       // This will call predict and, if necessary, correct
       filter_.processMeasurement(*(measurement.get()));
 
@@ -1146,13 +1024,6 @@ void RosFilter<T>::loadParams()
   disabled_at_startup_ = this->declare_parameter<bool>("disabled_at_startup", false);
   enabled_ = !disabled_at_startup_;
 
-  // Check if we should automatically enable the filter when initial pose is set
-  enable_on_set_pose_ = this->declare_parameter<bool>("enable_on_set_pose", true);
-
-  // Check if we should automatically start localization when initial pose is set
-  start_localization_on_set_pose_ = this->declare_parameter<bool>(
-    "start_localization_on_set_pose", true);
-
   // Debugging writes to file
   RF_DEBUG(
     std::boolalpha <<
@@ -1208,20 +1079,6 @@ void RosFilter<T>::loadParams()
     this->create_service<robot_localization::srv::ToggleFilterProcessing>(
     "toggle", std::bind(
       &RosFilter<T>::toggleFilterProcessingCallback, this,
-      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-
-  // Create a service for starting localization (convenience wrapper)
-  start_localization_srv_ =
-    this->create_service<std_srvs::srv::Trigger>(
-    "start_localization", std::bind(
-      &RosFilter<T>::startLocalizationCallback, this,
-      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-
-  // Create a service for stopping localization (convenience wrapper)
-  stop_localization_srv_ =
-    this->create_service<std_srvs::srv::Trigger>(
-    "stop_localization", std::bind(
-      &RosFilter<T>::stopLocalizationCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Init the last measurement time so we don't get a huge initial delta
@@ -1297,77 +1154,6 @@ void RosFilter<T>::loadParams()
       std::fill(
         twist_update_vec.begin() + POSITION_OFFSET,
         twist_update_vec.begin() + POSITION_OFFSET + POSE_SIZE, 0);
-
-      // Load custom pose covariance if specified
-      std::string pose_cov_param = odom_topic_name + "_pose_covariance";
-      if (this->has_parameter(pose_cov_param)) {
-        std::vector<double> pose_cov_vec;
-        this->declare_parameter(pose_cov_param, pose_cov_vec);
-        this->get_parameter(pose_cov_param, pose_cov_vec);
-        
-        if (!pose_cov_vec.empty()) {
-          // Expecting 9 values for 3x3 covariance [x, y, yaw]
-          if (pose_cov_vec.size() == 9) {
-            Eigen::MatrixXd pose_cov(POSE_SIZE, POSE_SIZE);
-            pose_cov.setZero();
-            // Map the 3x3 matrix to appropriate positions in 6x6 matrix
-            // x (0,0), y (1,1), yaw (5,5)
-            pose_cov(StateMemberX, StateMemberX) = pose_cov_vec[0];
-            pose_cov(StateMemberX, StateMemberY) = pose_cov_vec[1];
-            pose_cov(StateMemberX, StateMemberYaw) = pose_cov_vec[2];
-            pose_cov(StateMemberY, StateMemberX) = pose_cov_vec[3];
-            pose_cov(StateMemberY, StateMemberY) = pose_cov_vec[4];
-            pose_cov(StateMemberY, StateMemberYaw) = pose_cov_vec[5];
-            pose_cov(StateMemberYaw, StateMemberX) = pose_cov_vec[6];
-            pose_cov(StateMemberYaw, StateMemberY) = pose_cov_vec[7];
-            pose_cov(StateMemberYaw, StateMemberYaw) = pose_cov_vec[8];
-            
-            custom_pose_covariances_[odom_topic_name] = pose_cov;
-            
-            RF_DEBUG(
-              odom_topic_name << " custom pose covariance loaded:\n" << pose_cov << "\n");
-          } else {
-            RF_DEBUG(
-              "WARNING: " << pose_cov_param << " has " << pose_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
-          }
-        }
-      }
-
-      // Load custom twist covariance if specified
-      std::string twist_cov_param = odom_topic_name + "_twist_covariance";
-      if (this->has_parameter(twist_cov_param)) {
-        std::vector<double> twist_cov_vec;
-        this->declare_parameter(twist_cov_param, twist_cov_vec);
-        this->get_parameter(twist_cov_param, twist_cov_vec);
-        
-        if (!twist_cov_vec.empty()) {
-          // Expecting 9 values for 3x3 covariance [vx, vy, vyaw]
-          if (twist_cov_vec.size() == 9) {
-            Eigen::MatrixXd twist_cov(TWIST_SIZE, TWIST_SIZE);
-            twist_cov.setZero();
-            // Map the 3x3 matrix to appropriate positions in 6x6 matrix
-            twist_cov(StateMemberVx - POSITION_V_OFFSET, StateMemberVx - POSITION_V_OFFSET) = twist_cov_vec[0];
-            twist_cov(StateMemberVx - POSITION_V_OFFSET, StateMemberVy - POSITION_V_OFFSET) = twist_cov_vec[1];
-            twist_cov(StateMemberVx - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = twist_cov_vec[2];
-            twist_cov(StateMemberVy - POSITION_V_OFFSET, StateMemberVx - POSITION_V_OFFSET) = twist_cov_vec[3];
-            twist_cov(StateMemberVy - POSITION_V_OFFSET, StateMemberVy - POSITION_V_OFFSET) = twist_cov_vec[4];
-            twist_cov(StateMemberVy - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = twist_cov_vec[5];
-            twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVx - POSITION_V_OFFSET) = twist_cov_vec[6];
-            twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVy - POSITION_V_OFFSET) = twist_cov_vec[7];
-            twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = twist_cov_vec[8];
-            
-            custom_twist_covariances_[odom_topic_name] = twist_cov;
-            
-            RF_DEBUG(
-              odom_topic_name << " custom twist covariance loaded:\n" << twist_cov << "\n");
-          } else {
-            RF_DEBUG(
-              "WARNING: " << twist_cov_param << " has " << twist_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
-          }
-        }
-      }
 
       int pose_update_sum =
         std::accumulate(pose_update_vec.begin(), pose_update_vec.end(), 0);
@@ -1511,39 +1297,6 @@ void RosFilter<T>::loadParams()
         pose_update_vec.begin() + POSITION_A_OFFSET + ACCELERATION_SIZE,
         0);
 
-      // Load custom pose covariance if specified for pose topics
-      std::string pose_cov_param = pose_topic_name + "_covariance";
-      if (this->has_parameter(pose_cov_param)) {
-        std::vector<double> pose_cov_vec;
-        this->declare_parameter(pose_cov_param, pose_cov_vec);
-        this->get_parameter(pose_cov_param, pose_cov_vec);
-        
-        if (!pose_cov_vec.empty()) {
-          if (pose_cov_vec.size() == 9) {
-            Eigen::MatrixXd pose_cov(POSE_SIZE, POSE_SIZE);
-            pose_cov.setZero();
-            pose_cov(StateMemberX, StateMemberX) = pose_cov_vec[0];
-            pose_cov(StateMemberX, StateMemberY) = pose_cov_vec[1];
-            pose_cov(StateMemberX, StateMemberYaw) = pose_cov_vec[2];
-            pose_cov(StateMemberY, StateMemberX) = pose_cov_vec[3];
-            pose_cov(StateMemberY, StateMemberY) = pose_cov_vec[4];
-            pose_cov(StateMemberY, StateMemberYaw) = pose_cov_vec[5];
-            pose_cov(StateMemberYaw, StateMemberX) = pose_cov_vec[6];
-            pose_cov(StateMemberYaw, StateMemberY) = pose_cov_vec[7];
-            pose_cov(StateMemberYaw, StateMemberYaw) = pose_cov_vec[8];
-            
-            custom_pose_covariances_[pose_topic_name] = pose_cov;
-            
-            RF_DEBUG(
-              pose_topic_name << " custom pose covariance loaded:\n" << pose_cov << "\n");
-          } else {
-            RF_DEBUG(
-              "WARNING: " << pose_cov_param << " has " << pose_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
-          }
-        }
-      }
-
       int pose_update_sum =
         std::accumulate(pose_update_vec.begin(), pose_update_vec.end(), 0);
 
@@ -1565,7 +1318,6 @@ void RosFilter<T>::loadParams()
           this->create_subscription<
             geometry_msgs::msg::PoseWithCovarianceStamped>(
             pose_topic, custom_qos, pose_callback));
-        std::cout << "Subscribed to pose topic " << pose_topic << "\n";
 
         if (differential) {
           twist_var_counts[StateMemberVx] += pose_update_vec[StateMemberX];
@@ -1815,108 +1567,6 @@ void RosFilter<T>::loadParams()
         accel_update_vec.begin() + POSITION_V_OFFSET,
         accel_update_vec.begin() + POSITION_V_OFFSET + TWIST_SIZE, 0);
 
-      // Load custom IMU pose covariance (for orientation)
-      std::string imu_pose_cov_param = imu_topic_name + "_pose_covariance";
-      if (this->has_parameter(imu_pose_cov_param)) {
-        std::vector<double> imu_pose_cov_vec;
-        this->declare_parameter(imu_pose_cov_param, imu_pose_cov_vec);
-        this->get_parameter(imu_pose_cov_param, imu_pose_cov_vec);
-        
-        if (!imu_pose_cov_vec.empty()) {
-          // Expecting 9 values for 3x3 covariance [roll, pitch, yaw]
-          if (imu_pose_cov_vec.size() == 9) {
-            Eigen::MatrixXd imu_pose_cov(POSE_SIZE, POSE_SIZE);
-            imu_pose_cov.setZero();
-            imu_pose_cov(StateMemberRoll, StateMemberRoll) = imu_pose_cov_vec[0];
-            imu_pose_cov(StateMemberRoll, StateMemberPitch) = imu_pose_cov_vec[1];
-            imu_pose_cov(StateMemberRoll, StateMemberYaw) = imu_pose_cov_vec[2];
-            imu_pose_cov(StateMemberPitch, StateMemberRoll) = imu_pose_cov_vec[3];
-            imu_pose_cov(StateMemberPitch, StateMemberPitch) = imu_pose_cov_vec[4];
-            imu_pose_cov(StateMemberPitch, StateMemberYaw) = imu_pose_cov_vec[5];
-            imu_pose_cov(StateMemberYaw, StateMemberRoll) = imu_pose_cov_vec[6];
-            imu_pose_cov(StateMemberYaw, StateMemberPitch) = imu_pose_cov_vec[7];
-            imu_pose_cov(StateMemberYaw, StateMemberYaw) = imu_pose_cov_vec[8];
-            
-            custom_pose_covariances_[imu_topic_name] = imu_pose_cov;
-            
-            RF_DEBUG(
-              imu_topic_name << " custom pose (orientation) covariance loaded:\n" << imu_pose_cov << "\n");
-          } else {
-            RF_DEBUG(
-              "WARNING: " << imu_pose_cov_param << " has " << imu_pose_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
-          }
-        }
-      }
-
-      // Load custom IMU twist covariance (for angular velocity)
-      std::string imu_twist_cov_param = imu_topic_name + "_twist_covariance";
-      if (this->has_parameter(imu_twist_cov_param)) {
-        std::vector<double> imu_twist_cov_vec;
-        this->declare_parameter(imu_twist_cov_param, imu_twist_cov_vec);
-        this->get_parameter(imu_twist_cov_param, imu_twist_cov_vec);
-        
-        if (!imu_twist_cov_vec.empty()) {
-          // Expecting 9 values for 3x3 covariance [vroll, vpitch, vyaw]
-          if (imu_twist_cov_vec.size() == 9) {
-            Eigen::MatrixXd imu_twist_cov(TWIST_SIZE, TWIST_SIZE);
-            imu_twist_cov.setZero();
-            imu_twist_cov(StateMemberVroll - POSITION_V_OFFSET, StateMemberVroll - POSITION_V_OFFSET) = imu_twist_cov_vec[0];
-            imu_twist_cov(StateMemberVroll - POSITION_V_OFFSET, StateMemberVpitch - POSITION_V_OFFSET) = imu_twist_cov_vec[1];
-            imu_twist_cov(StateMemberVroll - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = imu_twist_cov_vec[2];
-            imu_twist_cov(StateMemberVpitch - POSITION_V_OFFSET, StateMemberVroll - POSITION_V_OFFSET) = imu_twist_cov_vec[3];
-            imu_twist_cov(StateMemberVpitch - POSITION_V_OFFSET, StateMemberVpitch - POSITION_V_OFFSET) = imu_twist_cov_vec[4];
-            imu_twist_cov(StateMemberVpitch - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = imu_twist_cov_vec[5];
-            imu_twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVroll - POSITION_V_OFFSET) = imu_twist_cov_vec[6];
-            imu_twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVpitch - POSITION_V_OFFSET) = imu_twist_cov_vec[7];
-            imu_twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = imu_twist_cov_vec[8];
-            
-            custom_twist_covariances_[imu_topic_name] = imu_twist_cov;
-            
-            RF_DEBUG(
-              imu_topic_name << " custom twist (angular velocity) covariance loaded:\n" << imu_twist_cov << "\n");
-          } else {
-            RF_DEBUG(
-              "WARNING: " << imu_twist_cov_param << " has " << imu_twist_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
-          }
-        }
-      }
-
-      // Load custom IMU linear acceleration covariance
-      std::string imu_accel_cov_param = imu_topic_name + "_linear_acceleration_covariance";
-      if (this->has_parameter(imu_accel_cov_param)) {
-        std::vector<double> imu_accel_cov_vec;
-        this->declare_parameter(imu_accel_cov_param, imu_accel_cov_vec);
-        this->get_parameter(imu_accel_cov_param, imu_accel_cov_vec);
-        
-        if (!imu_accel_cov_vec.empty()) {
-          // Expecting 9 values for 3x3 covariance [ax, ay, az]
-          if (imu_accel_cov_vec.size() == 9) {
-            Eigen::MatrixXd imu_accel_cov(ACCELERATION_SIZE, ACCELERATION_SIZE);
-            imu_accel_cov.setZero();
-            imu_accel_cov(0, 0) = imu_accel_cov_vec[0];
-            imu_accel_cov(0, 1) = imu_accel_cov_vec[1];
-            imu_accel_cov(0, 2) = imu_accel_cov_vec[2];
-            imu_accel_cov(1, 0) = imu_accel_cov_vec[3];
-            imu_accel_cov(1, 1) = imu_accel_cov_vec[4];
-            imu_accel_cov(1, 2) = imu_accel_cov_vec[5];
-            imu_accel_cov(2, 0) = imu_accel_cov_vec[6];
-            imu_accel_cov(2, 1) = imu_accel_cov_vec[7];
-            imu_accel_cov(2, 2) = imu_accel_cov_vec[8];
-            
-            custom_acceleration_covariances_[imu_topic_name] = imu_accel_cov;
-            
-            RF_DEBUG(
-              imu_topic_name << " custom acceleration covariance loaded:\n" << imu_accel_cov << "\n");
-          } else {
-            RF_DEBUG(
-              "WARNING: " << imu_accel_cov_param << " has " << imu_accel_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
-          }
-        }
-      }
-
       int pose_update_sum =
         std::accumulate(pose_update_vec.begin(), pose_update_vec.end(), 0);
       int twist_update_sum =
@@ -2156,14 +1806,8 @@ void RosFilter<T>::loadParams()
       "Initial estimate error covariance is:\n" <<
         estimate_error_covar_flat << "\n");
 
-    // Store for later use in initialization
-    initial_estimate_covariance_ = initial_estimate_error_covariance;
-
     filter_.setEstimateErrorCovariance(initial_estimate_error_covariance);
   }
-
-  // Load pose reset threshold parameter
-  pose_reset_threshold_ = this->declare_parameter<double>("pose_reset_threshold", 0.2);
 }
 
 template<typename T>
@@ -2616,22 +2260,6 @@ void RosFilter<T>::setPoseCallback(
 
   filter_.setLastMeasurementTime(this->now());
 
-  // Automatically enable the filter if configured to do so
-  if (enable_on_set_pose_ && !enabled_) {
-    RCLCPP_INFO(
-      this->get_logger(),
-      "Automatically enabling filter after receiving initial pose");
-    enabled_ = true;
-  }
-
-  // Automatically start localization (toggled_on) if configured to do so
-  if (start_localization_on_set_pose_ && !toggled_on_) {
-    RCLCPP_INFO(
-      this->get_logger(),
-      "Automatically starting localization after receiving initial pose");
-    toggled_on_ = true;
-  }
-
   RF_DEBUG("\n------ /RosFilter<T>::setPoseCallback ------\n");
 }
 
@@ -2960,19 +2588,10 @@ bool RosFilter<T>::prepareAcceleration(
   Eigen::MatrixXd covariance_rotated(ACCELERATION_SIZE, ACCELERATION_SIZE);
   covariance_rotated.setZero();
 
-  // Check if there's a custom acceleration covariance for this topic
-  auto custom_accel_cov_it = custom_acceleration_covariances_.find(topic_name);
-  if (custom_accel_cov_it != custom_acceleration_covariances_.end()) {
-    // Use custom covariance
-    covariance_rotated = custom_accel_cov_it->second;
-    RF_DEBUG("Using custom acceleration covariance for " << topic_name << "\n");
-  } else {
-    // Use message covariance
-    this->copyCovariance(
-      &(msg->linear_acceleration_covariance[0]),
-      covariance_rotated, topic_name, update_vector,
-      POSITION_A_OFFSET, ACCELERATION_SIZE);
-  }
+  this->copyCovariance(
+    &(msg->linear_acceleration_covariance[0]),
+    covariance_rotated, topic_name, update_vector,
+    POSITION_A_OFFSET, ACCELERATION_SIZE);
 
   RF_DEBUG(
     "Original measurement as tf object: " <<
@@ -3276,19 +2895,9 @@ bool RosFilter<T>::preparePose(
     // copy over the covariance data
     Eigen::MatrixXd covariance(POSE_SIZE, POSE_SIZE);
     covariance.setZero();
-    
-    // Check if there's a custom pose covariance for this topic
-    auto custom_pose_cov_it = custom_pose_covariances_.find(topic_name);
-    if (custom_pose_cov_it != custom_pose_covariances_.end()) {
-      // Use custom covariance
-      covariance = custom_pose_cov_it->second;
-      RF_DEBUG("Using custom pose covariance for " << topic_name << "\n");
-    } else {
-      // Use message covariance
-      copyCovariance(
-        &(msg->pose.covariance[0]), covariance, topic_name,
-        update_vector, POSITION_OFFSET, POSE_SIZE);
-    }
+    copyCovariance(
+      &(msg->pose.covariance[0]), covariance, topic_name,
+      update_vector, POSITION_OFFSET, POSE_SIZE);
 
     // 5b. Now rotate the covariance: create an augmented matrix that
     // contains a 3D rotation matrix in the upper-left and lower-right
@@ -3596,18 +3205,9 @@ bool RosFilter<T>::prepareTwist(
   Eigen::MatrixXd covariance_rotated(TWIST_SIZE, TWIST_SIZE);
   covariance_rotated.setZero();
 
-  // Check if there's a custom twist covariance for this topic
-  auto custom_twist_cov_it = custom_twist_covariances_.find(topic_name);
-  if (custom_twist_cov_it != custom_twist_covariances_.end()) {
-    // Use custom covariance
-    covariance_rotated = custom_twist_cov_it->second;
-    RF_DEBUG("Using custom twist covariance for " << topic_name << "\n");
-  } else {
-    // Use message covariance
-    copyCovariance(
-      &(msg->twist.covariance[0]), covariance_rotated, topic_name,
-      update_vector, POSITION_V_OFFSET, TWIST_SIZE);
-  }
+  copyCovariance(
+    &(msg->twist.covariance[0]), covariance_rotated, topic_name,
+    update_vector, POSITION_V_OFFSET, TWIST_SIZE);
 
   RF_DEBUG(
     "Original measurement as tf object:\nLinear: " <<
