@@ -71,7 +71,8 @@ PoseEstimator2D::PoseEstimator2D(const std::shared_ptr<AmclParam> param)
 
   initial_pose_hyp_.pf_pose_mean = pf_vector_zero();
   initial_pose_hyp_.pf_pose_cov = pf_matrix_zero();
-  // time_file_ = std::ofstream("/home/ubt/data/time.txt", std::ios::out);
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // time_file_ = std::ofstream(home_dir + "/.dexe/data/time.txt", std::ios::out);
 }
 
 PoseEstimator2D::~PoseEstimator2D()
@@ -1203,7 +1204,8 @@ PoseEstimator2D::CreateGridFromMap(const map_t* map)
   res_map->mutable_grid()->mutable_known_cells_box()->extend(
     Eigen::Array2i(0, 0).matrix());
   res_map->set_insertion_finished(true);
-  // res_map->grid()->DrawAsImage("/home/ubt/data/", "loc_map_2.png");
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // res_map->grid()->DrawAsImage(home_dir + "/.dexe/data/", "loc_map_2.png");
   return res_map;
 }
 
@@ -1333,7 +1335,8 @@ PoseEstimator2D::CreateGridFromYaml(const std::string& yaml_filename)
   res_map->mutable_grid()->mutable_known_cells_box()->extend(
     Eigen::Array2i(0, 0).matrix());
   res_map->set_insertion_finished(true);
-  // res_map->grid()->DrawAsImage("/home/ubt/data/", "loc_map.png");
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // res_map->grid()->DrawAsImage(home_dir + "/.dexe/data/", "loc_map.png");
   return res_map;
 }
 

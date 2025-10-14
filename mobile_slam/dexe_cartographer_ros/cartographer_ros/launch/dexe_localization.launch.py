@@ -23,10 +23,14 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
+    # Get user home directory
+    home_dir = os.path.expanduser('~')
+    default_data_dir = os.path.join(home_dir, '.dexe', 'data')
+    
     # Declare launch arguments
     map_folder_arg = DeclareLaunchArgument(
         'map_folder',
-        default_value='/home/fengbro/dexforce/0_slam/data/maps/',
+        default_value=os.path.join(default_data_dir, 'maps'),
         description='Path to the folder containing maps'
     )
     

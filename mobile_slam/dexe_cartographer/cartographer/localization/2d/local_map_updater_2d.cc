@@ -158,8 +158,10 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
   //   Eigen::Array2i(0, 0).matrix());
 
   // 5. 将submap的grid map保存为图片，用于调试
-  // global_grid_map_->DrawAsImage("/home/fengbro/dexforce/0_slam/data/", "global_map.png");
-  // local_grid_map_->DrawAsImage("/home/fengbro/dexforce/0_slam/data/", "loc_map.png");
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // std::string data_dir = home_dir + "/.dexe/data/";
+  // global_grid_map_->DrawAsImage(data_dir, "global_map.png");
+  // local_grid_map_->DrawAsImage(data_dir, "loc_map.png");
 }
 
 void LocalMapUpdater2D::UpdateLocalCloudMap()
@@ -189,7 +191,8 @@ void LocalMapUpdater2D::UpdateLocalCloudMap()
   local_cloud_ikdtree_->set_downsample_param(resolution);
   local_cloud_ikdtree_->Build(sub_cloud_pcl->points);
 
-  // pcl::io::savePCDFile("/home/fengbro/dexforce/0_slam/data/loc_map.pcd", *sub_cloud_pcl);
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // pcl::io::savePCDFile(home_dir + "/.dexe/data/loc_map.pcd", *sub_cloud_pcl);
 }
 
 std::shared_ptr<GridMap2D> LocalMapUpdater2D::global_grid_map()
