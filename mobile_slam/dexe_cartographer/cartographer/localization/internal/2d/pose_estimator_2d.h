@@ -52,6 +52,7 @@
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
 #include "cartographer/localization/amcl/core/amcl_core.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
+#include "cartographer/localization/confidence/confidence_estimator.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
 
@@ -86,6 +87,10 @@ class PoseEstimator2D {
     std::map<int, std::vector<sensor::LineData>>  line_data_in_local;
     // 'nullptr' if dropped by the motion filter.
     std::unique_ptr<const InsertionResult> insertion_result;    // 插入结果
+    
+    // 定位置信度评估结果
+    confidence::ConfidenceEstimator::Metrics confidence_metrics;
+    double localization_confidence = 0.0;  // 总置信度 [0,1]
   };
 
   explicit PoseEstimator2D(
@@ -171,7 +176,8 @@ class PoseEstimator2D {
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data,
-    Eigen::Matrix3d & cov);
+    Eigen::Matrix3d & cov,
+    confidence::ConfidenceEstimator::Metrics* confidence_metrics_out = nullptr);
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
@@ -237,6 +243,10 @@ private:
   bool has_tried_global_relocalization_ = false;  // 标志是否已尝试全局重定位
 
   std::fstream time_file_;
+  
+  // 定位置信度评估器
+  std::unique_ptr<confidence::ConfidenceEstimator> confidence_estimator_;
+  common::Time start_time_;  // 系统启动时间，用于运行时间计算
 };
 
 }  // namespace localization

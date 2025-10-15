@@ -88,6 +88,12 @@ PoseEstimator2D::PoseEstimator2D(
       std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options());
 
   loc_state_ = LocalizationState::NOT_INITIALIZED;
+  
+  // 初始化置信度评估器
+  confidence::ConfidenceEstimator::Config confidence_config;
+  // 可以从options中读取配置，这里使用默认值
+  confidence_estimator_ = absl::make_unique<confidence::ConfidenceEstimator>(confidence_config);
+  start_time_ = common::FromUniversal(0);  // 将在第一次数据到达时设置
 
   // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
   // time_file_.open(home_dir + "/.dexe/data/time.txt", std::ios::out);
@@ -254,7 +260,8 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
-    Eigen::Matrix3d & cov)
+    Eigen::Matrix3d & cov,
+    confidence::ConfidenceEstimator::Metrics* confidence_metrics_out)
 {
   // 1. 如果active_submaps_中没有submap，则直接返回pose_prediction
   //    一般情况下，第一帧激光数据进来时，active_submaps_中没有submap
@@ -415,6 +422,43 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     }
   }
 
+  // ========== 【新增】置信度评估 ==========
+  // 设置启动时间（第一次调用时）
+  if (start_time_ == common::FromUniversal(0)) {
+    start_time_ = time;
+  }
+  
+  // 计算运行时间
+  double runtime_seconds = common::ToSeconds(time - start_time_);
+  
+  // 评估定位置信度
+  auto confidence_metrics = confidence_estimator_->Evaluate(
+      filtered_gravity_aligned_point_cloud,
+      *pose_observation,
+      pose_prediction,
+      cov,
+      correlative_success ? 0.8 : 0.0,  // CSM得分（简化处理）
+      summary.final_cost,
+      static_cast<int>(filtered_gravity_aligned_point_cloud.size()),
+      matching_submap->grid(),
+      runtime_seconds);
+  
+  // 根据置信度调整系统行为
+  if (confidence_metrics.level <= confidence::ConfidenceLevel::POOR) {
+    LOG(WARNING) << "Low confidence detected: " << confidence_metrics.total_confidence
+                 << " - Consider reducing speed or re-localization";
+    
+    // 可以在这里实现降级策略
+    // 例如：降低建图频率、触发重定位等
+  }
+  
+  // 记录置信度到日志（仅在VLOG级别）
+  LOG(INFO) << "Localization confidence: " << confidence_metrics.total_confidence
+          << " (L1:" << confidence_metrics.scan_match_score
+          << " L2:" << confidence_metrics.motion_consistency  
+          << " L3:" << confidence_metrics.map_coherence
+          << " L4:" << confidence_metrics.degeneracy_factor << ")";
+
   // std::cout << "cov: \n" << cov.matrix() << std::endl;
   // LOG(INFO) << "scan match: " << *pose_observation;
 
@@ -430,6 +474,12 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                  pose_prediction.rotation().angle());
     kScanMatcherResidualAngleMetric->Observe(residual_angle);
   }
+  
+  // 输出置信度指标（如果需要）
+  if (confidence_metrics_out != nullptr) {
+    *confidence_metrics_out = confidence_metrics;
+  }
+  
   // 6. 返回位姿估计结果（Rigid2d）
   return pose_observation;
 }
@@ -675,13 +725,17 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   // ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
   Eigen::Matrix3d loc_cov;
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
+  
+  // 调用扫描匹配并获取置信度
+  confidence::ConfidenceEstimator::Metrics confidence_metrics;
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
       ScanMatch(time, pose_prediction,
                 filtered_gravity_aligned_point_cloud,
                 merged_data.merged_highlight_cloud,
                 merged_data.merged_line_data,
                 tracked_lane_data,
-                loc_cov);
+                loc_cov,
+                &confidence_metrics);
   
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
@@ -775,7 +829,9 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
                      std::move(particle_poses),
                      std::move(range_data_in_local),
                      std::move(lines_in_local),
-                     std::move(insertion_result)});
+                     std::move(insertion_result),
+                     confidence_metrics,
+                     confidence_metrics.total_confidence});
 }
 
 
