@@ -35,6 +35,10 @@ class ScanMatchConfidence {
     double covariance_confidence; // 协方差置信度 [0,1]
     double angle_coverage_entropy;// 角度覆盖熵
     double total_confidence;      // 综合置信度 [0,1]
+    
+    // 打印评估项
+    std::string ToString() const;
+    void Print() const;
   };
 
   ScanMatchConfidence() = default;

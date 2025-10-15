@@ -33,6 +33,10 @@ class DegeneracyDetector {
     double degeneracy_factor;      // 退化因子 [0,1]，1表示无退化
     int num_parallel_walls;        // 平行墙面数量
     double hessian_condition_num;  // Hessian矩阵条件数
+    
+    // 打印评估项
+    std::string ToString() const;
+    void Print() const;
   };
 
   DegeneracyDetector() = default;

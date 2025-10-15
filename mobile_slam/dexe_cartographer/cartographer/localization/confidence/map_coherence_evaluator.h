@@ -32,6 +32,10 @@ class MapCoherenceEvaluator {
     double submap_match_score;  // 子图匹配得分 [0,1]
     double map_entropy;         // 地图熵 [0,1]
     double total_confidence;    // 综合置信度 [0,1]
+    
+    // 打印评估项
+    std::string ToString() const;
+    void Print() const;
   };
 
   MapCoherenceEvaluator() = default;

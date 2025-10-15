@@ -16,11 +16,69 @@
 
 #include "cartographer/localization/confidence/confidence_estimator.h"
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 #include "glog/logging.h"
 
 namespace cartographer {
 namespace localization {
 namespace confidence {
+
+// 辅助函数：置信度等级转字符串
+std::string ConfidenceLevelToString(ConfidenceLevel level) {
+  switch (level) {
+    case ConfidenceLevel::EXCELLENT: return "EXCELLENT";
+    case ConfidenceLevel::GOOD: return "GOOD";
+    case ConfidenceLevel::MEDIUM: return "MEDIUM";
+    case ConfidenceLevel::POOR: return "POOR";
+    case ConfidenceLevel::FAILED: return "FAILED";
+    default: return "UNKNOWN";
+  }
+}
+
+// Metrics打印方法实现
+std::string ConfidenceEstimator::Metrics::ToString() const {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(4);
+  
+  oss << "\n========== Confidence Evaluation Metrics ==========\n";
+  oss << "Overall:\n";
+  oss << "  Total Confidence:     " << total_confidence << "\n";
+  oss << "  Confidence Level:     " << ConfidenceLevelToString(level) << "\n";
+  oss << "\n";
+  
+  oss << "Layer 1 - Scan Match (Weight: varies):\n";
+  oss << "  Scan Match Score:     " << scan_match_score << "\n";
+  oss << "    ├─ CSM Score:       " << csm_score << "\n";
+  oss << "    ├─ Ceres Residual:  " << ceres_residual_score << "\n";
+  oss << "    ├─ Match Ratio:     " << match_ratio << "\n";
+  oss << "    └─ Covariance:      " << covariance_score << "\n";
+  oss << "\n";
+  
+  oss << "Layer 2 - Motion Consistency (Weight: varies):\n";
+  oss << "  Motion Consistency:   " << motion_consistency << "\n";
+  oss << "    ├─ Motion Delta:    " << motion_delta_score << "\n";
+  oss << "    └─ Velocity Smooth: " << velocity_smooth_score << "\n";
+  oss << "\n";
+  
+  oss << "Layer 3 - Map Coherence (Weight: varies):\n";
+  oss << "  Map Coherence:        " << map_coherence << "\n";
+  oss << "    ├─ Map Entropy:     " << map_entropy << "\n";
+  oss << "    └─ Submap Match:    " << submap_match_score << "\n";
+  oss << "\n";
+  
+  oss << "Layer 4 - Degeneracy Detection (Weight: varies):\n";
+  oss << "  Degeneracy Factor:    " << degeneracy_factor << "\n";
+  oss << "    ├─ Corridor:        " << (is_corridor_detected ? "YES" : "NO") << "\n";
+  oss << "    └─ Feature Dist:    " << feature_distribution_score << "\n";
+  oss << "===================================================\n";
+  
+  return oss.str();
+}
+
+void ConfidenceEstimator::Metrics::Print() const {
+  LOG(INFO) << ToString();
+}
 
 ConfidenceEstimator::ConfidenceEstimator() : ConfidenceEstimator(Config()) {}
 

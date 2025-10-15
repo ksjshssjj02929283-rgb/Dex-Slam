@@ -17,11 +17,32 @@
 #include "cartographer/localization/confidence/motion_consistency_checker.h"
 #include <cmath>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 #include "glog/logging.h"
 
 namespace cartographer {
 namespace localization {
 namespace confidence {
+
+// Result打印方法实现
+std::string MotionConsistencyChecker::Result::ToString() const {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(4);
+  
+  oss << "MotionConsistencyChecker Result:\n";
+  oss << "  Total Confidence:    " << total_confidence << "\n";
+  oss << "  ├─ Pred-Obs Score:   " << prediction_observation_score << "\n";
+  oss << "  │  ├─ Delta Dist:    " << delta_distance << " m\n";
+  oss << "  │  └─ Delta Angle:   " << (delta_angle * 180.0 / M_PI) << " deg\n";
+  oss << "  └─ Velocity Smooth:  " << velocity_smoothness_score << "\n";
+  
+  return oss.str();
+}
+
+void MotionConsistencyChecker::Result::Print() const {
+  LOG(INFO) << ToString();
+}
 
 MotionConsistencyChecker::MotionConsistencyChecker(int velocity_window_size)
     : velocity_window_size_(velocity_window_size) {}

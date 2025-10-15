@@ -18,11 +18,32 @@
 #include <cmath>
 #include <algorithm>
 #include <random>
+#include <sstream>
+#include <iomanip>
 #include "glog/logging.h"
 
 namespace cartographer {
 namespace localization {
 namespace confidence {
+
+// Result打印方法实现
+std::string DegeneracyDetector::Result::ToString() const {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(4);
+  
+  oss << "DegeneracyDetector Result:\n";
+  oss << "  Degeneracy Factor:   " << degeneracy_factor << "\n";
+  oss << "  ├─ Is Corridor:      " << (is_corridor ? "YES" : "NO") << "\n";
+  oss << "  ├─ Parallel Walls:   " << num_parallel_walls << "\n";
+  oss << "  ├─ Feature Dist:     " << feature_distribution << "\n";
+  oss << "  └─ Hessian Cond:     " << hessian_condition_num << "\n";
+  
+  return oss.str();
+}
+
+void DegeneracyDetector::Result::Print() const {
+  LOG(INFO) << ToString();
+}
 
 std::vector<DegeneracyDetector::Line> DegeneracyDetector::FitLinesRANSAC(
     const sensor::PointCloud& point_cloud,

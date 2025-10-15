@@ -17,11 +17,30 @@
 #include "cartographer/localization/confidence/map_coherence_evaluator.h"
 #include <cmath>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 #include "glog/logging.h"
 
 namespace cartographer {
 namespace localization {
 namespace confidence {
+
+// Result打印方法实现
+std::string MapCoherenceEvaluator::Result::ToString() const {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(4);
+  
+  oss << "MapCoherenceEvaluator Result:\n";
+  oss << "  Total Confidence:    " << total_confidence << "\n";
+  oss << "  ├─ Submap Match:     " << submap_match_score << "\n";
+  oss << "  └─ Map Entropy:      " << map_entropy << "\n";
+  
+  return oss.str();
+}
+
+void MapCoherenceEvaluator::Result::Print() const {
+  LOG(INFO) << ToString();
+}
 
 double MapCoherenceEvaluator::ComputeSubmapMatchScore(
     const sensor::PointCloud& point_cloud,

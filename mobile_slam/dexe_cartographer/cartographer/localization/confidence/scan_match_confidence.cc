@@ -17,11 +17,33 @@
 #include "cartographer/localization/confidence/scan_match_confidence.h"
 #include <cmath>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 #include "glog/logging.h"
 
 namespace cartographer {
 namespace localization {
 namespace confidence {
+
+// Result打印方法实现
+std::string ScanMatchConfidence::Result::ToString() const {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(4);
+  
+  oss << "ScanMatchConfidence Result:\n";
+  oss << "  Total Confidence:    " << total_confidence << "\n";
+  oss << "  ├─ CSM:              " << csm_confidence << "\n";
+  oss << "  ├─ Ceres:            " << ceres_confidence << "\n";
+  oss << "  ├─ Match Ratio:      " << match_ratio << "\n";
+  oss << "  ├─ Covariance:       " << covariance_confidence << "\n";
+  oss << "  └─ Angle Coverage:   " << angle_coverage_entropy << "\n";
+  
+  return oss.str();
+}
+
+void ScanMatchConfidence::Result::Print() const {
+  LOG(INFO) << ToString();
+}
 
 double ScanMatchConfidence::ComputeCSMConfidence(double csm_score) const {
   // CSM得分通常在0-1范围，直接作为置信度

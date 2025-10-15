@@ -65,6 +65,10 @@ class ConfidenceEstimator {
     
     bool is_corridor_detected;    // 是否检测到走廊
     double feature_distribution_score; // 特征分布得分
+    
+    // 打印所有评估项
+    std::string ToString() const;
+    void Print() const;
   };
 
   struct Config {

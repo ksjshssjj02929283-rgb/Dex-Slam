@@ -35,6 +35,10 @@ class MotionConsistencyChecker {
     
     double delta_distance;  // 预测与观测的距离偏差(m)
     double delta_angle;     // 预测与观测的角度偏差(rad)
+    
+    // 打印评估项
+    std::string ToString() const;
+    void Print() const;
   };
 
   explicit MotionConsistencyChecker(int velocity_window_size = 10);
