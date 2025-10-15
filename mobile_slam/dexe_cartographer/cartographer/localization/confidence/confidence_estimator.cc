@@ -135,6 +135,7 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
     const Eigen::Matrix3d& covariance,
     double ceres_final_cost,
     int num_ceres_residuals,
+    const std::vector<sensor::LineData>& line_data,
     const mapping::Grid2D* matching_grid,
     double runtime_seconds,
     bool compute_uncertainty) {
@@ -185,8 +186,10 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
   
   // ========== L4: 几何退化检测 ==========
   if (config_.enable_degeneracy_check) {
-    auto degeneracy_result = degeneracy_detector_->Evaluate(
-        point_cloud, covariance);
+    auto degeneracy_result = line_data.empty() 
+      ? degeneracy_detector_->Evaluate(point_cloud, covariance)
+      : degeneracy_detector_->EvaluateWithLines(point_cloud, line_data, covariance);
+    std::cout << "is from line data: " << (!line_data.empty() ? "YES" : "NO") << std::endl;
     metrics.degeneracy_factor = degeneracy_result.degeneracy_factor;
     metrics.is_corridor_detected = degeneracy_result.is_corridor;
     metrics.feature_distribution_score = degeneracy_result.feature_distribution;

@@ -23,6 +23,7 @@
 #include "cartographer/localization/confidence/map_coherence_evaluator.h"
 #include "cartographer/localization/confidence/degeneracy_detector.h"
 #include "cartographer/sensor/point_cloud.h"
+#include "cartographer/sensor/line_data.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "Eigen/Core"
 
@@ -109,6 +110,7 @@ class ConfidenceEstimator {
       const Eigen::Matrix3d& covariance,
       double ceres_final_cost,
       int num_ceres_residuals,
+      const std::vector<sensor::LineData>& line_data = std::vector<sensor::LineData>(),
       const mapping::Grid2D* matching_grid = nullptr,
       double runtime_seconds = 0.0,
       bool compute_uncertainty = false);

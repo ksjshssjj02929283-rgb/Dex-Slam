@@ -18,7 +18,9 @@
 #define CARTOGRAPHER_LOCALIZATION_CONFIDENCE_DEGENERACY_DETECTOR_H_
 
 #include "cartographer/sensor/point_cloud.h"
+#include "cartographer/sensor/line_data.h"
 #include "Eigen/Core"
+#include <vector>
 
 namespace cartographer {
 namespace localization {
@@ -41,9 +43,21 @@ class DegeneracyDetector {
 
   DegeneracyDetector() = default;
 
+  // 走廊检测结果
+  struct CorridorDetectionResult {
+    bool is_corridor;           // 是否为走廊
+    double parallelism_ratio;   // 平行度比例 [0,1]
+  };
+
   // 检测走廊环境
   // 使用RANSAC拟合直线，检测平行墙面
-  bool DetectCorridor(const sensor::PointCloud& point_cloud) const;
+  bool DetectCorridorFromCloud(const sensor::PointCloud& point_cloud) const;
+
+  // 检测走廊环境（使用预提取的直线数据）
+  // 直接使用merged data中已提取的直线，避免重复RANSAC拟合
+  // 返回走廊检测结果和平行度比例
+  CorridorDetectionResult DetectCorridorFromLines(
+      const std::vector<sensor::LineData>& lines) const;
 
   // 计算特征分布均匀性
   // 基于点云在不同方向的分布
@@ -55,6 +69,13 @@ class DegeneracyDetector {
   // 综合评估
   Result Evaluate(
       const sensor::PointCloud& point_cloud,
+      const Eigen::Matrix3d& covariance) const;
+
+  // 综合评估（使用预提取的直线数据）
+  // 避免重复RANSAC拟合，减少运算量
+  Result EvaluateWithLines(
+      const sensor::PointCloud& point_cloud,
+      const std::vector<sensor::LineData>& lines,
       const Eigen::Matrix3d& covariance) const;
 
  private:
@@ -78,6 +99,14 @@ class DegeneracyDetector {
 
   bool AreParallel(const Line& line1, const Line& line2, double angle_threshold = 0.174) const; // 10度
 
+  // ========== 新增：多指标退化评估辅助函数 ==========
+  
+  // 计算几何平行度（从RANSAC拟合的直线）
+  double ComputeParallelismRatio(const std::vector<Line>& lines) const;
+  
+  // 计算观测方向熵（方案指标2：Observable Direction Entropy）
+  double ComputeObservationEntropy(const sensor::PointCloud& point_cloud) const;
+  
   // 参数
   static constexpr double kConditionNumberThreshold = 50.0;  // 条件数阈值
   static constexpr int kNumSectors = 36;  // 扇区数量（角度划分）

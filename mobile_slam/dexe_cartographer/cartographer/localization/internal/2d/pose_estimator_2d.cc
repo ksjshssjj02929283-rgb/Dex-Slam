@@ -437,9 +437,9 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
       *pose_observation,
       pose_prediction,
       cov,
-      correlative_success ? 0.8 : 0.0,  // CSM得分（简化处理）
       summary.final_cost,
       static_cast<int>(filtered_gravity_aligned_point_cloud.size()),
+      line_data,
       matching_submap->grid(),
       runtime_seconds);
   
