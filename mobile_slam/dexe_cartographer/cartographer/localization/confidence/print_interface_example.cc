@@ -26,7 +26,6 @@ void ExamplePrintMainMetrics() {
   
   // Layer 1
   metrics.scan_match_score = 0.7856;
-  metrics.csm_score = 0.8234;
   metrics.ceres_residual_score = 0.7645;
   metrics.match_ratio = 0.8123;
   metrics.covariance_score = 0.7423;
@@ -87,7 +86,6 @@ void ExamplePrintLayerResults() {
   {
     ScanMatchConfidence::Result result;
     result.total_confidence = 0.7856;
-    result.csm_confidence = 0.8234;
     result.ceres_confidence = 0.7645;
     result.match_ratio = 0.8123;
     result.covariance_confidence = 0.7423;

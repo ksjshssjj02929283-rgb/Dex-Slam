@@ -52,7 +52,6 @@ class ConfidenceEstimator {
     ConfidenceLevel level;        // 置信度等级
     
     // 详细指标
-    double csm_score;             // CSM匹配得分
     double ceres_residual_score;  // Ceres残差得分
     double match_ratio;           // 匹配点比例
     double covariance_score;      // 协方差得分
@@ -72,11 +71,10 @@ class ConfidenceEstimator {
   };
 
   struct Config {
-    // L1 权重
-    double w_csm = 0.3;
-    double w_ceres = 0.3;
-    double w_match_ratio = 0.2;
-    double w_covariance = 0.2;
+    // L1 权重（移除了CSM，调整权重）
+    double w_ceres = 0.4;
+    double w_match_ratio = 0.3;
+    double w_covariance = 0.3;
     
     // 融合权重（动态调整）
     double w_scan_match = 0.3;
@@ -109,11 +107,11 @@ class ConfidenceEstimator {
       const transform::Rigid2d& pose_estimate,
       const transform::Rigid2d& pose_prediction,
       const Eigen::Matrix3d& covariance,
-      double csm_score,
       double ceres_final_cost,
       int num_ceres_residuals,
       const mapping::Grid2D* matching_grid = nullptr,
-      double runtime_seconds = 0.0);
+      double runtime_seconds = 0.0,
+      bool compute_uncertainty = false);
 
   // 更新配置
   void UpdateConfig(const Config& config) { config_ = config; }

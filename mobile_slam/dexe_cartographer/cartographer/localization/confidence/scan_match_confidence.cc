@@ -32,7 +32,6 @@ std::string ScanMatchConfidence::Result::ToString() const {
   
   oss << "ScanMatchConfidence Result:\n";
   oss << "  Total Confidence:    " << total_confidence << "\n";
-  oss << "  ├─ CSM:              " << csm_confidence << "\n";
   oss << "  ├─ Ceres:            " << ceres_confidence << "\n";
   oss << "  ├─ Match Ratio:      " << match_ratio << "\n";
   oss << "  ├─ Covariance:       " << covariance_confidence << "\n";
@@ -45,22 +44,17 @@ void ScanMatchConfidence::Result::Print() const {
   LOG(INFO) << ToString();
 }
 
-double ScanMatchConfidence::ComputeCSMConfidence(double csm_score) const {
-  // CSM得分通常在0-1范围，直接作为置信度
-  // 可以应用非线性变换增强区分度
-  return std::min(1.0, std::max(0.0, csm_score));
-}
-
 double ScanMatchConfidence::ComputeCeresConfidence(
     double final_cost, int num_residuals) const {
   if (num_residuals <= 0) {
     return 0.0;
   }
   
-  // 计算平均残差
-  double mean_residual = std::sqrt(final_cost / num_residuals);
+  // 计算平均残差（每个残差的平均cost）
+  double mean_residual = final_cost / num_residuals;
   
   // 使用指数衰减函数
+  // 残差越小，置信度越高
   // C_ceres = exp(-mean_residual / sigma)
   double confidence = std::exp(-mean_residual / kCeresResidualSigma);
   
@@ -157,7 +151,8 @@ double ScanMatchConfidence::ComputeAngleCoverageEntropy(
 }
 
 double ScanMatchConfidence::ComputeCovarianceConfidence(
-    const Eigen::Matrix3d& covariance) const {
+    const Eigen::Matrix3d& covariance,
+    bool compute_uncertainty) const {
   // 提取位置部分的2x2协方差矩阵
   Eigen::Matrix2d cov_pos = covariance.block<2, 2>(0, 0);
   
@@ -177,27 +172,41 @@ double ScanMatchConfidence::ComputeCovarianceConfidence(
   double area_factor = std::exp(-kCovarianceAlpha * area);
   double condition_factor = 1.0 / (1.0 + kCovarianceBeta * std::log(condition_number));
   
-  return area_factor * condition_factor;
+  double confidence = area_factor * condition_factor;
+  
+  // 如果需要计算并打印不确定性信息
+  if (compute_uncertainty) {
+    // 计算1-sigma椭圆的长短轴
+    double major_axis = 2.0 * std::sqrt(eigenvalues(1));  // 长轴 (2*sigma)
+    double minor_axis = 2.0 * std::sqrt(eigenvalues(0));  // 短轴 (2*sigma)
+    double theta_std = std::sqrt(covariance(2, 2));        // 角度标准差
+    
+    std::cout << "covariance:\n" << covariance << "\n"
+              << "position uncertainty (1-sigma): major=" << major_axis/2.0 << "m, minor=" << minor_axis/2.0 << "m\n"
+              << "orientation uncertainty (1-sigma): " << theta_std << " rad (" << theta_std * 180.0/M_PI << " deg)\n"
+              << "covariance_confidence: " << confidence << std::endl;
+  }
+  
+  return confidence;
 }
 
 ScanMatchConfidence::Result ScanMatchConfidence::Evaluate(
     const sensor::PointCloud& point_cloud,
     const transform::Rigid2d& pose,
     const Eigen::Matrix3d& covariance,
-    double csm_score,
     double ceres_final_cost,
     int num_residuals,
-    const mapping::Grid2D* grid) const {
+    const mapping::Grid2D* grid,
+    bool compute_uncertainty) const {
   
   Result result;
   
-  // L1.1: CSM置信度
-  result.csm_confidence = ComputeCSMConfidence(csm_score);
-  
-  // L1.2: Ceres置信度
+  // L1.1: Ceres置信度
   result.ceres_confidence = ComputeCeresConfidence(ceres_final_cost, num_residuals);
+  std::cout << "ceres_final_cost: " << ceres_final_cost << ", num_residuals: " << num_residuals 
+            << ", ceres_confidence: " << result.ceres_confidence << std::endl;
   
-  // L1.3: 匹配率和角度覆盖
+  // L1.2: 匹配率和角度覆盖
   if (grid != nullptr && !point_cloud.empty()) {
     result.match_ratio = ComputeMatchRatio(point_cloud, *grid, pose);
     result.angle_coverage_entropy = ComputeAngleCoverageEntropy(
@@ -207,21 +216,19 @@ ScanMatchConfidence::Result ScanMatchConfidence::Evaluate(
     result.angle_coverage_entropy = 0.5;
   }
   
-  // L1.4: 协方差置信度
-  result.covariance_confidence = ComputeCovarianceConfidence(covariance);
+  // L1.3: 协方差置信度（传递compute_uncertainty标志）
+  result.covariance_confidence = ComputeCovarianceConfidence(covariance, compute_uncertainty);
   
   // 综合置信度（加权平均）
   // 这里使用默认权重，可由外部配置
-  const double w1 = 0.3;  // CSM
-  const double w2 = 0.3;  // Ceres
-  const double w3 = 0.2;  // 匹配率
-  const double w4 = 0.2;  // 协方差
+  const double w1 = 0.3;  // Ceres (提高权重)
+  const double w2 = 0.4;  // 匹配率
+  const double w3 = 0.4;  // 协方差
   
   result.total_confidence = 
-      w1 * result.csm_confidence +
-      w2 * result.ceres_confidence +
-      w3 * result.match_ratio +
-      w4 * result.covariance_confidence;
+      w1 * result.ceres_confidence +
+      w2 * result.match_ratio +
+      w3 * result.covariance_confidence;
   
   return result;
 }

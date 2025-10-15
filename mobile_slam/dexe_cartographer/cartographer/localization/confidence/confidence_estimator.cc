@@ -49,7 +49,6 @@ std::string ConfidenceEstimator::Metrics::ToString() const {
   
   oss << "Layer 1 - Scan Match (Weight: varies):\n";
   oss << "  Scan Match Score:     " << scan_match_score << "\n";
-  oss << "    ├─ CSM Score:       " << csm_score << "\n";
   oss << "    ├─ Ceres Residual:  " << ceres_residual_score << "\n";
   oss << "    ├─ Match Ratio:     " << match_ratio << "\n";
   oss << "    └─ Covariance:      " << covariance_score << "\n";
@@ -134,11 +133,11 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
     const transform::Rigid2d& pose_estimate,
     const transform::Rigid2d& pose_prediction,
     const Eigen::Matrix3d& covariance,
-    double csm_score,
     double ceres_final_cost,
     int num_ceres_residuals,
     const mapping::Grid2D* matching_grid,
-    double runtime_seconds) {
+    double runtime_seconds,
+    bool compute_uncertainty) {
   
   Metrics metrics;
   
@@ -150,11 +149,10 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
   // ========== L1: 扫描匹配置信度 ==========
   auto scan_match_result = scan_match_confidence_->Evaluate(
       point_cloud, pose_estimate, covariance,
-      csm_score, ceres_final_cost, num_ceres_residuals,
-      matching_grid);
+      ceres_final_cost, num_ceres_residuals,
+      matching_grid, compute_uncertainty);
   
   metrics.scan_match_score = scan_match_result.total_confidence;
-  metrics.csm_score = scan_match_result.csm_confidence;
   metrics.ceres_residual_score = scan_match_result.ceres_confidence;
   metrics.match_ratio = scan_match_result.match_ratio;
   metrics.covariance_score = scan_match_result.covariance_confidence;
