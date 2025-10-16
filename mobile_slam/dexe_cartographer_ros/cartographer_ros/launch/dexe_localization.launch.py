@@ -83,13 +83,16 @@ def generate_launch_description():
         ]
     )
 
-    # Occupancy grid node (currently commented out)
+    # Occupancy grid node
     cartographer_occupancy_grid_node = Node(
         package='cartographer_ros',
         executable='cartographer_occupancy_grid_node',
         name='cartographer_occupancy_grid_node',
         output='screen',
         respawn=False,
+        parameters=[
+            {'use_sim_time': False}
+        ],
         arguments=[
             '-resolution', resolution
         ]
@@ -103,5 +106,5 @@ def generate_launch_description():
         
         # Nodes
         localization_node,
-        # cartographer_occupancy_grid_node,  # 取消注释如需要
+        # cartographer_occupancy_grid_node,
     ])
