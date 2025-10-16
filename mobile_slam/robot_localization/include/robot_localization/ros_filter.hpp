@@ -691,6 +691,21 @@ protected:
   //!
   std::map<std::string, bool> remove_gravitational_acceleration_;
 
+  //! @brief Custom pose covariance matrices for each sensor topic
+  //! Keyed by topic name (e.g., "odom0", "pose0")
+  //!
+  std::map<std::string, Eigen::MatrixXd> custom_pose_covariances_;
+
+  //! @brief Custom twist covariance matrices for each sensor topic
+  //! Keyed by topic name (e.g., "odom0", "imu0")
+  //!
+  std::map<std::string, Eigen::MatrixXd> custom_twist_covariances_;
+
+  //! @brief Custom acceleration covariance matrices for each IMU topic
+  //! Keyed by topic name (e.g., "imu0")
+  //!
+  std::map<std::string, Eigen::MatrixXd> custom_acceleration_covariances_;
+
   //! @brief Flag to track if filter has been initialized with first pose measurement
   //!
   bool is_initialized_;
