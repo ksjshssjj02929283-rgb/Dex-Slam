@@ -450,13 +450,17 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     // 可以在这里实现降级策略
     // 例如：降低建图频率、触发重定位等
   }
-  
+  // confidence_metrics.Print();
   // 记录置信度到日志（仅在VLOG级别）
   LOG(INFO) << "Localization confidence: " << confidence_metrics.total_confidence
-          << " (L1:" << confidence_metrics.scan_match_score
-          << " L2:" << confidence_metrics.motion_consistency  
-          << " L3:" << confidence_metrics.map_coherence
-          << " L4:" << confidence_metrics.degeneracy_factor << ")";
+          << " (L1:" << (confidence_metrics.scan_match_score.has_value() ? 
+                          std::to_string(*confidence_metrics.scan_match_score) : "N/A")
+          << " L2:" << (confidence_metrics.motion_consistency.has_value() ? 
+                        std::to_string(*confidence_metrics.motion_consistency) : "N/A")
+          << " L3:" << (confidence_metrics.map_coherence.has_value() ? 
+                        std::to_string(*confidence_metrics.map_coherence) : "N/A")
+          << " L4:" << (confidence_metrics.degeneracy_factor.has_value() ? 
+                        std::to_string(*confidence_metrics.degeneracy_factor) : "N/A") << ")";
 
   // std::cout << "cov: \n" << cov.matrix() << std::endl;
   // LOG(INFO) << "scan match: " << *pose_observation;

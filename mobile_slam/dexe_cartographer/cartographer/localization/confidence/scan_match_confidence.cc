@@ -91,7 +91,7 @@ double ScanMatchConfidence::ComputeMatchRatio(
       }
     }
   }
-  
+
   return static_cast<double>(num_hit) / point_cloud.size();
 }
 
@@ -203,9 +203,7 @@ ScanMatchConfidence::Result ScanMatchConfidence::Evaluate(
   
   // L1.1: Ceres置信度
   result.ceres_confidence = ComputeCeresConfidence(ceres_final_cost, num_residuals);
-  std::cout << "ceres_final_cost: " << ceres_final_cost << ", num_residuals: " << num_residuals 
-            << ", ceres_confidence: " << result.ceres_confidence << std::endl;
-  
+
   // L1.2: 匹配率和角度覆盖
   if (grid != nullptr && !point_cloud.empty()) {
     result.match_ratio = ComputeMatchRatio(point_cloud, *grid, pose);
