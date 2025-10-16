@@ -64,7 +64,7 @@ ament_export_dependencies(
 )
 
 # 7) 安装接口源文件（可选，便于查看/复用）
-install(DIRECTORY msg action
+install(DIRECTORY msg
   DESTINATION share/${PROJECT_NAME}
 )
 
