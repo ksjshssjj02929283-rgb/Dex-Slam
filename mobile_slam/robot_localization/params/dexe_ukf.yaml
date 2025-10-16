@@ -103,16 +103,25 @@ robot_localization:
                        false, false, false]
 
 # Custom covariance for odometry pose [x, y, yaw]
+# For 100Hz odometry in differential mode, covariance should reflect per-measurement uncertainty
+# Position: ~1cm accuracy -> (0.01)^2 = 0.0001
+# Yaw: ~1 degree accuracy -> (0.017rad)^2 ≈ 0.0003
         odom0_pose_covariance: [0.0001, 0.0,    0.0,
                                 0.0,    0.0001, 0.0,
-                                0.0,    0.0,    0.0004]
+                                0.0,    0.0,    0.0003]
+
+# Custom covariance for odometry twist [vx, vy, vyaw]
+# Linear velocity: ~2cm/s accuracy -> (0.02)^2 = 0.0004
+# Angular velocity: ~2 deg/s accuracy -> (0.035rad/s)^2 ≈ 0.0012
+        odom0_twist_covariance: [0.0004, 0.0,    0.0,
+                                 0.0,    0.0004, 0.0,
+                                 0.0,    0.0,    0.0012]
 
 # If you have high-frequency data or are running with a low frequency parameter value, then you may want to increase
 # the size of the subscription queue so that more measurements are fused.
         odom0_differential: true
         odom0_relative: false
-        odom0_queue_size: 100
-        odom0_nodelay: true
+        odom0_queue_size: 20  # Optimized for 100Hz: (100/50)*2 = 4, with safety margin = 20
 
         # odom0_pose_rejection_threshold: 5.0
         # odom0_twist_rejection_threshold: 1.0
@@ -127,11 +136,18 @@ robot_localization:
                        false, false, false,
                        false, false, false]
 
+# Custom covariance for localization pose [x, y, yaw]
+# SLAM-based localization typically has:
+# Position: ~5cm accuracy -> (0.05)^2 = 0.0025
+# Yaw: ~3 degree accuracy -> (0.052rad)^2 ≈ 0.0027
+        pose0_covariance: [0.0025, 0.0,    0.0,
+                           0.0,    0.0025, 0.0,
+                           0.0,    0.0,    0.0027]
+
         pose0_differential: false
         pose0_relative: false
-        pose0_queue_size: 50
+        pose0_queue_size: 10  # Optimized for low-frequency pose updates (~5Hz)
         pose0_rejection_threshold: 2.0  # Note the difference in parameter name (大于2个sigma的值将被忽略)
-        pose0_nodelay: true
 
 # ============================
 # IMU Input Configuration
@@ -143,28 +159,33 @@ robot_localization:
                       false, false, true,
                       true,  true,  true]
 
-        imu0_pose_covariance: [0.0,   0.0,   0.0,
-                               0.0,   0.0,   0.0,
-                               0.0,   0.0,   0.0,
-                               1.0e-4, 0.0,   0.0,
-                               0.0,   1.0e-4, 0.0,
-                               0.0,   0.0,   1.0e-4]
+# Custom covariance for IMU orientation [roll, pitch, yaw]
+# For 100Hz IMU with good calibration:
+# Roll/Pitch: ~0.5 degree accuracy -> (0.0087rad)^2 ≈ 7.6e-5
+# Yaw: ~1.0 degree accuracy -> (0.017rad)^2 ≈ 3.0e-4
+        imu0_pose_covariance: [7.6e-5, 0.0,    0.0,
+                               0.0,    7.6e-5, 0.0,
+                               0.0,    0.0,    3.0e-4]
 
-        imu0_twist_covariance: [0.0,    0.0,    0.0,
-                                0.0,    0.0,    0.0,
-                                0.0,    0.0,    0.0,
-                                1.6e-5, 0.0,    0.0,
-                                0.0,    6.4e-5, 0.0,
-                                0.0,    0.0,    1.6e-5]
+# Custom covariance for IMU angular velocity [vroll, vpitch, vyaw]
+# For 100Hz IMU gyroscope:
+# Angular velocity: ~0.5 deg/s accuracy -> (0.0087rad/s)^2 ≈ 7.6e-5
+# Vyaw might be slightly less accurate due to magnetic interference
+        imu0_twist_covariance: [7.6e-5, 0.0,    0.0,
+                                0.0,    7.6e-5, 0.0,
+                                0.0,    0.0,    1.2e-4]
 
-        imu0_linear_acceleration_covariance: [4.0e-6, 0.0,    0.0,
-                                              0.0,    2.5e-5, 0.0,
-                                              0.0,    0.0,    4.0e-6]
+# Custom covariance for IMU linear acceleration [ax, ay, az]
+# For 100Hz IMU accelerometer:
+# Horizontal (x, y): ~0.02 m/s^2 accuracy -> (0.02)^2 = 4.0e-4
+# Vertical (z): ~0.05 m/s^2 accuracy (gravity compensation) -> (0.05)^2 = 2.5e-3
+        imu0_linear_acceleration_covariance: [4.0e-4, 0.0,    0.0,
+                                              0.0,    4.0e-4, 0.0,
+                                              0.0,    0.0,    2.5e-3]
 
-        imu0_nodelay: true
         imu0_differential: true
         imu0_relative: false
-        imu0_queue_size: 500
+        imu0_queue_size: 30  # Optimized for 100Hz: (100/50)*3 = 6, with safety margin = 30
         # imu0_pose_rejection_threshold: 0.8
         # imu0_twist_rejection_threshold: 0.8
         # imu0_linear_acceleration_rejection_threshold: 0.8
