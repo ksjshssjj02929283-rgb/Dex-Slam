@@ -91,6 +91,23 @@ class ConfidenceEstimator {
   
   // 重置状态（用于重定位）
   void Reset();
+  
+  // 关键失败检测结构
+  struct CriticalFailureInfo {
+    bool is_critical_failure = false;    // 是否为关键失败
+    std::string failure_reason;          // 失败原因描述
+    std::vector<std::string> triggered_conditions;  // 触发的所有条件
+  };
+  
+  // 检查是否存在导致定位直接失败的关键条件
+  // 返回关键失败信息，如果is_critical_failure=true则定位应直接判定为FAILED
+  CriticalFailureInfo CheckCriticalFailure(
+      const Metrics& metrics,
+      const sensor::PointCloud& point_cloud,
+      const transform::Rigid2d& pose_prediction,
+      const transform::Rigid2d& pose_estimate,
+      double ceres_final_cost,
+      int num_ceres_residuals) const;
 
  private:
   ConfidenceLevel DetermineLevel(double total_confidence) const;

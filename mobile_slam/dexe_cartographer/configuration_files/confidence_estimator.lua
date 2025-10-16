@@ -48,6 +48,23 @@ CONFIDENCE_ESTIMATOR = {
   enable_motion_check = true,    -- 启用L2: 运动一致性检查
   enable_map_check = true,       -- 启用L3: 地图一致性评估
   enable_degeneracy_check = true, -- 启用L4: 几何退化检测
+
+  -- ========== 关键失败判定阈值 ==========
+  -- 用于直接判定定位失败的严重条件，触发时立即返回FAILED级别
+  enable_critical_failure_check = true,  -- 启用关键失败检测
+  
+  -- 扫描匹配相关
+  critical_min_match_ratio = 0.15,           -- 最小匹配率（低于此值判定失败）
+  critical_max_ceres_residual = 1.0,         -- 最大Ceres平均残差
+  critical_min_point_count = 50,             -- 最小有效点云数量
+  
+  -- 运动一致性相关
+  critical_max_pose_jump_distance = 2.0,     -- 最大位姿跳变距离（米）
+  critical_max_pose_jump_angle = 0.524,      -- 最大位姿跳变角度（弧度，约30°）
+  critical_min_slippage_score = 0.2,         -- 最小打滑置信度（低于此值判定打滑严重）
+  
+  -- 退化检测相关
+  critical_max_hessian_condition = 1000.0,   -- 最大Hessian条件数（走廊环境下）
 }
 
 return CONFIDENCE_ESTIMATOR

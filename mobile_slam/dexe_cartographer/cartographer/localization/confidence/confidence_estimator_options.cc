@@ -57,6 +57,24 @@ proto::ConfidenceEstimatorOptions CreateConfidenceEstimatorOptions(
   options.set_enable_map_check(parameter_dictionary->GetBool("enable_map_check"));
   options.set_enable_degeneracy_check(parameter_dictionary->GetBool("enable_degeneracy_check"));
   
+  // ========== 关键失败判定阈值 ==========
+  options.set_enable_critical_failure_check(
+      parameter_dictionary->GetBool("enable_critical_failure_check"));
+  options.set_critical_min_match_ratio(
+      parameter_dictionary->GetDouble("critical_min_match_ratio"));
+  options.set_critical_max_pose_jump_distance(
+      parameter_dictionary->GetDouble("critical_max_pose_jump_distance"));
+  options.set_critical_max_pose_jump_angle(
+      parameter_dictionary->GetDouble("critical_max_pose_jump_angle"));
+  options.set_critical_min_slippage_score(
+      parameter_dictionary->GetDouble("critical_min_slippage_score"));
+  options.set_critical_min_point_count(
+      parameter_dictionary->GetInt("critical_min_point_count"));
+  options.set_critical_max_ceres_residual(
+      parameter_dictionary->GetDouble("critical_max_ceres_residual"));
+  options.set_critical_max_hessian_condition(
+      parameter_dictionary->GetDouble("critical_max_hessian_condition"));
+  
   return options;
 }
 

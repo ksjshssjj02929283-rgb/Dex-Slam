@@ -230,6 +230,20 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
   // 确保在[0,1]范围内
   metrics.total_confidence = std::min(1.0, std::max(0.0, metrics.total_confidence));
   
+  // ========== 关键失败检测（优先级最高）==========
+  auto critical_failure_info = CheckCriticalFailure(
+      metrics, point_cloud, pose_prediction, pose_estimate,
+      ceres_final_cost, num_ceres_residuals);
+  
+  if (critical_failure_info.is_critical_failure) {
+    // 直接判定为FAILED级别，覆盖之前的计算结果
+    metrics.total_confidence = 0.0;
+    metrics.level = ConfidenceLevel::FAILED;
+    LOG(ERROR) << "❌ CRITICAL FAILURE DETECTED - Localization FAILED!";
+    LOG(ERROR) << "   Reason: " << critical_failure_info.failure_reason;
+    return metrics;  // 立即返回，不再进行后续处理
+  }
+  
   // 确定置信度等级
   metrics.level = DetermineLevel(metrics.total_confidence);
   
@@ -266,6 +280,113 @@ void ConfidenceEstimator::Reset() {
   motion_checker_->Reset();
   last_runtime_seconds_ = 0.0;
   LOG(INFO) << "Confidence estimator reset.";
+}
+
+ConfidenceEstimator::CriticalFailureInfo ConfidenceEstimator::CheckCriticalFailure(
+    const Metrics& metrics,
+    const sensor::PointCloud& point_cloud,
+    const transform::Rigid2d& pose_prediction,
+    const transform::Rigid2d& pose_estimate,
+    double ceres_final_cost,
+    int num_ceres_residuals) const {
+  
+  CriticalFailureInfo info;
+  info.is_critical_failure = false;
+  
+  // 如果未启用关键失败检测，直接返回
+  if (!options_.enable_critical_failure_check()) {
+    return info;
+  }
+  
+  // ========== 条件1: 点云数量过少 ==========
+  if (static_cast<int>(point_cloud.size()) < options_.critical_min_point_count()) {
+    info.is_critical_failure = true;
+    info.triggered_conditions.push_back(
+        "Point cloud too small: " + std::to_string(point_cloud.size()) + 
+        " < " + std::to_string(options_.critical_min_point_count()));
+  }
+  
+  // ========== 条件2: 极低匹配率 ==========
+  if (metrics.match_ratio.has_value() && 
+      *metrics.match_ratio < options_.critical_min_match_ratio()) {
+    info.is_critical_failure = true;
+    info.triggered_conditions.push_back(
+        "Match ratio too low: " + std::to_string(*metrics.match_ratio) + 
+        " < " + std::to_string(options_.critical_min_match_ratio()));
+  }
+  
+  // ========== 条件3: Ceres残差过大 ==========
+  if (num_ceres_residuals > 0) {
+    double mean_residual = ceres_final_cost / num_ceres_residuals;
+    if (mean_residual > options_.critical_max_ceres_residual()) {
+      info.is_critical_failure = true;
+      info.triggered_conditions.push_back(
+          "Ceres residual too high: " + std::to_string(mean_residual) + 
+          " > " + std::to_string(options_.critical_max_ceres_residual()));
+    }
+  }
+  
+  // ========== 条件4: 位姿跳变过大 ==========
+  Eigen::Vector2d delta_translation = 
+      pose_estimate.translation() - pose_prediction.translation();
+  double delta_distance = delta_translation.norm();
+  double delta_angle = std::abs(
+      (pose_prediction.inverse() * pose_estimate).rotation().angle());
+  
+  if (delta_distance > options_.critical_max_pose_jump_distance()) {
+    info.is_critical_failure = true;
+    info.triggered_conditions.push_back(
+        "Pose jump distance too large: " + std::to_string(delta_distance) + "m > " + 
+        std::to_string(options_.critical_max_pose_jump_distance()) + "m");
+  }
+  
+  if (delta_angle > options_.critical_max_pose_jump_angle()) {
+    info.is_critical_failure = true;
+    info.triggered_conditions.push_back(
+        "Pose jump angle too large: " + std::to_string(delta_angle * 180.0 / M_PI) + "° > " + 
+        std::to_string(options_.critical_max_pose_jump_angle() * 180.0 / M_PI) + "°");
+  }
+  
+  // ========== 条件5: 严重打滑 ==========
+  if (metrics.motion_consistency.has_value()) {
+    // 注意：motion_consistency 是运动一致性得分，低值表示不一致/打滑
+    if (*metrics.motion_consistency < options_.critical_min_slippage_score()) {
+      info.is_critical_failure = true;
+      info.triggered_conditions.push_back(
+          "Severe slippage detected: motion_consistency=" + 
+          std::to_string(*metrics.motion_consistency) + 
+          " < " + std::to_string(options_.critical_min_slippage_score()));
+    }
+  }
+  
+  // ========== 条件6: 走廊环境 + 极差的退化因子 ==========
+  if (metrics.is_corridor_detected.has_value() && *metrics.is_corridor_detected) {
+    // 走廊环境下，检查Hessian条件数（通过degeneracy_factor间接判断）
+    if (metrics.degeneracy_factor.has_value()) {
+      // degeneracy_factor是置信度，值越低表示退化越严重
+      // 如果在走廊中且退化因子极低，判定为关键失败
+      if (*metrics.degeneracy_factor < 0.2) {  // 退化因子 < 0.2 in corridor
+        info.is_critical_failure = true;
+        info.triggered_conditions.push_back(
+            "Corridor environment with severe degeneracy: degeneracy_factor=" + 
+            std::to_string(*metrics.degeneracy_factor) + " < 0.2");
+      }
+    }
+  }
+  
+  // ========== 生成失败原因总结 ==========
+  if (info.is_critical_failure) {
+    info.failure_reason = "Critical localization failure detected - " + 
+        std::to_string(info.triggered_conditions.size()) + " condition(s) triggered: ";
+    for (size_t i = 0; i < info.triggered_conditions.size(); ++i) {
+      if (i > 0) info.failure_reason += "; ";
+      info.failure_reason += info.triggered_conditions[i];
+    }
+    
+    LOG(ERROR) << "❌ " << info.failure_reason;
+  }
+  
+  return info;
 }
 
 }  // namespace confidence

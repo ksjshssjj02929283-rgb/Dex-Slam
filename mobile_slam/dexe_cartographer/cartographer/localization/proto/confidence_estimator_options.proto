@@ -49,4 +49,16 @@ message ConfidenceEstimatorOptions {
   bool enable_motion_check = 17;    // 启用运动一致性检查（L2）
   bool enable_map_check = 18;       // 启用地图一致性评估（L3）
   bool enable_degeneracy_check = 19; // 启用几何退化检测（L4）
+  
+  // ========== 关键失败判定阈值 ==========
+  // 用于CheckCriticalFailure函数，直接判定定位失败的严重条件
+  bool enable_critical_failure_check = 20;  // 启用关键失败检测（默认true）
+  
+  double critical_min_match_ratio = 21;     // 最小匹配率阈值（默认0.15，低于此值判定失败）
+  double critical_max_pose_jump_distance = 22;  // 最大位姿跳变距离（m）（默认2.0m）
+  double critical_max_pose_jump_angle = 23;     // 最大位姿跳变角度（rad）（默认0.524，约30°）
+  double critical_min_slippage_score = 24;      // 最小打滑置信度（默认0.2，低于此值判定打滑）
+  int32 critical_min_point_count = 25;          // 最小有效点云数量（默认50）
+  double critical_max_ceres_residual = 26;      // 最大Ceres平均残差（默认1.0）
+  double critical_max_hessian_condition = 27;   // 最大Hessian条件数（默认1000.0，走廊环境下）
 }
