@@ -52,6 +52,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include "std_srvs/srv/trigger.hpp"
 
 namespace robot_localization
 {
@@ -71,6 +72,8 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   stamped_control_(false),
   disabled_at_startup_(false),
   enabled_(false),
+  enable_on_set_pose_(true),
+  start_localization_on_set_pose_(true),
   permit_corrected_publication_(false),
   dynamic_diag_error_level_(diagnostic_msgs::msg::DiagnosticStatus::OK),
   static_diag_error_level_(diagnostic_msgs::msg::DiagnosticStatus::OK),
@@ -84,10 +87,19 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   last_set_pose_time_(0, 0, RCL_ROS_TIME),
   latest_control_time_(0, 0, RCL_ROS_TIME),
   tf_timeout_(0ns),
-  tf_time_offset_(0ns)
+  tf_time_offset_(0ns),
+  is_initialized_(false),
+  pose_reset_threshold_(0.2)
 {
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+
+  // Initialize state vector and covariance matrix
+  initial_state_.resize(STATE_SIZE);
+  initial_state_.setZero();
+  initial_estimate_covariance_.resize(STATE_SIZE, STATE_SIZE);
+  initial_estimate_covariance_.setIdentity();
+  initial_estimate_covariance_ *= 1e-9;
 
   state_variable_names_.push_back("X");
   state_variable_names_.push_back("Y");
@@ -174,6 +186,50 @@ void RosFilter<T>::toggleFilterProcessingCallback(
       "Toggling filter measurement filtering to %s.", req->on ? "On" : "Off");
     toggled_on_ = req->on;
     resp->status = true;
+  }
+}
+
+template<typename T>
+void RosFilter<T>::startLocalizationCallback(
+  const std::shared_ptr<rmw_request_id_t>/*request_header*/,
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
+  const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
+{
+  if (toggled_on_) {
+    resp->success = false;
+    resp->message = "Localization is already running.";
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Start localization service called but localization is already running.");
+  } else {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Starting localization filter processing.");
+    toggled_on_ = true;
+    resp->success = true;
+    resp->message = "Localization started successfully.";
+  }
+}
+
+template<typename T>
+void RosFilter<T>::stopLocalizationCallback(
+  const std::shared_ptr<rmw_request_id_t>/*request_header*/,
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
+  const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
+{
+  if (!toggled_on_) {
+    resp->success = false;
+    resp->message = "Localization is already stopped.";
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Stop localization service called but localization is already stopped.");
+  } else {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Stopping localization filter processing.");
+    toggled_on_ = false;
+    resp->success = true;
+    resp->message = "Localization stopped successfully.";
   }
 }
 
@@ -678,6 +734,72 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
         restored_measurement_count--;
       }
 
+      // Initialize filter with first pose measurement (similar to ROS1 logic)
+      if (!is_initialized_) {
+        // Only use pose0 topic for initialization
+        if (measurement->topic_name_ != "pose0") {
+          continue;
+        }
+
+        // Set initial state from the first pose measurement
+        initial_state_(StateMemberX) = measurement->measurement_(StateMemberX);
+        initial_state_(StateMemberY) = measurement->measurement_(StateMemberY);
+        initial_state_(StateMemberZ) = measurement->measurement_(StateMemberZ);
+        initial_state_(StateMemberRoll) = measurement->measurement_(StateMemberRoll);
+        initial_state_(StateMemberPitch) = measurement->measurement_(StateMemberPitch);
+        initial_state_(StateMemberYaw) = measurement->measurement_(StateMemberYaw);
+
+        filter_.setState(initial_state_);
+        filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
+        is_initialized_ = true;
+
+        RCLCPP_INFO(
+          this->get_logger(),
+          "Initialized filter with pose0 at [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+          initial_state_(StateMemberX), initial_state_(StateMemberY), initial_state_(StateMemberZ),
+          initial_state_(StateMemberRoll), initial_state_(StateMemberPitch), initial_state_(StateMemberYaw));
+      }
+
+      // Check if we need to reset the filter (pose0 with large error)
+      if (measurement->topic_name_ == "pose0") {
+        // Update initial_state_ for reference
+        initial_state_(StateMemberX) = measurement->measurement_(StateMemberX);
+        initial_state_(StateMemberY) = measurement->measurement_(StateMemberY);
+        initial_state_(StateMemberZ) = measurement->measurement_(StateMemberZ);
+        initial_state_(StateMemberRoll) = measurement->measurement_(StateMemberRoll);
+        initial_state_(StateMemberPitch) = measurement->measurement_(StateMemberPitch);
+        initial_state_(StateMemberYaw) = measurement->measurement_(StateMemberYaw);
+
+        // Get current filtered position
+        nav_msgs::msg::Odometry filtered_position;
+        if (getFilteredOdometryMessage(&filtered_position)) {
+          double err_x = filtered_position.pose.pose.position.x - measurement->measurement_(StateMemberX);
+          double err_y = filtered_position.pose.pose.position.y - measurement->measurement_(StateMemberY);
+          double err_dist = std::sqrt(err_x * err_x + err_y * err_y);
+
+          if (err_dist > pose_reset_threshold_) {
+            RCLCPP_WARN(
+              this->get_logger(),
+              "Large pose error detected (%.3f m). Resetting filter state.", err_dist);
+            RCLCPP_INFO(
+              this->get_logger(),
+              "Filtered position: [%.3f, %.3f], Measured position: [%.3f, %.3f]",
+              filtered_position.pose.pose.position.x, filtered_position.pose.pose.position.y,
+              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY));
+
+            filter_.setState(measurement->measurement_);
+            filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
+
+            RCLCPP_INFO(
+              this->get_logger(),
+              "Reset filter pose to [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY),
+              measurement->measurement_(StateMemberZ), measurement->measurement_(StateMemberRoll),
+              measurement->measurement_(StateMemberPitch), measurement->measurement_(StateMemberYaw));
+          }
+        }
+      }
+
       // This will call predict and, if necessary, correct
       filter_.processMeasurement(*(measurement.get()));
 
@@ -1024,6 +1146,13 @@ void RosFilter<T>::loadParams()
   disabled_at_startup_ = this->declare_parameter<bool>("disabled_at_startup", false);
   enabled_ = !disabled_at_startup_;
 
+  // Check if we should automatically enable the filter when initial pose is set
+  enable_on_set_pose_ = this->declare_parameter<bool>("enable_on_set_pose", true);
+
+  // Check if we should automatically start localization when initial pose is set
+  start_localization_on_set_pose_ = this->declare_parameter<bool>(
+    "start_localization_on_set_pose", true);
+
   // Debugging writes to file
   RF_DEBUG(
     std::boolalpha <<
@@ -1079,6 +1208,20 @@ void RosFilter<T>::loadParams()
     this->create_service<robot_localization::srv::ToggleFilterProcessing>(
     "toggle", std::bind(
       &RosFilter<T>::toggleFilterProcessingCallback, this,
+      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+
+  // Create a service for starting localization (convenience wrapper)
+  start_localization_srv_ =
+    this->create_service<std_srvs::srv::Trigger>(
+    "start_localization", std::bind(
+      &RosFilter<T>::startLocalizationCallback, this,
+      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+
+  // Create a service for stopping localization (convenience wrapper)
+  stop_localization_srv_ =
+    this->create_service<std_srvs::srv::Trigger>(
+    "stop_localization", std::bind(
+      &RosFilter<T>::stopLocalizationCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Init the last measurement time so we don't get a huge initial delta
@@ -1318,6 +1461,7 @@ void RosFilter<T>::loadParams()
           this->create_subscription<
             geometry_msgs::msg::PoseWithCovarianceStamped>(
             pose_topic, custom_qos, pose_callback));
+        std::cout << "Subscribed to pose topic " << pose_topic << "\n";
 
         if (differential) {
           twist_var_counts[StateMemberVx] += pose_update_vec[StateMemberX];
@@ -1806,8 +1950,14 @@ void RosFilter<T>::loadParams()
       "Initial estimate error covariance is:\n" <<
         estimate_error_covar_flat << "\n");
 
+    // Store for later use in initialization
+    initial_estimate_covariance_ = initial_estimate_error_covariance;
+
     filter_.setEstimateErrorCovariance(initial_estimate_error_covariance);
   }
+
+  // Load pose reset threshold parameter
+  pose_reset_threshold_ = this->declare_parameter<double>("pose_reset_threshold", 0.2);
 }
 
 template<typename T>
@@ -2259,6 +2409,22 @@ void RosFilter<T>::setPoseCallback(
   filter_.setEstimateErrorCovariance(measurement_covariance);
 
   filter_.setLastMeasurementTime(this->now());
+
+  // Automatically enable the filter if configured to do so
+  if (enable_on_set_pose_ && !enabled_) {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Automatically enabling filter after receiving initial pose");
+    enabled_ = true;
+  }
+
+  // Automatically start localization (toggled_on) if configured to do so
+  if (start_localization_on_set_pose_ && !toggled_on_) {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Automatically starting localization after receiving initial pose");
+    toggled_on_ = true;
+  }
 
   RF_DEBUG("\n------ /RosFilter<T>::setPoseCallback ------\n");
 }

@@ -14,7 +14,7 @@
 
 """
 DCM localization launch file with configurable filter type.
-Supports EKF, UKF, and ESKF filters.
+Supports both EKF and UKF filters.
 """
 
 from launch import LaunchDescription
@@ -40,17 +40,13 @@ def launch_setup(context, *args, **kwargs):
     if filter_type.lower() == 'ekf':
         executable = 'ekf_node'
         node_name = 'ekf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ekf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params', 'dcm_ekf.yaml')
     elif filter_type.lower() == 'ukf':
         executable = 'ukf_node'
         node_name = 'ukf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ukf.yaml')
-    elif filter_type.lower() == 'eskf':
-        executable = 'eskf_node'
-        node_name = 'eskf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_eskf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params', 'dcm_ukf.yaml')
     else:
-        raise ValueError(f"Invalid filter_type: {filter_type}. Must be 'ekf', 'ukf', or 'eskf'")
+        raise ValueError(f"Invalid filter_type: {filter_type}. Must be 'ekf' or 'ukf'")
     
     # Localization node
     localization_node = Node(
@@ -80,8 +76,8 @@ def generate_launch_description():
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
         default_value='ukf',
-        description='Type of filter to use: ekf, ukf, or eskf',
-        choices=['ekf', 'ukf', 'eskf']
+        description='Type of filter to use: ekf or ukf',
+        choices=['ekf', 'ukf']
     )
     
     use_sim_time_arg = DeclareLaunchArgument(

@@ -51,7 +51,7 @@ robot_localization:
 
 # Whether to use lagged data smoothing
         smooth_lagged_data: true
-        history_length: 2.
+        history_length: 200.
         # predict_to_current_time: true
 
 # REP-105 (http://www.ros.org/reps/rep-0105.html) specifies four principal coordinate frames: base_link, odom, map, and
@@ -75,7 +75,7 @@ robot_localization:
 #         estimation node from robot_localization! However, that instance should *not* fuse the global data.
         map_frame: map                  # Defaults to "map" if unspecified
         odom_frame: odom                # Defaults to "odom" if unspecified
-        base_link_frame: base_link # Defaults to "base_link" if unspecified
+        base_link_frame: base_footprint # Defaults to "base_link" if unspecified
         world_frame: map                # Defaults to the value of odom_frame if unspecified
 
 # The filter accepts an arbitrary number of inputs from each input message type (nav_msgs/Odometry,
@@ -103,99 +103,75 @@ robot_localization:
                        false, false, false]
 
 # Custom covariance for odometry pose [x, y, yaw]
-# For 100Hz odometry in differential mode, covariance should reflect per-measurement uncertainty
-# Position: ~2cm accuracy -> (0.02)^2 = 0.0004
-# Yaw: ~2 degree accuracy -> (0.034rad)^2 ≈ 0.0012
-        odom0_pose_covariance: [0.0004, 0.0,    0.0,
-                                0.0,    0.0004, 0.0,
-                                0.0,    0.0,    0.0012]
-
-# Custom covariance for odometry twist [vx, vy, vyaw]
-# Linear velocity: ~2cm/s accuracy -> (0.02)^2 = 0.0004
-# Angular velocity: ~2 deg/s accuracy -> (0.035rad/s)^2 ≈ 0.0012
-        odom0_twist_covariance: [0.0004, 0.0,    0.0,
-                                 0.0,    0.0004, 0.0,
-                                 0.0,    0.0,    0.0012]
+        odom0_pose_covariance: [0.0001, 0.0,    0.0,
+                                0.0,    0.0001, 0.0,
+                                0.0,    0.0,    0.0004]
 
 # If you have high-frequency data or are running with a low frequency parameter value, then you may want to increase
 # the size of the subscription queue so that more measurements are fused.
         odom0_differential: true
         odom0_relative: false
-        odom0_queue_size: 20  # Optimized for 100Hz: (100/50)*2 = 4, with safety margin = 20
+        odom0_queue_size: 100
+        odom0_nodelay: true
 
         # odom0_pose_rejection_threshold: 5.0
         # odom0_twist_rejection_threshold: 1.0
 
 # ============================
-# Cartographer Localization Pose Input Configuration
+# Localization Pose Input Configuration
 # ============================
-# Cartographer provides high-accuracy localization in map frame
-# This pose source contains position and orientation with covariance
-        pose0: /cartographer/loc_pose
+        pose0: /loc_pose
         pose0_config: [true,  true,  false,
                        false, false, true,
                        false, false, false,
                        false, false, false,
                        false, false, false]
 
-# Custom covariance for Cartographer localization pose [x, y, yaw]
-# Cartographer SLAM-based localization has:
-# Position: ~5cm accuracy -> (0.05)^2 = 0.0025
-# Yaw: ~2 degree accuracy -> (0.034rad)^2 ≈ 0.0012
-        pose0_covariance: [0.0025, 0.0,    0.0,
-                           0.0,    0.0025, 0.0,
-                           0.0,    0.0,    0.0012]
-
-# Cartographer provides absolute pose, not differential
         pose0_differential: false
         pose0_relative: false
-        pose0_queue_size: 10  # Lower frequency than wheel odometry (~10-50Hz)
-        pose0_rejection_threshold: 2.0  # 大于2个sigma的值将被忽略
+        pose0_queue_size: 50
+        pose0_rejection_threshold: 2.0  # Note the difference in parameter name (大于2个sigma的值将被忽略)
+        pose0_nodelay: true
 
 # ============================
 # IMU Input Configuration
 # ============================
-        imu0: /imu/chassis/refined
+        imu0: /imu_refined
         imu0_config: [false, false, false,
-                      false, false, false,
+                      false, false, true,
                       false, false, false,
                       false, false, true,
-                      true,  true,  false]
+                      true,  true,  true]
 
-# Custom covariance for IMU orientation [roll, pitch, yaw]
-# For 100Hz IMU with good calibration:
-# Roll/Pitch: ~0.5 degree accuracy -> (0.0087rad)^2 ≈ 7.6e-5
-# Yaw: ~1.0 degree accuracy -> (0.017rad)^2 ≈ 3.0e-4
-        imu0_pose_covariance: [7.6e-5, 0.0,    0.0,
-                               0.0,    7.6e-5, 0.0,
-                               0.0,    0.0,    3.0e-4]
+        imu0_pose_covariance: [0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,
+                               0.0,   0.0,   0.0,
+                               1.0e-4, 0.0,   0.0,
+                               0.0,   1.0e-4, 0.0,
+                               0.0,   0.0,   1.0e-4]
 
-# Custom covariance for IMU angular velocity [vroll, vpitch, vyaw]
-# For 100Hz IMU gyroscope:
-# Angular velocity: ~0.5 deg/s accuracy -> (0.0087rad/s)^2 ≈ 7.6e-5
-# Vyaw might be slightly less accurate due to magnetic interference
-        imu0_twist_covariance: [7.6e-5, 0.0,    0.0,
-                                0.0,    7.6e-5, 0.0,
-                                0.0,    0.0,    1.2e-4]
+        imu0_twist_covariance: [0.0,    0.0,    0.0,
+                                0.0,    0.0,    0.0,
+                                0.0,    0.0,    0.0,
+                                1.6e-5, 0.0,    0.0,
+                                0.0,    6.4e-5, 0.0,
+                                0.0,    0.0,    1.6e-5]
 
-# Custom covariance for IMU linear acceleration [ax, ay, az]
-# For 100Hz IMU accelerometer:
-# Horizontal (x, y): ~0.02 m/s^2 accuracy -> (0.02)^2 = 4.0e-4
-# Vertical (z): ~0.05 m/s^2 accuracy (gravity compensation) -> (0.05)^2 = 2.5e-3
-        imu0_linear_acceleration_covariance: [4.0e-4, 0.0,    0.0,
-                                              0.0,    4.0e-4, 0.0,
-                                              0.0,    0.0,    2.5e-3]
+        imu0_linear_acceleration_covariance: [4.0e-6, 0.0,    0.0,
+                                              0.0,    2.5e-5, 0.0,
+                                              0.0,    0.0,    4.0e-6]
 
+        imu0_nodelay: true
         imu0_differential: true
         imu0_relative: false
-        imu0_queue_size: 30  # Optimized for 100Hz: (100/50)*3 = 6, with safety margin = 30
+        imu0_queue_size: 500
         # imu0_pose_rejection_threshold: 0.8
         # imu0_twist_rejection_threshold: 0.8
         # imu0_linear_acceleration_rejection_threshold: 0.8
 
 # [ADVANCED] Some IMUs automatically remove acceleration due to gravity, and others don't. If yours doesn't, please set
 # this to true, and *make sure* your data conforms to REP-103, specifically, that the data is in ENU frame.
-        imu0_remove_gravitational_acceleration: false
+        imu0_remove_gravitational_acceleration: true
 
 # ============================
 # Control Input Configuration
@@ -239,21 +215,18 @@ robot_localization:
 # to be larger, which will cause the filter to trust the incoming measurement more during correction. The values are
 # ordered as x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az. Defaults to the matrix below if
 # unspecified.
-        # Previous: x,y: 9.0e-4 (0.03m), yaw: 9.0e-4 (1.7°), vx,vy: 2.5e-3
-        # Current:  x,y: 1.0e-4 (0.01m), yaw: 1.0e-4 (0.6°), vx,vy: 5.0e-4, vyaw: 2.0e-3
-        # Reason: Previous values were too large, causing over-reliance on measurements
-        process_noise_covariance: [1.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    1.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
+        process_noise_covariance: [9.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
+                                   0.0,    9.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    5.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    5.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
+                                   0.0,    0.0,    0.0,    0.0,    0.0,    9.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
+                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    2.5e-3, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
+                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    2.5e-3, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-2, 0.0,    0.0,    0.0,    0.0,
-                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    2.0e-3, 0.0,    0.0,    0.0,
+                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-2, 0.0,    0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-2, 0.0,    0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-2, 0.0,
                                    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.5e-2]
