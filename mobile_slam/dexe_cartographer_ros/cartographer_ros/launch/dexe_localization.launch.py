@@ -76,9 +76,9 @@ def generate_launch_description():
             '-collect_metrics', 'false'
         ],
         remappings=[
-            ('scan_1', 'scan_1_refined'),
-            ('scan_2', 'scan_2_refined'),
-            ('imu', 'imu'),
+            ('scan_1', 'laser_scan/front'),
+            ('scan_2', 'laser_scan/rear'),
+            ('imu', 'imu/chassis'),
             ('odom', 'feedback/odom')
         ]
     )
