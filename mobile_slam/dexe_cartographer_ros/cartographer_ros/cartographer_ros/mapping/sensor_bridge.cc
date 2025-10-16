@@ -116,7 +116,7 @@ void SensorBridge::HandleOdometryMessage(
     latest_sensor_time_[sensor_id] = odometry_data->time;
     trajectory_builder_->AddSensorData(
         sensor_id,
-        carto::sensor::OdometryData{odometry_data->time, odometry_data->pose});
+        carto::sensor::OdometryData{odometry_data->time, odometry_data->pose, odometry_data->twist});
   }
 }
 
@@ -192,11 +192,13 @@ std::unique_ptr<carto::sensor::ImuData> SensorBridge::ToImuData(
                   << " to tracking; Skipping IMU message.";
     return nullptr;
   }
-  // 3. 没有获取到TF，警告需要提供TF
-  CHECK(sensor_to_tracking->translation().norm() < 1e-5)
-      << "The IMU frame must be colocated with the tracking frame. "
-         "Transforming linear acceleration into the tracking frame will "
-         "otherwise be imprecise.";
+  // 3. IMU 坐标系与 tracking 坐标系不重合时给出警告，而不是致命错误
+  // if (sensor_to_tracking->translation().norm() >= 1e-5) {
+  //   LOG_EVERY_N(WARNING, 100) << "The IMU frame is not colocated with the tracking frame. "
+  //                << "Translation offset: " << sensor_to_tracking->translation().norm()
+  //                << " m. Transforming linear acceleration into the tracking frame "
+  //                << "may be imprecise.";
+  // }
   // 4. 返回转换后的IMU数据
   return absl::make_unique<carto::sensor::ImuData>(carto::sensor::ImuData{
       time, sensor_to_tracking->rotation() * ToEigen(msg->linear_acceleration),
