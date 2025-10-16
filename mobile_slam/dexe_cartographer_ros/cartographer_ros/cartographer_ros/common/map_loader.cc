@@ -217,22 +217,24 @@ bool MapLoader::LoadGridMap(
       // 然后 kFreeCorrespondenceValue: 与占用概率prob也是相反的
       uchar value = data[xx + yy * num_y_cells];
       if (value == 126|| value == 127 || value == 128) {
+        // 未知区域使用 kUnknownCorrespondenceValue (值为0，表示未知)
         grid_map->mutable_correspondence_cost_cells()->at(
-          grid_map->ToFlatIndex(Eigen::Array2i{x, y})) = carto::mapping::ProbabilityToValue(0.5);
-            // carto::mapping::kUnknownCorrespondenceValue;
+          grid_map->ToFlatIndex(Eigen::Array2i{x, y})) = carto::mapping::kUnknownCorrespondenceValue;
       } else {
+        // 图片灰度值转换为占用概率: 0(黑色)=障碍物, 255(白色)=自由空间
         double occ_prob = value / 255.0;
         if (occ_prob < 0.3) {
+          // 暗色区域 (障碍物): 高占用概率 -> 低correspondence cost
           grid_map->mutable_correspondence_cost_cells()->at(
-            grid_map->ToFlatIndex(Eigen::Array2i{x, y})) = carto::mapping::ProbabilityToValue(0);
+            grid_map->ToFlatIndex(Eigen::Array2i{x, y})) = carto::mapping::ProbabilityToValue(0.0);
         } else if (occ_prob < 0.7) {
+          // 中间灰度区域: 按实际占用概率赋值
           grid_map->mutable_correspondence_cost_cells()->at(
             grid_map->ToFlatIndex(Eigen::Array2i{x, y})) = carto::mapping::ProbabilityToValue(occ_prob);
-              // static_cast<uint16_t>(occ_prob * carto::mapping::kFreeCorrespondenceValue);
         } else {
+          // 亮色区域 (自由空间): 低占用概率 -> 高correspondence cost
           grid_map->mutable_correspondence_cost_cells()->at(
             grid_map->ToFlatIndex(Eigen::Array2i{x, y})) = carto::mapping::ProbabilityToValue(1.0);
-              // carto::mapping::kFreeCorrespondenceValue;
         }
       }
     }

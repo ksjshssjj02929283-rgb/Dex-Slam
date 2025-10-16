@@ -190,11 +190,14 @@ bool ProbabilityGrid::DrawAsImage(
   CellLimits cell_limits;
   // 1. 计算submap原点和边界
   ComputeCroppedLimits(&offset, &cell_limits);
+  // 初始化为 127（灰色），表示未知区域
   cv::Mat img(cell_limits.num_y_cells,
               cell_limits.num_x_cells,
-              CV_8UC1, cv::Scalar(0));
+              CV_8UC1, cv::Scalar(127));
   for (const Eigen::Array2i& xy_index : XYIndexRangeIterator(cell_limits)) {
     if (!IsKnown(xy_index + offset)) {
+      // 未知区域显示为灰色（127）
+      img.at<uchar>(xy_index.y(), xy_index.x()) = 127;
       continue;
     }
     const int value = correspondence_cost_cells()[ToFlatIndex(xy_index)];

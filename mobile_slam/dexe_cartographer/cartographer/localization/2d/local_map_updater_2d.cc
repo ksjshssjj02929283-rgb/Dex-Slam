@@ -143,9 +143,19 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
       Eigen::Vector2f sub_cell_center = map_limits.GetCellCenter(local_cell_index);
       Eigen::Array2i global_cell_index = global_map_limits.GetCellIndex(sub_cell_center);
       if (global_map_limits.Contains(global_cell_index)) {
+        if (!global_grid_map_->IsKnown(global_cell_index)) {
+          // 全局地图中的未知区域：保持为 kUnknownCorrespondenceValue
+          // ProbabilityGrid 构造时已将所有单元格初始化为 kUnknownCorrespondenceValue
+          // 这里不需要任何操作，跳过即可
+          // 关键：不调用 SetProbability，否则会将其标记为"已知"
+          continue;
+        }
+        // 全局地图中的已知区域：复制概率值
         float prob = global_grid_map_->GetProbability(global_cell_index);
         local_grid_map_->SetProbability(local_cell_index, prob);
       } else {
+        // 超出全局地图范围：设置为最小概率（障碍物）
+        // 这样可以防止机器人进入全局地图未覆盖的区域
         local_grid_map_->SetProbability(local_cell_index, mapping::kMinProbability);
       }
     }
