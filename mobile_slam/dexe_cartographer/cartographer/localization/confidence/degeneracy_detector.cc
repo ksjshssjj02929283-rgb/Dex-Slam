@@ -389,16 +389,16 @@ DegeneracyDetector::Result DegeneracyDetector::Evaluate(
   result.degeneracy_factor = std::max(0.0, std::min(1.0, result.degeneracy_factor));
   
   // ========== DEBUG输出 ==========
-  LOG(INFO) << "[DegeneracyDetector::Evaluate] Metrics Debug:";
-  LOG(INFO) << "  - Is Corridor: " << (result.is_corridor ? "YES" : "NO");
-  LOG(INFO) << "  - Parallelism Ratio: " << parallelism_ratio;
-  LOG(INFO) << "  - Feature Distribution: " << result.feature_distribution;
-  LOG(INFO) << "  - Hessian Condition Num: " << result.hessian_condition_num;
-  LOG(INFO) << "  - Geometry Score: " << geometry_score;
-  LOG(INFO) << "  - Entropy Score: " << entropy_score;
-  LOG(INFO) << "  - Constraint Score: " << constraint_score;
-  LOG(INFO) << "  - Degeneracy Score: " << degeneracy_score;
-  LOG(INFO) << "  - Final Degeneracy Factor: " << result.degeneracy_factor;
+  // LOG(INFO) << "[DegeneracyDetector::Evaluate] Metrics Debug:";
+  // LOG(INFO) << "  - Is Corridor: " << (result.is_corridor ? "YES" : "NO");
+  // LOG(INFO) << "  - Parallelism Ratio: " << parallelism_ratio;
+  // LOG(INFO) << "  - Feature Distribution: " << result.feature_distribution;
+  // LOG(INFO) << "  - Hessian Condition Num: " << result.hessian_condition_num;
+  // LOG(INFO) << "  - Geometry Score: " << geometry_score;
+  // LOG(INFO) << "  - Entropy Score: " << entropy_score;
+  // LOG(INFO) << "  - Constraint Score: " << constraint_score;
+  // LOG(INFO) << "  - Degeneracy Score: " << degeneracy_score;
+  // LOG(INFO) << "  - Final Degeneracy Factor: " << result.degeneracy_factor;
 
   return result;
 }
@@ -441,17 +441,17 @@ DegeneracyDetector::Result DegeneracyDetector::EvaluateWithLines(
   result.degeneracy_factor = std::max(0.0, std::min(1.0, result.degeneracy_factor));
   
   // ========== DEBUG输出 ==========
-  LOG(INFO) << "[DegeneracyDetector::EvaluateWithLines] Metrics Debug:";
-  LOG(INFO) << "  - Input Lines Count: " << lines.size();
-  LOG(INFO) << "  - Is Corridor: " << (result.is_corridor ? "YES" : "NO");
-  LOG(INFO) << "  - Parallelism Ratio: " << parallelism_ratio;
-  LOG(INFO) << "  - Feature Distribution: " << result.feature_distribution;
-  LOG(INFO) << "  - Hessian Condition Num: " << result.hessian_condition_num;
-  LOG(INFO) << "  - Geometry Score: " << geometry_score;
-  LOG(INFO) << "  - Entropy Score: " << entropy_score;
-  LOG(INFO) << "  - Constraint Score: " << constraint_score;
-  LOG(INFO) << "  - Degeneracy Score: " << degeneracy_score;
-  LOG(INFO) << "  - Final Degeneracy Factor: " << result.degeneracy_factor;
+  // LOG(INFO) << "[DegeneracyDetector::EvaluateWithLines] Metrics Debug:";
+  // LOG(INFO) << "  - Input Lines Count: " << lines.size();
+  // LOG(INFO) << "  - Is Corridor: " << (result.is_corridor ? "YES" : "NO");
+  // LOG(INFO) << "  - Parallelism Ratio: " << parallelism_ratio;
+  // LOG(INFO) << "  - Feature Distribution: " << result.feature_distribution;
+  // LOG(INFO) << "  - Hessian Condition Num: " << result.hessian_condition_num;
+  // LOG(INFO) << "  - Geometry Score: " << geometry_score;
+  // LOG(INFO) << "  - Entropy Score: " << entropy_score;
+  // LOG(INFO) << "  - Constraint Score: " << constraint_score;
+  // LOG(INFO) << "  - Degeneracy Score: " << degeneracy_score;
+  // LOG(INFO) << "  - Final Degeneracy Factor: " << result.degeneracy_factor;
   
   return result;
 }

@@ -28,6 +28,7 @@
 #include "cartographer/localization/internal/2d/pose_initializer_options_2d.h"
 #include "cartographer/localization/amcl/core/amcl_core_options.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
+#include "cartographer/localization/confidence/confidence_estimator_options.h"
 
 namespace cartographer {
 namespace localization {
@@ -89,6 +90,9 @@ proto::PoseEstimatorOptions2D CreatePoseEstimatorOptions2D(
       parameter_dictionary->GetDictionary("local_map_updater").get());
   options.set_auto_trigger_global_relocalization(
     parameter_dictionary->GetBool("auto_trigger_global_relocalization"));
+  *options.mutable_confidence_estimator_options() =
+    confidence::CreateConfidenceEstimatorOptions(
+      parameter_dictionary->GetDictionary("confidence_estimator").get());
   return options;
 }
 

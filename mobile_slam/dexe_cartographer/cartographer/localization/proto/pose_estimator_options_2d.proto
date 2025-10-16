@@ -28,7 +28,8 @@ import "cartographer/laser_perception/proto/laser_perception_options.proto";
 import "cartographer/localization/proto/pose_initializer_options_2d.proto";
 import "cartographer/localization/proto/amcl_core_options.proto";
 import "cartographer/localization/proto/local_map_updater_options_2d.proto";
-// NEXT ID: 30
+import "cartographer/localization/proto/confidence_estimator_options.proto";
+// NEXT ID: 31
 message PoseEstimatorOptions2D {
   cartographer.preprocess.proto.DataPreprocessorOptions
       data_preprocessor_options = 24;
@@ -90,7 +91,10 @@ message PoseEstimatorOptions2D {
   AMCLCoreOptions amcl_core_options = 28;
 
   LocalMapUpdaterOptions2D local_map_updater_options = 29;
-  
+
+  // Confidence estimator options for localization quality assessment
+  ConfidenceEstimatorOptions confidence_estimator_options = 31;
+
   // Whether to automatically trigger global relocalization when no initial pose is provided
   bool auto_trigger_global_relocalization = 30;
 }

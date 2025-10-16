@@ -90,9 +90,8 @@ PoseEstimator2D::PoseEstimator2D(
   loc_state_ = LocalizationState::NOT_INITIALIZED;
   
   // 初始化置信度评估器
-  confidence::ConfidenceEstimator::Config confidence_config;
-  // 可以从options中读取配置，这里使用默认值
-  confidence_estimator_ = absl::make_unique<confidence::ConfidenceEstimator>(confidence_config);
+  confidence_estimator_ = absl::make_unique<confidence::ConfidenceEstimator>(
+      options_.confidence_estimator_options());
   start_time_ = common::FromUniversal(0);  // 将在第一次数据到达时设置
 
   // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";

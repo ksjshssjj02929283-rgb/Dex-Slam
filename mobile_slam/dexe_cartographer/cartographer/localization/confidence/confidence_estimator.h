@@ -18,10 +18,12 @@
 #define CARTOGRAPHER_LOCALIZATION_CONFIDENCE_CONFIDENCE_ESTIMATOR_H_
 
 #include <memory>
+#include <optional>
 #include "cartographer/localization/confidence/scan_match_confidence.h"
 #include "cartographer/localization/confidence/motion_consistency_checker.h"
 #include "cartographer/localization/confidence/map_coherence_evaluator.h"
 #include "cartographer/localization/confidence/degeneracy_detector.h"
+#include "cartographer/localization/proto/confidence_estimator_options.pb.h"
 #include "cartographer/sensor/point_cloud.h"
 #include "cartographer/sensor/line_data.h"
 #include "cartographer/transform/rigid_transform.h"
@@ -33,11 +35,11 @@ namespace confidence {
 
 // 置信度等级枚举
 enum class ConfidenceLevel {
-  EXCELLENT = 4,  // >= 0.8
-  GOOD = 3,       // >= 0.6
-  MEDIUM = 2,     // >= 0.4
-  POOR = 1,       // >= 0.2
-  FAILED = 0      // < 0.2
+  EXCELLENT = 4,
+  GOOD = 3,
+  MEDIUM = 2,
+  POOR = 1,
+  FAILED = 0
 };
 
 // 主置信度评估器接口
@@ -45,62 +47,33 @@ class ConfidenceEstimator {
  public:
   // 置信度评估结果结构
   struct Metrics {
-    double scan_match_score;      // L1: 扫描匹配置信度
-    double motion_consistency;    // L2: 运动一致性
-    double map_coherence;         // L3: 地图一致性
-    double degeneracy_factor;     // L4: 几何退化因子
+    std::optional<double> scan_match_score;      // L1: 扫描匹配置信度
+    std::optional<double> motion_consistency;    // L2: 运动一致性
+    std::optional<double> map_coherence;         // L3: 地图一致性
+    std::optional<double> degeneracy_factor;     // L4: 几何退化因子
     double total_confidence;      // 总置信度
     ConfidenceLevel level;        // 置信度等级
     
     // 详细指标
-    double ceres_residual_score;  // Ceres残差得分
-    double match_ratio;           // 匹配点比例
-    double covariance_score;      // 协方差得分
+    std::optional<double> ceres_residual_score;  // Ceres残差得分
+    std::optional<double> match_ratio;           // 匹配点比例
+    std::optional<double> covariance_score;      // 协方差得分
     
-    double motion_delta_score;    // 运动偏差得分
-    double velocity_smooth_score; // 速度平滑度得分
+    std::optional<double> motion_delta_score;    // 运动偏差得分
+    std::optional<double> velocity_smooth_score; // 速度平滑度得分
     
-    double map_entropy;           // 地图熵
-    double submap_match_score;    // 子图匹配得分
+    std::optional<double> map_entropy;           // 地图熵
+    std::optional<double> submap_match_score;    // 子图匹配得分
     
-    bool is_corridor_detected;    // 是否检测到走廊
-    double feature_distribution_score; // 特征分布得分
+    std::optional<bool> is_corridor_detected;    // 是否检测到走廊
+    std::optional<double> feature_distribution_score; // 特征分布得分
     
     // 打印所有评估项
     std::string ToString() const;
     void Print() const;
   };
 
-  struct Config {
-    // L1 权重（移除了CSM，调整权重）
-    double w_ceres = 0.4;
-    double w_match_ratio = 0.3;
-    double w_covariance = 0.3;
-    
-    // 融合权重（动态调整）
-    double w_scan_match = 0.3;
-    double w_motion = 0.25;
-    double w_map = 0.35;
-    double w_degeneracy = 0.1;
-    
-    // 阈值
-    double excellent_threshold = 0.8;
-    double good_threshold = 0.6;
-    double medium_threshold = 0.4;
-    double poor_threshold = 0.2;
-    
-    // 运行时间（用于动态权重调整）
-    double initialization_duration_sec = 5.0;
-    double post_loop_duration_sec = 10.0;
-    
-    // 是否启用各层
-    bool enable_motion_check = true;
-    bool enable_map_check = true;
-    bool enable_degeneracy_check = true;
-  };
-
-  ConfidenceEstimator();
-  explicit ConfidenceEstimator(const Config& config);
+  explicit ConfidenceEstimator(const proto::ConfidenceEstimatorOptions& options);
   
   // 主评估接口
   Metrics Evaluate(
@@ -115,18 +88,15 @@ class ConfidenceEstimator {
       double runtime_seconds = 0.0,
       bool compute_uncertainty = false);
 
-  // 更新配置
-  void UpdateConfig(const Config& config) { config_ = config; }
-  Config GetConfig() const { return config_; }
   
   // 重置状态（用于重定位）
   void Reset();
 
  private:
   ConfidenceLevel DetermineLevel(double total_confidence) const;
-  void AdjustWeightsByRuntime(double runtime_seconds);
   
-  Config config_;
+  // 配置选项
+  proto::ConfidenceEstimatorOptions options_;
   
   // 各层评估器
   std::unique_ptr<ScanMatchConfidence> scan_match_confidence_;
@@ -136,8 +106,6 @@ class ConfidenceEstimator {
   
   // 运行时状态
   double last_runtime_seconds_ = 0.0;
-  bool is_post_loop_closure_ = false;
-  common::Time last_loop_closure_time_;
 };
 
 }  // namespace confidence

@@ -14,6 +14,7 @@
 
 include "pose_initializer_2d.lua"
 include "amcl_core.lua"
+include "confidence_estimator.lua"
 
 POSE_ESTIMATOR_2D = {
   use_imu_data = true,
@@ -26,6 +27,8 @@ POSE_ESTIMATOR_2D = {
 
   pose_initializer_2d = POSE_INITIALIZER_2D,
   amcl_core = AMCL_CORE,
+  confidence_estimator = CONFIDENCE_ESTIMATOR,  -- 置信度评估器配置
+
   auto_trigger_global_relocalization = true,  -- 控制是否自动触发全局重定位
 
   adaptive_voxel_filter = {

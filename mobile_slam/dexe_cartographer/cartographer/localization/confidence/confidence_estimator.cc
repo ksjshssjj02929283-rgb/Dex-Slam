@@ -47,29 +47,56 @@ std::string ConfidenceEstimator::Metrics::ToString() const {
   oss << "  Confidence Level:     " << ConfidenceLevelToString(level) << "\n";
   oss << "\n";
   
-  oss << "Layer 1 - Scan Match (Weight: varies):\n";
-  oss << "  Scan Match Score:     " << scan_match_score << "\n";
-  oss << "    ├─ Ceres Residual:  " << ceres_residual_score << "\n";
-  oss << "    ├─ Match Ratio:     " << match_ratio << "\n";
-  oss << "    └─ Covariance:      " << covariance_score << "\n";
-  oss << "\n";
+  if (scan_match_score.has_value()) {
+    oss << "Layer 1 - Scan Match (Weight: varies):\n";
+    oss << "  Scan Match Score:     " << *scan_match_score << "\n";
+    if (ceres_residual_score.has_value()) {
+      oss << "    ├─ Ceres Residual:  " << *ceres_residual_score << "\n";
+    }
+    if (match_ratio.has_value()) {
+      oss << "    ├─ Match Ratio:     " << *match_ratio << "\n";
+    }
+    if (covariance_score.has_value()) {
+      oss << "    └─ Covariance:      " << *covariance_score << "\n";
+    }
+    oss << "\n";
+  }
   
-  oss << "Layer 2 - Motion Consistency (Weight: varies):\n";
-  oss << "  Motion Consistency:   " << motion_consistency << "\n";
-  oss << "    ├─ Motion Delta:    " << motion_delta_score << "\n";
-  oss << "    └─ Velocity Smooth: " << velocity_smooth_score << "\n";
-  oss << "\n";
+  if (motion_consistency.has_value()) {
+    oss << "Layer 2 - Motion Consistency (Weight: varies):\n";
+    oss << "  Motion Consistency:   " << *motion_consistency << "\n";
+    if (motion_delta_score.has_value()) {
+      oss << "    ├─ Motion Delta:    " << *motion_delta_score << "\n";
+    }
+    if (velocity_smooth_score.has_value()) {
+      oss << "    └─ Velocity Smooth: " << *velocity_smooth_score << "\n";
+    }
+    oss << "\n";
+  }
   
-  oss << "Layer 3 - Map Coherence (Weight: varies):\n";
-  oss << "  Map Coherence:        " << map_coherence << "\n";
-  oss << "    ├─ Map Entropy:     " << map_entropy << "\n";
-  oss << "    └─ Submap Match:    " << submap_match_score << "\n";
-  oss << "\n";
+  if (map_coherence.has_value()) {
+    oss << "Layer 3 - Map Coherence (Weight: varies):\n";
+    oss << "  Map Coherence:        " << *map_coherence << "\n";
+    if (map_entropy.has_value()) {
+      oss << "    ├─ Map Entropy:     " << *map_entropy << "\n";
+    }
+    if (submap_match_score.has_value()) {
+      oss << "    └─ Submap Match:    " << *submap_match_score << "\n";
+    }
+    oss << "\n";
+  }
   
-  oss << "Layer 4 - Degeneracy Detection (Weight: varies):\n";
-  oss << "  Degeneracy Factor:    " << degeneracy_factor << "\n";
-  oss << "    ├─ Corridor:        " << (is_corridor_detected ? "YES" : "NO") << "\n";
-  oss << "    └─ Feature Dist:    " << feature_distribution_score << "\n";
+  if (degeneracy_factor.has_value()) {
+    oss << "Layer 4 - Degeneracy Detection (Weight: varies):\n";
+    oss << "  Degeneracy Factor:    " << *degeneracy_factor << "\n";
+    if (is_corridor_detected.has_value()) {
+      oss << "    ├─ Corridor:        " << (*is_corridor_detected ? "YES" : "NO") << "\n";
+    }
+    if (feature_distribution_score.has_value()) {
+      oss << "    └─ Feature Dist:    " << *feature_distribution_score << "\n";
+    }
+  }
+  
   oss << "===================================================\n";
   
   return oss.str();
@@ -79,49 +106,22 @@ void ConfidenceEstimator::Metrics::Print() const {
   LOG(INFO) << ToString();
 }
 
-ConfidenceEstimator::ConfidenceEstimator() : ConfidenceEstimator(Config()) {}
-
-ConfidenceEstimator::ConfidenceEstimator(const Config& config)
-    : config_(config),
+ConfidenceEstimator::ConfidenceEstimator(const proto::ConfidenceEstimatorOptions& options)
+    : options_(options),
       scan_match_confidence_(new ScanMatchConfidence()),
       motion_checker_(new MotionConsistencyChecker()),
       map_evaluator_(new MapCoherenceEvaluator()),
       degeneracy_detector_(new DegeneracyDetector()) {}
 
-void ConfidenceEstimator::AdjustWeightsByRuntime(double runtime_seconds) {
-  // 根据运行时间动态调整权重
-  
-  if (runtime_seconds < config_.initialization_duration_sec) {
-    // 初始化阶段：更依赖扫描匹配
-    config_.w_scan_match = 0.6;
-    config_.w_motion = 0.3;
-    config_.w_map = 0.1;
-    config_.w_degeneracy = 0.0;
-  } else if (is_post_loop_closure_) {
-    // 闭环后阶段：提高地图一致性权重
-    config_.w_scan_match = 0.25;
-    config_.w_motion = 0.2;
-    config_.w_map = 0.5;
-    config_.w_degeneracy = 0.05;
-  } else {
-    // 正常运行阶段：均衡权重
-    config_.w_scan_match = 0.3;
-    config_.w_motion = 0.25;
-    config_.w_map = 0.35;
-    config_.w_degeneracy = 0.1;
-  }
-  
-  last_runtime_seconds_ = runtime_seconds;
-}
 
 ConfidenceLevel ConfidenceEstimator::DetermineLevel(double total_confidence) const {
-  if (total_confidence >= config_.excellent_threshold) {
+  if (total_confidence >= options_.excellent_threshold()) {
     return ConfidenceLevel::EXCELLENT;
-  } else if (total_confidence >= config_.good_threshold) {
+  } else if (total_confidence >= options_.good_threshold()) {
     return ConfidenceLevel::GOOD;
-  } else if (total_confidence >= config_.medium_threshold) {
+  } else if (total_confidence >= options_.medium_threshold()) {
     return ConfidenceLevel::MEDIUM;
-  } else if (total_confidence >= config_.poor_threshold) {
+  } else if (total_confidence >= options_.poor_threshold()) {
     return ConfidenceLevel::POOR;
   } else {
     return ConfidenceLevel::FAILED;
@@ -142,12 +142,19 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
   
   Metrics metrics;
   
-  // 动态调整权重
-  if (runtime_seconds > 0.0) {
-    AdjustWeightsByRuntime(runtime_seconds);
-  }
+  // 根据运行时间选择固定参数（初始化阶段 vs 正常阶段）
+  const bool is_initialization = runtime_seconds > 0.0 && 
+                                  runtime_seconds < options_.initialization_duration_sec();
   
-  // ========== L1: 扫描匹配置信度 ==========
+  // 选择当前阶段的权重
+  const double w_scan_match = is_initialization ? options_.init_w_scan_match() : options_.normal_w_scan_match();
+  const double w_motion = is_initialization ? options_.init_w_motion() : options_.normal_w_motion();
+  const double w_map = is_initialization ? options_.init_w_map() : options_.normal_w_map();
+  const double w_degeneracy = is_initialization ? options_.init_w_degeneracy() : options_.normal_w_degeneracy();
+  
+  last_runtime_seconds_ = runtime_seconds;
+  
+  // ========== L1: 扫描匹配置信度（基础层，始终执行）==========
   auto scan_match_result = scan_match_confidence_->Evaluate(
       point_cloud, pose_estimate, covariance,
       ceres_final_cost, num_ceres_residuals,
@@ -159,56 +166,66 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
   metrics.covariance_score = scan_match_result.covariance_confidence;
   
   // ========== L2: 运动一致性 ==========
-  if (config_.enable_motion_check) {
+  if (options_.enable_motion_check()) {
     auto motion_result = motion_checker_->Evaluate(
         pose_prediction, pose_estimate, common::FromUniversal(0));
     metrics.motion_consistency = motion_result.total_confidence;
     metrics.motion_delta_score = motion_result.prediction_observation_score;
     metrics.velocity_smooth_score = motion_result.velocity_smoothness_score;
-  } else {
-    metrics.motion_consistency = 1.0;
-    metrics.motion_delta_score = 1.0;
-    metrics.velocity_smooth_score = 1.0;
   }
   
   // ========== L3: 地图一致性 ==========
-  if (config_.enable_map_check && matching_grid != nullptr) {
+  if (options_.enable_map_check() && matching_grid != nullptr) {
     auto map_result = map_evaluator_->Evaluate(
         point_cloud, pose_estimate, matching_grid);
     metrics.map_coherence = map_result.total_confidence;
     metrics.map_entropy = map_result.map_entropy;
     metrics.submap_match_score = map_result.submap_match_score;
-  } else {
-    metrics.map_coherence = 0.8;  // 默认较高值
-    metrics.map_entropy = 0.8;
-    metrics.submap_match_score = 0.8;
   }
   
   // ========== L4: 几何退化检测 ==========
-  if (config_.enable_degeneracy_check) {
+  if (options_.enable_degeneracy_check()) {
     auto degeneracy_result = line_data.empty() 
       ? degeneracy_detector_->Evaluate(point_cloud, covariance)
       : degeneracy_detector_->EvaluateWithLines(point_cloud, line_data, covariance);
-    std::cout << "is from line data: " << (!line_data.empty() ? "YES" : "NO") << std::endl;
+    
     metrics.degeneracy_factor = degeneracy_result.degeneracy_factor;
     metrics.is_corridor_detected = degeneracy_result.is_corridor;
     metrics.feature_distribution_score = degeneracy_result.feature_distribution;
-  } else {
-    metrics.degeneracy_factor = 1.0;
-    metrics.is_corridor_detected = false;
-    metrics.feature_distribution_score = 1.0;
   }
   
-  // ========== 融合计算总置信度 ==========
-  double weight_sum = config_.w_scan_match + config_.w_motion + 
-                      config_.w_map + config_.w_degeneracy;
+  // ========== 融合计算总置信度（只考虑有效的评估项）==========
+  double weighted_sum = 0.0;
+  double weight_sum = 0.0;
   
-  metrics.total_confidence = (
-      config_.w_scan_match * metrics.scan_match_score +
-      config_.w_motion * metrics.motion_consistency +
-      config_.w_map * metrics.map_coherence +
-      config_.w_degeneracy * metrics.degeneracy_factor
-  ) / weight_sum;
+  if (metrics.scan_match_score.has_value()) {
+    weighted_sum += w_scan_match * (*metrics.scan_match_score);
+    weight_sum += w_scan_match;
+  }
+  
+  if (metrics.motion_consistency.has_value()) {
+    weighted_sum += w_motion * (*metrics.motion_consistency);
+    weight_sum += w_motion;
+  }
+  
+  if (metrics.map_coherence.has_value()) {
+    weighted_sum += w_map * (*metrics.map_coherence);
+    weight_sum += w_map;
+  }
+  
+  if (metrics.degeneracy_factor.has_value()) {
+    weighted_sum += w_degeneracy * (*metrics.degeneracy_factor);
+    weight_sum += w_degeneracy;
+  }
+  
+  // 计算加权平均值
+  if (weight_sum > 0.0) {
+    metrics.total_confidence = weighted_sum / weight_sum;
+  } else {
+    // 如果没有任何有效评估项，置信度为0
+    metrics.total_confidence = 0.0;
+    LOG(WARNING) << "No valid evaluation layer enabled! Total confidence = 0.0";
+  }
   
   // 确保在[0,1]范围内
   metrics.total_confidence = std::min(1.0, std::max(0.0, metrics.total_confidence));
@@ -217,15 +234,23 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
   metrics.level = DetermineLevel(metrics.total_confidence);
   
   // 日志输出（VLOG级别，可通过glog配置控制）
-  VLOG(2) << "Confidence Evaluation:"
+  VLOG(2) << "Confidence Evaluation (" << (is_initialization ? "INIT" : "NORMAL") << " phase):"
           << " Total=" << metrics.total_confidence
           << " Level=" << static_cast<int>(metrics.level)
-          << " | L1=" << metrics.scan_match_score
-          << " L2=" << metrics.motion_consistency
-          << " L3=" << metrics.map_coherence
-          << " L4=" << metrics.degeneracy_factor;
+          << " | L1=" << (metrics.scan_match_score.has_value() ? 
+                          std::to_string(*metrics.scan_match_score) : "N/A")
+          << " (w=" << w_scan_match << ")"
+          << " L2=" << (metrics.motion_consistency.has_value() ? 
+                        std::to_string(*metrics.motion_consistency) : "N/A")
+          << " (w=" << w_motion << ")"
+          << " L3=" << (metrics.map_coherence.has_value() ? 
+                        std::to_string(*metrics.map_coherence) : "N/A")
+          << " (w=" << w_map << ")"
+          << " L4=" << (metrics.degeneracy_factor.has_value() ? 
+                        std::to_string(*metrics.degeneracy_factor) : "N/A")
+          << " (w=" << w_degeneracy << ")";
   
-  if (metrics.is_corridor_detected) {
+  if (metrics.is_corridor_detected.has_value() && *metrics.is_corridor_detected) {
     LOG(WARNING) << "Corridor environment detected! Confidence may be degraded.";
   }
   
@@ -239,7 +264,6 @@ ConfidenceEstimator::Metrics ConfidenceEstimator::Evaluate(
 
 void ConfidenceEstimator::Reset() {
   motion_checker_->Reset();
-  is_post_loop_closure_ = false;
   last_runtime_seconds_ = 0.0;
   LOG(INFO) << "Confidence estimator reset.";
 }
