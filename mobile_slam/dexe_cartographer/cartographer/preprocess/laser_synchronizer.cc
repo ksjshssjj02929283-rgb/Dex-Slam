@@ -81,52 +81,73 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
     return result;  // is_valid = false
   }
 
-  // 找到所有传感器中最新的时间作为同步时间
-  common::Time sync_time = common::Time::min();
-  for (const std::string& sensor_id : expected_sensor_ids_) {
-    const auto& buffer = sensor_buffers_.at(sensor_id);
-    if (!buffer.empty()) {
-      sync_time = std::max(sync_time, buffer.back().time);
-    }
+  // 以第一个传感器为基准，使用其第一帧数据（FIFO模式）
+  const std::string& reference_sensor_id = expected_sensor_ids_[0];
+  auto& reference_buffer = sensor_buffers_.at(reference_sensor_id);
+  
+  if (reference_buffer.empty()) {
+    return result;  // is_valid = false
   }
 
+  // 使用第一个传感器的第一帧数据作为同步基准
+  const sensor::TimedPointCloudData& reference_data = reference_buffer.front();
+  const common::Time sync_time = reference_data.time;
+  
   result.sync_time = sync_time;
+  result.laser_data_map[reference_sensor_id] = reference_data;
 
-  // 为每个传感器找到最接近同步时间的数据
-  bool all_sensors_have_data = true;
-  for (const std::string& sensor_id : expected_sensor_ids_) {
+  // 为其他传感器找到与基准时间最接近的数据
+  for (size_t i = 1; i < expected_sensor_ids_.size(); ++i) {
+    const std::string& sensor_id = expected_sensor_ids_[i];
     const sensor::TimedPointCloudData* closest_data = 
         FindClosestData(sensor_id, sync_time);
     
-    if (closest_data != nullptr) {
-      // 检查时间差是否在允许范围内
-      const double time_diff = std::abs(common::ToSeconds(closest_data->time - sync_time));
-      if (time_diff <= max_time_diff_seconds_) {
-        result.laser_data_map[sensor_id] = *closest_data;
-      } else {
-        // LOG(WARNING) << "Time difference too large for sensor " << sensor_id 
-        //              << ": " << time_diff << " seconds";
-        all_sensors_have_data = false;
-        break;
-      }
-    } else {
+    if (closest_data == nullptr) {
       LOG(WARNING) << "No data found for sensor: " << sensor_id;
-      all_sensors_have_data = false;
-      break;
+      return result;  // is_valid = false
     }
+    
+    // 检查时间差是否在允许范围内
+    const double time_diff = std::abs(common::ToSeconds(closest_data->time - sync_time));
+    if (time_diff > max_time_diff_seconds_) {
+      LOG(WARNING) << "Time difference too large for sensor " << sensor_id 
+                   << ": " << time_diff << " seconds (max allowed: " 
+                   << max_time_diff_seconds_ << ")";
+      return result;  // is_valid = false
+    }
+    
+    result.laser_data_map[sensor_id] = *closest_data;
   }
 
-  result.is_valid = all_sensors_have_data;
-  // // 打印每个有效激光数据的时间戳
-  // if (result.is_valid) {
-  //   for (const auto& pair : result.laser_data_map) {
-  //     LOG(INFO) << "Sensor: " << pair.first << ", Data time: " << common::ToUniversal(pair.second.time);
-  //   }
-  // }
+  // 确保收到了所有期望的传感器数据
+  if (result.laser_data_map.size() != expected_sensor_ids_.size()) {
+    LOG(WARNING) << "Not all expected sensors have data. Expected: " 
+                 << expected_sensor_ids_.size() << ", Got: " << result.laser_data_map.size();
+    result.laser_data_map.clear();
+    return result;  // is_valid = false
+  }
 
-  // if (result.is_valid) {
-  //   LOG(INFO) << "Successfully synchronized " << expected_sensor_ids_.size() 
-  //             << " laser sensors at time: " << sync_time;
+  result.is_valid = true;
+  
+  // 同步成功后，移除所有传感器中已使用的数据
+  for (const auto& pair : result.laser_data_map) {
+    auto& buffer = sensor_buffers_[pair.first];
+    const common::Time& used_time = pair.second.time;
+
+    // 移除所有时间 <= 已使用时间的数据
+    while (!buffer.empty() && buffer.front().time <= used_time) {
+      buffer.pop_front();
+    }
+  }
+  // 打印同步信息
+  // LOG(INFO) << "Successfully synchronized " << expected_sensor_ids_.size() 
+  //           << " laser sensors with reference: " << reference_sensor_id 
+  //           << " at time: " << common::ToUniversal(sync_time);
+  // for (const auto& pair : result.laser_data_map) {
+  //   const double time_diff = std::abs(common::ToSeconds(pair.second.time - sync_time));
+  //   LOG(INFO) << "  Sensor: " << pair.first 
+  //             << ", Time: " << common::ToUniversal(pair.second.time)
+  //             << ", Diff: " << time_diff << "s";
   // }
 
   return result;
