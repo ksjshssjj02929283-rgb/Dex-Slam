@@ -196,12 +196,18 @@ bool Grid2D::DrawAsImage(
   ComputeCroppedLimits(&offset, &cell_limits);
   cv::Mat img(cell_limits.num_y_cells,
               cell_limits.num_x_cells,
-              CV_8UC1, cv::Scalar(127));
+              CV_8UC1, cv::Scalar(127));  // 初始化为 127（灰色），表示未知区域
+  
   for (const Eigen::Array2i& xy_index : XYIndexRangeIterator(cell_limits)) {
-    if (!IsKnown(xy_index + offset)) {
+    const Eigen::Array2i global_index = xy_index + offset;
+    
+    if (!IsKnown(global_index)) {
+      // 未知区域：保持灰色（127）
       continue;
     }
-    const int value = correspondence_cost_cells()[ToFlatIndex(xy_index)];
+    
+    // 已知区域：根据概率值设置灰度
+    const int value = correspondence_cost_cells()[ToFlatIndex(global_index)];
     img.at<uchar>(xy_index.y(), xy_index.x()) = static_cast<uchar>(ValueToProbability(value) * 255);
   }
   cv::rotate(img, img, cv::ROTATE_90_CLOCKWISE);
