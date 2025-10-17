@@ -103,7 +103,10 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
         FindClosestData(sensor_id, sync_time);
     
     if (closest_data == nullptr) {
-      LOG(WARNING) << "No data found for sensor: " << sensor_id;
+      LOG(WARNING) << "No data found for sensor: " << sensor_id 
+                   << ", removing reference data from " << reference_sensor_id;
+      // 同步失败，移除reference sensor的第一帧数据，尝试下一帧
+      reference_buffer.pop_front();
       return result;  // is_valid = false
     }
     
@@ -112,7 +115,10 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
     if (time_diff > max_time_diff_seconds_) {
       LOG(WARNING) << "Time difference too large for sensor " << sensor_id 
                    << ": " << time_diff << " seconds (max allowed: " 
-                   << max_time_diff_seconds_ << ")";
+                   << max_time_diff_seconds_ << "), removing reference data from " 
+                   << reference_sensor_id;
+      // 同步失败，移除reference sensor的第一帧数据，尝试下一帧
+      reference_buffer.pop_front();
       return result;  // is_valid = false
     }
     
@@ -122,22 +128,20 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
   // 确保收到了所有期望的传感器数据
   if (result.laser_data_map.size() != expected_sensor_ids_.size()) {
     LOG(WARNING) << "Not all expected sensors have data. Expected: " 
-                 << expected_sensor_ids_.size() << ", Got: " << result.laser_data_map.size();
+                 << expected_sensor_ids_.size() << ", Got: " << result.laser_data_map.size()
+                 << ", removing reference data from " << reference_sensor_id;
     result.laser_data_map.clear();
+    // 同步失败，移除reference sensor的第一帧数据，尝试下一帧
+    reference_buffer.pop_front();
     return result;  // is_valid = false
   }
 
   result.is_valid = true;
   
-  // 同步成功后，移除所有传感器中已使用的数据
-  for (const auto& pair : result.laser_data_map) {
-    auto& buffer = sensor_buffers_[pair.first];
-    const common::Time& used_time = pair.second.time;
-
-    // 移除所有时间 <= 已使用时间的数据
-    while (!buffer.empty() && buffer.front().time <= used_time) {
-      buffer.pop_front();
-    }
+  // 同步成功后只移除reference buffer中sync_time之前的所有数据
+  auto& reference_buffer_to_clean = sensor_buffers_[reference_sensor_id];
+  while (reference_buffer_to_clean.size() > 2 && reference_buffer_to_clean.front().time <= sync_time) {
+    reference_buffer_to_clean.pop_front();
   }
   // 打印同步信息
   // LOG(INFO) << "Successfully synchronized " << expected_sensor_ids_.size() 
