@@ -79,35 +79,41 @@ public:
           ceres::cos(delta_angle_1.angle()))));
     // std::cout << "delta_angle: " << delta_angle << std::endl;
 
-    const T begin_dis = (world_b.head(2) - translation).norm();  // src line 起点到当前位姿的距离
-    const T end_dis = (world_e.head(2) - translation).norm();    // src line 终点到当前位姿的距离
-    const T target_dx = target_begin[0] - target_end[0];         // target line x方向的长度
-    const T target_dy = target_begin[1] - target_end[1];         // target line y方向的长度
-    T delta_tra = T(0.);
-    if (begin_dis < end_dis) {  // src line 的起点距离中心更近
-      T u = (world_b[0] - target_begin[0]) * (target_begin[0] - target_end[0]) +
-        (world_b[1] - target_begin[1]) * (target_begin[1] - target_end[1]);
-      u = u / ((target_dx * target_dx) + (target_dy * target_dy));
-      // 起点投影到taget line，投影点的x 和 y
-      T cross_x_begin = target_begin[0] + u * target_dx;
-      T cross_y_begin = target_begin[1] + u * target_dy;
-      T delta_2 = (world_b[0] - cross_x_begin) * (world_b[0] - cross_x_begin) +
-        (world_b[1] - cross_y_begin) * (world_b[1] - cross_y_begin);
-      // 计算投影点的增量，为误差
-      delta_tra = ceres::sqrt(delta_2);  // begin dis
-    } else {  // src line 的终点距离中心更近
-      T u1 = (world_e[0] - target_begin[0]) * (target_begin[0] - target_end[0]) +
-        (world_e[1] - target_begin[1]) * (target_begin[1] - target_end[1]);
-      u1 = u1 / ((target_dx * target_dx) + (target_dy * target_dy));
-      T cross_x_end = target_begin[0] + u1 * target_dx;
-      T cross_y_end = target_begin[1] + u1 * target_dy;
-      T delta_3 = (world_e[0] - cross_x_end) * (world_e[0] - cross_x_end) +
-        (world_e[1] - cross_y_end) * (world_e[1] - cross_y_end);
-      delta_tra = ceres::sqrt(delta_3);   // end dis
+    // ========== 计算双端点到目标线段的距离 ==========
+    const T target_dx = target_begin[0] - target_end[0];
+    const T target_dy = target_begin[1] - target_end[1];
+    const T target_length_sq = target_dx * target_dx + target_dy * target_dy;
+    
+    // 避免除零
+    if (target_length_sq < T(1e-10)) {
+      return false;
     }
+    
+    // 计算起点到目标线段的距离
+    T u_begin = ((world_b[0] - target_begin[0]) * (target_end[0] - target_begin[0]) +
+                 (world_b[1] - target_begin[1]) * (target_end[1] - target_begin[1])) / target_length_sq;
+    // 限制投影参数在 [0, 1] 范围内
+    u_begin = ceres::fmax(T(0.0), ceres::fmin(T(1.0), u_begin));
+    T closest_x_begin = target_begin[0] + u_begin * (target_end[0] - target_begin[0]);
+    T closest_y_begin = target_begin[1] + u_begin * (target_end[1] - target_begin[1]);
+    T dist_begin = ceres::sqrt((world_b[0] - closest_x_begin) * (world_b[0] - closest_x_begin) +
+                               (world_b[1] - closest_y_begin) * (world_b[1] - closest_y_begin));
+    
+    // 计算终点到目标线段的距离
+    T u_end = ((world_e[0] - target_begin[0]) * (target_end[0] - target_begin[0]) +
+               (world_e[1] - target_begin[1]) * (target_end[1] - target_begin[1])) / target_length_sq;
+    u_end = ceres::fmax(T(0.0), ceres::fmin(T(1.0), u_end));
+    T closest_x_end = target_begin[0] + u_end * (target_end[0] - target_begin[0]);
+    T closest_y_end = target_begin[1] + u_end * (target_end[1] - target_begin[1]);
+    T dist_end = ceres::sqrt((world_e[0] - closest_x_end) * (world_e[0] - closest_x_end) +
+                             (world_e[1] - closest_y_end) * (world_e[1] - closest_y_end));
+    
+    // 使用双端点距离的平均值，而非单端点
+    T delta_tra = (dist_begin + dist_end) / T(2.0);
 
-    T translation_delta = ceres::abs(pose[0] - T(initial_pose_.translation().x())) +
-      ceres::abs(pose[1] - T(initial_pose_.translation().y()));
+    T dx = pose[0] - T(initial_pose_.translation().x());
+    T dy = pose[1] - T(initial_pose_.translation().y());
+    T translation_delta = ceres::sqrt(dx * dx + dy * dy);
 
     residual[0] = parallel_scaling_factor_ * delta_tra;
     // residual[1] = parallel_scaling_factor_ * delta_end;
@@ -171,30 +177,33 @@ public:
           ceres::cos(delta_angle_1.angle()))));  // 角度归一化
     // std::cout << "delta_angle: " << delta_angle << std::endl;
 
-    const T begin_dis = (world_b.head(2) - translation).norm();
-    const T end_dis = (world_e.head(2) - translation).norm();
     const T target_dx = target_begin[0] - target_end[0];
     const T target_dy = target_begin[1] - target_end[1];
-    T delta_tra = T(0.);
-    if (begin_dis < end_dis) {
-      T u = (world_b[0] - target_begin[0]) * (target_begin[0] - target_end[0]) +
-        (world_b[1] - target_begin[1]) * (target_begin[1] - target_end[1]);
-      u = u / ((target_dx * target_dx) + (target_dy * target_dy));
-      T cross_x_begin = target_begin[0] + u * target_dx;
-      T cross_y_begin = target_begin[1] + u * target_dy;
-      T delta_2 = (world_b[0] - cross_x_begin) * (world_b[0] - cross_x_begin) +
-        (world_b[1] - cross_y_begin) * (world_b[1] - cross_y_begin);
-      delta_tra = ceres::sqrt(delta_2);  // begin dis
-    } else {
-      T u1 = (world_e[0] - target_begin[0]) * (target_begin[0] - target_end[0]) +
-        (world_e[1] - target_begin[1]) * (target_begin[1] - target_end[1]);
-      u1 = u1 / ((target_dx * target_dx) + (target_dy * target_dy));
-      T cross_x_end = target_begin[0] + u1 * target_dx;
-      T cross_y_end = target_begin[1] + u1 * target_dy;
-      T delta_3 = (world_e[0] - cross_x_end) * (world_e[0] - cross_x_end) +
-        (world_e[1] - cross_y_end) * (world_e[1] - cross_y_end);
-      delta_tra = ceres::sqrt(delta_3);  // end dis
+    const T target_length_sq = target_dx * target_dx + target_dy * target_dy;
+    
+    if (target_length_sq < T(1e-10)) {
+      return false;
     }
+    
+    // 计算起点到目标线段的距离
+    T u_begin = ((world_b[0] - target_begin[0]) * (target_end[0] - target_begin[0]) +
+                 (world_b[1] - target_begin[1]) * (target_end[1] - target_begin[1])) / target_length_sq;
+    u_begin = ceres::fmax(T(0.0), ceres::fmin(T(1.0), u_begin));  // ✅ 限制在线段上
+    T closest_x_begin = target_begin[0] + u_begin * (target_end[0] - target_begin[0]);
+    T closest_y_begin = target_begin[1] + u_begin * (target_end[1] - target_begin[1]);
+    T dist_begin = ceres::sqrt((world_b[0] - closest_x_begin) * (world_b[0] - closest_x_begin) +
+                               (world_b[1] - closest_y_begin) * (world_b[1] - closest_y_begin));
+    
+    // 计算终点到目标线段的距离
+    T u_end = ((world_e[0] - target_begin[0]) * (target_end[0] - target_begin[0]) +
+               (world_e[1] - target_begin[1]) * (target_end[1] - target_begin[1])) / target_length_sq;
+    u_end = ceres::fmax(T(0.0), ceres::fmin(T(1.0), u_end));  // ✅ 限制在线段上
+    T closest_x_end = target_begin[0] + u_end * (target_end[0] - target_begin[0]);
+    T closest_y_end = target_begin[1] + u_end * (target_end[1] - target_begin[1]);
+    T dist_end = ceres::sqrt((world_e[0] - closest_x_end) * (world_e[0] - closest_x_end) +
+                             (world_e[1] - closest_y_end) * (world_e[1] - closest_y_end));
+    
+    T delta_tra = (dist_begin + dist_end) / T(2.0);
 
     residual[0] = parallel_scaling_factor_ * delta_tra;
     // residual[1] = parallel_scaling_factor_ * delta_end;
@@ -243,28 +252,34 @@ public:
 
     const T target_dx = target_begin[0] - target_end[0];
     const T target_dy = target_begin[1] - target_end[1];
+    const T target_length_sq = target_dx * target_dx + target_dy * target_dy;
 
+    if (target_length_sq < T(1e-10)) {
+      return false;
+    }
 
-    T u = (world_b[0] - target_begin[0]) * (target_begin[0] - target_end[0]) +
-      (world_b[1] - target_begin[1]) * (target_begin[1] - target_end[1]);
-    u = u / ((target_dx * target_dx) + (target_dy * target_dy));
+    // 计算起点投影参数
+    T u = ((world_b[0] - target_begin[0]) * (target_end[0] - target_begin[0]) +
+           (world_b[1] - target_begin[1]) * (target_end[1] - target_begin[1])) / target_length_sq;
+    u = ceres::fmax(T(0.0), ceres::fmin(T(1.0), u));  // ✅ 限制在 [0, 1]
 
-    T u1 = (world_e[0] - target_begin[0]) * (target_begin[0] - target_end[0]) +
-      (world_e[1] - target_begin[1]) * (target_begin[1] - target_end[1]);
-    u1 = u1 / ((target_dx * target_dx) + (target_dy * target_dy));
+    // 计算终点投影参数
+    T u1 = ((world_e[0] - target_begin[0]) * (target_end[0] - target_begin[0]) +
+            (world_e[1] - target_begin[1]) * (target_end[1] - target_begin[1])) / target_length_sq;
+    u1 = ceres::fmax(T(0.0), ceres::fmin(T(1.0), u1));  // ✅ 限制在 [0, 1]
 
-    T cross_x_begin = target_begin[0] + u * target_dx;
-    T cross_y_begin = target_begin[1] + u * target_dy;
+    // 计算最近点坐标
+    T cross_x_begin = target_begin[0] + u * (target_end[0] - target_begin[0]);
+    T cross_y_begin = target_begin[1] + u * (target_end[1] - target_begin[1]);
     T delta_2 = (world_b[0] - cross_x_begin) * (world_b[0] - cross_x_begin) +
-      (world_b[1] - cross_y_begin) * (world_b[1] - cross_y_begin);
+                (world_b[1] - cross_y_begin) * (world_b[1] - cross_y_begin);
     T delta_begin = ceres::sqrt(delta_2);
 
-    T cross_x_end = target_begin[0] + u1 * target_dx;
-    T cross_y_end = target_begin[1] + u1 * target_dy;
+    T cross_x_end = target_begin[0] + u1 * (target_end[0] - target_begin[0]);
+    T cross_y_end = target_begin[1] + u1 * (target_end[1] - target_begin[1]);
     T delta_3 = (world_e[0] - cross_x_end) * (world_e[0] - cross_x_end) +
-      (world_e[1] - cross_y_end) * (world_e[1] - cross_y_end);
+                (world_e[1] - cross_y_end) * (world_e[1] - cross_y_end);
     T delta_end = ceres::sqrt(delta_3);
-    // *residual = delta_begin + delta_end;
     residual[0] = parallel_scaling_factor_ * delta_begin;
     residual[1] = parallel_scaling_factor_ * delta_end;
     // std::cout << "residual[0]: " << residual[0] << std::endl;
