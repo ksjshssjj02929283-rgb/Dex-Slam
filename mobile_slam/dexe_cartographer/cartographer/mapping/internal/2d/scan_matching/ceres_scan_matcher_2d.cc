@@ -78,28 +78,49 @@ CeresScanMatcher2D::~CeresScanMatcher2D() {}
 // 辅助函数：创建线特征代价函数（支持切换原版本和改进版本）
 // ============================================================================
 namespace {
-// 配置选项：是否使用改进版本的线特征匹配
-constexpr bool kUseImprovedLineCostFunction = true;  // ✅ 设置为true使用方案B
+
+// ============================================================================
+// 方案选择配置（三选一）
+// ============================================================================
+enum class LineMatchingStrategy {
+  PLAN_A_BASIC,          // 方案A: 基础版本，简单快速
+  PLAN_B_SYMMETRIC,      // 方案B: 对称距离 + 自适应权重（高精度）
+  PLAN_C_DISTANCE_FIELD  // 方案C: 预计算距离场（高速度）
+};
+
+// ✅ 在这里选择使用的方案
+constexpr LineMatchingStrategy kLineMatchingStrategy = LineMatchingStrategy::PLAN_C_DISTANCE_FIELD;
+
+// 方案C的配置参数
+constexpr double kDistanceFieldResolution = 0.03;    // 距离场分辨率（米）
+constexpr double kDistanceFieldMaxDistance = 0.8;    // 最大距离阈值（米）
+constexpr double kDistanceFieldWeight = 60.0;        // 方案C的权重（可以比方案A/B更大）
+
+// 通用配置
 constexpr bool kUseRobustLossFunction = true;        // ✅ 是否使用鲁棒核函数
 constexpr double kHuberLossThreshold = 0.1;          // Huber核阈值(米)
 
-// 创建线特征代价函数的统一接口
+// ============================================================================
+// 方案A/B: 逐线匹配的辅助函数
+// ============================================================================
+
+// 创建线特征代价函数的统一接口（方案A或方案B）
 ceres::CostFunction* CreateLineCostFunction(
     const double parallel_scaling_factor,
     const double angle_scaling_factor,
     const sensor::LineData& line_data,
     const sensor::LineData& target_line) {
   
-  if (kUseImprovedLineCostFunction) {
-    // ✅ 使用改进版本（方案B）：对称性距离 + 自适应权重
+  if (kLineMatchingStrategy == LineMatchingStrategy::PLAN_B_SYMMETRIC) {
+    // ✅ 使用方案B：对称性距离 + 自适应权重
     return CreateImprovedLineDeltaCostFunction2D(
         parallel_scaling_factor,
         angle_scaling_factor,
         line_data,
         target_line);
   } else {
-    // 使用原版本（方案A已集成）
-    return CreateLineCostFunction(
+    // 使用方案A：基础版本
+    return CreateLineDeltaWithoutInitPoseCostFunction2D(
         parallel_scaling_factor,
         angle_scaling_factor,
         line_data,
@@ -120,6 +141,62 @@ ceres::LossFunction* CreateRobustLossFunction() {
     return nullptr;  // 不使用鲁棒核
   }
 }
+
+// ============================================================================
+// 方案C: 距离场匹配的辅助函数
+// ============================================================================
+
+// 从line_map中提取所有target lines
+std::vector<sensor::LineData> ExtractTargetLines(
+    const LineMap2DList& line_map_list,
+    const std::map<int, std::vector<sensor::LineData>>& tracked_line_data) {
+  
+  std::vector<sensor::LineData> target_lines;
+  target_lines.reserve(tracked_line_data.size());
+  
+  const auto& line_map = line_map_list.GetLineMapData2DList();
+  
+  for (const auto& iter : tracked_line_data) {
+    if (iter.first < 0 || 
+        line_map.count(iter.first) == 0) {
+      continue;
+    }
+    
+    auto it = line_map.find(iter.first);
+    if (it != line_map.end()) {
+      target_lines.push_back(it->second.line_data());
+    }
+  }
+  
+  return target_lines;
+}
+
+// 使用方案C添加距离场残差
+void AddDistanceFieldResiduals(
+    ceres::Problem& problem,
+    const LineDistanceField& distance_field,
+    const std::map<int, std::vector<sensor::LineData>>& tracked_line_data,
+    const double weight,
+    double* ceres_pose_estimate) {
+  
+  for (const auto& iter : tracked_line_data) {
+    if (iter.first < 0) {
+      continue;
+    }
+    
+    // 对每条tracked line添加残差
+    for (const auto& line_data : iter.second) {
+      problem.AddResidualBlock(
+          CreateLineDistanceFieldCostFunction2D(
+              weight,
+              line_data,
+              distance_field),
+          CreateRobustLossFunction(),
+          ceres_pose_estimate);
+    }
+  }
+}
+
 }  // namespace
 
 // ============================================================================
@@ -216,34 +293,152 @@ void CeresScanMatcher2D::Match(
 
     if (options_.local_weight_factor() > 1e-3) {
       // LOG(WARNING) << "Using local line ";
-      // 对于每一个跟踪到的线特征
-      double local_line_parallel_weight
-                = options_.line_weight() / 2 / static_cast<double>(local_tracked_line_data.size());
-      double local_line_angle_weight
-                = options_.line_weight() * 2 / static_cast<double>(local_tracked_line_data.size());
-      for (auto iter : local_tracked_line_data) {
+      
+      // ========================================================================
+      // 根据方案选择不同的线特征匹配策略
+      // ========================================================================
+      
+      if (kLineMatchingStrategy == LineMatchingStrategy::PLAN_C_DISTANCE_FIELD) {
+        // ========== 方案C: 基于距离场的快速匹配 ==========
+        
+        // 1. 提取所有target lines
+        std::vector<sensor::LineData> target_lines = 
+            ExtractTargetLines(local_line_map, local_tracked_line_data);
+        
+        if (!target_lines.empty()) {
+          // 2. 构建距离场（只做一次）
+          LOG(INFO) << "Building distance field for " << target_lines.size() 
+                    << " local lines";
+          LineDistanceField distance_field(
+              target_lines,
+              kDistanceFieldResolution,
+              kDistanceFieldMaxDistance);
+          
+          // 3. 为所有tracked lines添加残差
+          AddDistanceFieldResiduals(
+              problem,
+              distance_field,
+              local_tracked_line_data,
+              kDistanceFieldWeight * options_.local_weight_factor(),
+              ceres_pose_estimate);
+          
+          LOG(INFO) << "Distance field matching completed";
+        }
+        
+      } else {
+        // ========== 方案A/B: 逐线匹配 ==========
+        
+        double local_line_parallel_weight
+                  = options_.line_weight() / 2 / static_cast<double>(local_tracked_line_data.size());
+        double local_line_angle_weight
+                  = options_.line_weight() * 2 / static_cast<double>(local_tracked_line_data.size());
+        
+        for (auto iter : local_tracked_line_data) {
+          // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
+          if (iter.first < 0 ||
+            local_line_map.GetLineMapData2DList().count(iter.first) == 0)
+          {
+            continue;
+          }
+          // 地图中匹配的线特征id
+          auto it = local_line_map.GetLineMapData2DList().find(iter.first);
+          const sensor::LineData target_line = it->second.line_data();
+          
+          if (static_cast<int>(iter.second.size()) == 1) {
+            // 如果只匹配了一个线特征，则直接构建残差
+            problem.AddResidualBlock(
+              CreateLineCostFunction(  // ✅ 使用统一接口（方案A或B）
+                local_line_parallel_weight * options_.local_weight_factor(),
+                local_line_angle_weight * options_.local_weight_factor(),
+                iter.second[0], target_line),
+              CreateRobustLossFunction(),  // ✅ 添加鲁棒核
+              ceres_pose_estimate);
+          } else {
+            // 如果有多个匹配的线段，则选择最近的线段，构建残差
+            double min_dis = 10.0;
+            for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
+              Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
+              if (matching_dis[0] < min_dis) {
+                min_dis = matching_dis[0];
+              }
+            }
+            for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
+              Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
+              if (fabs(matching_dis[0] - min_dis) < 0.005) {
+                problem.AddResidualBlock(
+                  CreateLineCostFunction(  // ✅ 使用统一接口（方案A或B）
+                    local_line_parallel_weight * options_.local_weight_factor(),
+                    local_line_angle_weight * options_.local_weight_factor(),
+                    iter.second[i], target_line),
+                  CreateRobustLossFunction(),  // ✅ 添加鲁棒核
+                  ceres_pose_estimate);
+              }
+            }
+          }
+        }
+      }  // 结束方案A/B的else分支
+    }  // 结束local_weight_factor检查
+
+    // ========================================================================
+    // Global线特征匹配：根据方案选择不同的匹配策略
+    // ========================================================================
+    
+    if (kLineMatchingStrategy == LineMatchingStrategy::PLAN_C_DISTANCE_FIELD) {
+      // ========== 方案C: 基于距离场的快速匹配 ==========
+      
+      // 1. 提取所有target lines
+      std::vector<sensor::LineData> target_lines = 
+          ExtractTargetLines(global_line_map, global_tracked_line_data);
+      
+      if (!target_lines.empty()) {
+        // 2. 构建距离场（只做一次）
+        LOG(INFO) << "Building distance field for " << target_lines.size() 
+                  << " global lines";
+        LineDistanceField distance_field(
+            target_lines,
+            kDistanceFieldResolution,
+            kDistanceFieldMaxDistance);
+        
+        // 3. 为所有tracked lines添加残差
+        AddDistanceFieldResiduals(
+            problem,
+            distance_field,
+            global_tracked_line_data,
+            kDistanceFieldWeight,  // global不需要local_weight_factor
+            ceres_pose_estimate);
+        
+        LOG(INFO) << "Global distance field matching completed";
+      }
+      
+    } else {
+      // ========== 方案A/B: 逐线匹配 ==========
+      
+      double global_line_parallel_weight
+                = options_.line_weight() / 2 / static_cast<double>(global_tracked_line_data.size());
+      double global_line_angle_weight
+                = options_.line_weight() * 2 / static_cast<double>(global_tracked_line_data.size());
+      
+      for (auto iter : global_tracked_line_data) {
         // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
         if (iter.first < 0 ||
-          local_line_map.GetLineMapData2DList().count(iter.first) == 0)
+          global_line_map.GetLineMapData2DList().count(iter.first) == 0)
         {
           continue;
         }
         // 地图中匹配的线特征id
-        // // std::cout << "iter.first: " << iter.first << std::endl;
-        auto it = local_line_map.GetLineMapData2DList().find(iter.first);
+        auto it = global_line_map.GetLineMapData2DList().find(iter.first);
         const sensor::LineData target_line = it->second.line_data();
-        // // std::cout << "iter.second.size(): " << iter.second.size() << std::endl;
+        
         if (static_cast<int>(iter.second.size()) == 1) {
           // 如果只匹配了一个线特征，则直接构建残差
           problem.AddResidualBlock(
-            CreateLineCostFunction(  // ✅ 使用统一接口
-              local_line_parallel_weight * options_.local_weight_factor(),
-              local_line_angle_weight * options_.local_weight_factor(),
+            CreateLineCostFunction(  // ✅ 使用统一接口（方案A或B）
+              global_line_parallel_weight, global_line_angle_weight,
               iter.second[0], target_line),
             CreateRobustLossFunction(),  // ✅ 添加鲁棒核
             ceres_pose_estimate);
         } else {
-          // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
+          // 如果有多个匹配的线段，则选择最近的线段，构建残差
           double min_dis = 10.0;
           for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
             Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
@@ -255,62 +450,13 @@ void CeresScanMatcher2D::Match(
             Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
             if (fabs(matching_dis[0] - min_dis) < 0.005) {
               problem.AddResidualBlock(
-                CreateLineCostFunction(  // ✅ 使用统一接口
-                  local_line_parallel_weight * options_.local_weight_factor(),
-                  local_line_angle_weight * options_.local_weight_factor(),
+                CreateLineCostFunction(  // ✅ 使用统一接口（方案A或B）
+                  global_line_parallel_weight,
+                  global_line_angle_weight,
                   iter.second[i], target_line),
                 CreateRobustLossFunction(),  // ✅ 添加鲁棒核
-                ceres_pose_estimate);
+                  ceres_pose_estimate);
             }
-          }
-        }
-      }
-    }
-
-    // 对于每一个跟踪到的线特征
-    double global_line_parallel_weight
-              = options_.line_weight() / 2 / static_cast<double>(global_tracked_line_data.size());
-    double global_line_angle_weight
-              = options_.line_weight() * 2 / static_cast<double>(global_tracked_line_data.size());
-    for (auto iter : global_tracked_line_data) {
-      // 如果是新的线特征（id < 0）；或者地图中没有改线段的ID，则跳过
-      if (iter.first < 0 ||
-        global_line_map.GetLineMapData2DList().count(iter.first) == 0)
-      {
-        continue;
-      }
-      // 地图中匹配的线特征id
-      // // std::cout << "iter.first: " << iter.first << std::endl;
-      auto it = global_line_map.GetLineMapData2DList().find(iter.first);
-      const sensor::LineData target_line = it->second.line_data();
-      // // std::cout << "iter.second.size(): " << iter.second.size() << std::endl;
-      if (static_cast<int>(iter.second.size()) == 1) {
-        // 如果只匹配了一个线特征，则直接构建残差
-        problem.AddResidualBlock(
-          CreateLineCostFunction(  // ✅ 使用统一接口
-            global_line_parallel_weight, global_line_angle_weight,
-            iter.second[0], target_line),
-          CreateRobustLossFunction(),  // ✅ 添加鲁棒核
-          ceres_pose_estimate);
-      } else {
-        // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
-        double min_dis = 10.0;
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (matching_dis[0] < min_dis) {
-            min_dis = matching_dis[0];
-          }
-        }
-        for (int i = 0; i < static_cast<int>(iter.second.size()); i++) {
-          Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
-          if (fabs(matching_dis[0] - min_dis) < 0.005) {
-            problem.AddResidualBlock(
-              CreateLineCostFunction(  // ✅ 使用统一接口
-                global_line_parallel_weight,
-                global_line_angle_weight,
-                iter.second[i], target_line),
-              CreateRobustLossFunction(),  // ✅ 添加鲁棒核
-              ceres_pose_estimate);
           }
         }
       }

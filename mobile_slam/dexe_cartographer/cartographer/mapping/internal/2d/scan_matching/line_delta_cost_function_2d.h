@@ -67,6 +67,66 @@ ceres::CostFunction* CreateImprovedLineDeltaWithInitPoseCostFunction2D(
   const sensor::LineData& target_line,
   const transform::Rigid2d& initial_pose);
 
+// ============================================================================
+// 方案C: 基于距离场的快速线特征匹配
+// ============================================================================
+
+// 线特征距离场类 - 预计算线到栅格的距离场
+class LineDistanceField {
+ public:
+  // 构造函数: 从线特征列表构建距离场
+  // lines: 线特征列表
+  // resolution: 栅格分辨率(米/像素)
+  // max_distance: 最大距离阈值(米)，超过此距离设为最大值
+  LineDistanceField(const std::vector<sensor::LineData>& lines,
+                    double resolution,
+                    double max_distance);
+
+  // 查询点到最近线的距离（带双线性插值）
+  // point: 查询点的世界坐标
+  // 返回: 到最近线的距离（米）
+  template <typename T>
+  T GetDistance(const Eigen::Matrix<T, 2, 1>& point) const;
+
+  // 查询点到最近线的距离及梯度（解析梯度）
+  // point: 查询点的世界坐标
+  // distance: 输出距离
+  // gradient: 输出梯度（指向远离线的方向）
+  template <typename T>
+  void GetDistanceAndGradient(
+      const Eigen::Matrix<T, 2, 1>& point,
+      T* distance,
+      Eigen::Matrix<T, 2, 1>* gradient) const;
+
+  // 获取距离场信息（用于调试和可视化）
+  const Eigen::MatrixXd& GetDistanceGrid() const { return distance_grid_; }
+  double GetResolution() const { return resolution_; }
+  const Eigen::Vector2d& GetOrigin() const { return origin_; }
+
+ private:
+  // 计算点到线段的最短距离
+  static double PointToLineSegmentDistance(
+      const Eigen::Vector2d& point,
+      const Eigen::Vector2d& line_start,
+      const Eigen::Vector2d& line_end);
+
+  // 世界坐标转栅格坐标
+  template <typename T>
+  Eigen::Matrix<T, 2, 1> WorldToGrid(const Eigen::Matrix<T, 2, 1>& point) const;
+
+  Eigen::MatrixXd distance_grid_;  // 距离场栅格 [rows x cols]
+  double resolution_;              // 分辨率(米/像素)
+  Eigen::Vector2d origin_;         // 栅格原点的世界坐标
+  double max_distance_;            // 最大距离阈值
+};
+
+// 方案C: 基于距离场的代价函数（最快）
+// 返回1个残差: [加权距离误差]
+ceres::CostFunction* CreateLineDistanceFieldCostFunction2D(
+  const double weight,
+  const sensor::LineData& line_data,
+  const LineDistanceField& distance_field);
+
 }  // namespace scan_matching
 }  // namespace mapping
 }  // namespace cartographer

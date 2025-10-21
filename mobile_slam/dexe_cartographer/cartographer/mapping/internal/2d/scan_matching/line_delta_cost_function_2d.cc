@@ -14,6 +14,9 @@
 
 #include "cartographer/mapping/internal/2d/scan_matching/line_delta_cost_function_2d.h"
 
+#include <cmath>
+#include <limits>
+
 // ceres::CostFunction* CreateLineDeltaCostFunction2D(
 //   const double parallel_scaling_factor, const double angle_scaling_factor,
 //   const std::vector<sensor::LineData>& line_data, const LineMap2DList& line_map);
@@ -634,6 +637,322 @@ ceres::CostFunction* CreateImprovedLineDeltaWithInitPoseCostFunction2D(
       data,
       target,
       initial_pose));
+}
+
+// ============================================================================
+// 方案C: 基于距离场的快速线特征匹配
+// ============================================================================
+
+// LineDistanceField 实现
+LineDistanceField::LineDistanceField(
+    const std::vector<sensor::LineData>& lines,
+    double resolution,
+    double max_distance)
+    : resolution_(resolution), max_distance_(max_distance) {
+  
+  if (lines.empty()) {
+    LOG(WARNING) << "Creating LineDistanceField with empty line list";
+    distance_grid_ = Eigen::MatrixXd::Constant(1, 1, max_distance);
+    origin_ = Eigen::Vector2d::Zero();
+    return;
+  }
+
+  // 1. 计算边界框
+  double min_x = std::numeric_limits<double>::max();
+  double min_y = std::numeric_limits<double>::max();
+  double max_x = std::numeric_limits<double>::lowest();
+  double max_y = std::numeric_limits<double>::lowest();
+
+  for (const auto& line : lines) {
+    const Eigen::Vector2d start = line.begin();
+    const Eigen::Vector2d end = line.end();
+    
+    min_x = std::min({min_x, start.x(), end.x()});
+    min_y = std::min({min_y, start.y(), end.y()});
+    max_x = std::max({max_x, start.x(), end.x()});
+    max_y = std::max({max_y, start.y(), end.y()});
+  }
+
+  // 扩展边界（考虑max_distance）
+  min_x -= max_distance;
+  min_y -= max_distance;
+  max_x += max_distance;
+  max_y += max_distance;
+
+  origin_ = Eigen::Vector2d(min_x, min_y);
+
+  // 2. 计算栅格尺寸
+  int cols = static_cast<int>(std::ceil((max_x - min_x) / resolution_)) + 1;
+  int rows = static_cast<int>(std::ceil((max_y - min_y) / resolution_)) + 1;
+
+  // 限制栅格大小（避免内存溢出）
+  const int kMaxGridSize = 10000;
+  if (cols > kMaxGridSize || rows > kMaxGridSize) {
+    LOG(WARNING) << "LineDistanceField grid size too large: " << cols << "x" << rows
+                 << ", limiting to " << kMaxGridSize << "x" << kMaxGridSize;
+    cols = std::min(cols, kMaxGridSize);
+    rows = std::min(rows, kMaxGridSize);
+  }
+
+  // 3. 初始化距离场为最大值
+  distance_grid_ = Eigen::MatrixXd::Constant(rows, cols, max_distance);
+
+  // 4. 计算每个栅格点到最近线的距离
+  LOG(INFO) << "Building LineDistanceField: " << rows << "x" << cols 
+            << " grid, " << lines.size() << " lines";
+
+  for (int r = 0; r < rows; ++r) {
+    for (int c = 0; c < cols; ++c) {
+      // 栅格坐标转世界坐标
+      Eigen::Vector2d point(
+          origin_.x() + c * resolution_,
+          origin_.y() + r * resolution_);
+
+      // 找到最近的线
+      double min_dist = max_distance;
+      for (const auto& line : lines) {
+        double dist = PointToLineSegmentDistance(
+            point, line.begin(), line.end());
+        min_dist = std::min(min_dist, dist);
+      }
+
+      distance_grid_(r, c) = min_dist;
+    }
+  }
+
+  LOG(INFO) << "LineDistanceField built successfully";
+}
+
+// 点到线段的最短距离
+double LineDistanceField::PointToLineSegmentDistance(
+    const Eigen::Vector2d& point,
+    const Eigen::Vector2d& line_start,
+    const Eigen::Vector2d& line_end) {
+  
+  const Eigen::Vector2d line_vec = line_end - line_start;
+  const double line_length_sq = line_vec.squaredNorm();
+
+  if (line_length_sq < 1e-8) {
+    // 线段退化为点
+    return (point - line_start).norm();
+  }
+
+  // 投影参数 t
+  const double t = (point - line_start).dot(line_vec) / line_length_sq;
+
+  // 限制在线段上
+  const double t_clamped = std::max(0.0, std::min(1.0, t));
+
+  // 计算最近点
+  const Eigen::Vector2d closest_point = line_start + t_clamped * line_vec;
+
+  return (point - closest_point).norm();
+}
+
+// 世界坐标转栅格坐标（模板函数）
+template <typename T>
+Eigen::Matrix<T, 2, 1> LineDistanceField::WorldToGrid(
+    const Eigen::Matrix<T, 2, 1>& point) const {
+  return Eigen::Matrix<T, 2, 1>(
+      (point.x() - T(origin_.x())) / T(resolution_),
+      (point.y() - T(origin_.y())) / T(resolution_));
+}
+
+// 辅助函数：从Jet或double类型中提取标量值用于索引计算
+template <typename T>
+inline double ExtractValue(const T& value) {
+  // 对于Jet类型，访问其a成员（标量部分）
+  return value.a;
+}
+
+template <>
+inline double ExtractValue<double>(const double& value) {
+  return value;
+}
+
+// 查询距离（带双线性插值）
+template <typename T>
+T LineDistanceField::GetDistance(const Eigen::Matrix<T, 2, 1>& point) const {
+  const Eigen::Matrix<T, 2, 1> grid_pos = WorldToGrid(point);
+  
+  const T x = grid_pos.x();
+  const T y = grid_pos.y();
+
+  // 获取四个相邻栅格索引 - 提取标量值用于索引
+  const int x0 = static_cast<int>(std::floor(ExtractValue(x)));
+  const int y0 = static_cast<int>(std::floor(ExtractValue(y)));
+  const int x1 = x0 + 1;
+  const int y1 = y0 + 1;
+
+  // 边界检查
+  if (x0 < 0 || y0 < 0 || 
+      x1 >= distance_grid_.cols() || y1 >= distance_grid_.rows()) {
+    return T(max_distance_);
+  }
+
+  // 双线性插值权重
+  const T wx = x - T(x0);
+  const T wy = y - T(y0);
+
+  // 获取四个角的距离值
+  const T d00 = T(distance_grid_(y0, x0));
+  const T d10 = T(distance_grid_(y0, x1));
+  const T d01 = T(distance_grid_(y1, x0));
+  const T d11 = T(distance_grid_(y1, x1));
+
+  // 双线性插值
+  const T d0 = d00 * (T(1.0) - wx) + d10 * wx;
+  const T d1 = d01 * (T(1.0) - wx) + d11 * wx;
+  const T distance = d0 * (T(1.0) - wy) + d1 * wy;
+
+  return distance;
+}
+
+// 查询距离和梯度
+template <typename T>
+void LineDistanceField::GetDistanceAndGradient(
+    const Eigen::Matrix<T, 2, 1>& point,
+    T* distance,
+    Eigen::Matrix<T, 2, 1>* gradient) const {
+  
+  const Eigen::Matrix<T, 2, 1> grid_pos = WorldToGrid(point);
+  
+  const T x = grid_pos.x();
+  const T y = grid_pos.y();
+
+  const int x0 = static_cast<int>(std::floor(ExtractValue(x)));
+  const int y0 = static_cast<int>(std::floor(ExtractValue(y)));
+  const int x1 = x0 + 1;
+  const int y1 = y0 + 1;
+
+  // 边界检查
+  if (x0 < 0 || y0 < 0 || 
+      x1 >= distance_grid_.cols() || y1 >= distance_grid_.rows()) {
+    *distance = T(max_distance_);
+    *gradient = Eigen::Matrix<T, 2, 1>::Zero();
+    return;
+  }
+
+  // 双线性插值权重
+  const T wx = x - T(x0);
+  const T wy = y - T(y0);
+
+  // 四个角的距离值
+  const T d00 = T(distance_grid_(y0, x0));
+  const T d10 = T(distance_grid_(y0, x1));
+  const T d01 = T(distance_grid_(y1, x0));
+  const T d11 = T(distance_grid_(y1, x1));
+
+  // 计算距离
+  const T d0 = d00 * (T(1.0) - wx) + d10 * wx;
+  const T d1 = d01 * (T(1.0) - wx) + d11 * wx;
+  *distance = d0 * (T(1.0) - wy) + d1 * wy;
+
+  // 计算梯度（中心差分）
+  // ∂d/∂x
+  T grad_x;
+  if (x0 > 0 && x1 < distance_grid_.cols() - 1) {
+    const T d_left = T(distance_grid_(y0, x0 - 1));
+    const T d_right = T(distance_grid_(y0, x1 + 1));
+    grad_x = (d_right - d_left) / (T(2.0) * T(resolution_));
+  } else {
+    grad_x = (d10 - d00) / T(resolution_);
+  }
+
+  // ∂d/∂y
+  T grad_y;
+  if (y0 > 0 && y1 < distance_grid_.rows() - 1) {
+    const T d_bottom = T(distance_grid_(y0 - 1, x0));
+    const T d_top = T(distance_grid_(y1 + 1, x0));
+    grad_y = (d_top - d_bottom) / (T(2.0) * T(resolution_));
+  } else {
+    grad_y = (d01 - d00) / T(resolution_);
+  }
+
+  *gradient = Eigen::Matrix<T, 2, 1>(grad_x, grad_y);
+}
+
+// 显式实例化模板
+template double LineDistanceField::GetDistance<double>(
+    const Eigen::Matrix<double, 2, 1>& point) const;
+template void LineDistanceField::GetDistanceAndGradient<double>(
+    const Eigen::Matrix<double, 2, 1>& point,
+    double* distance,
+    Eigen::Matrix<double, 2, 1>* gradient) const;
+
+// ============================================================================
+// 基于距离场的代价函数
+// ============================================================================
+
+class LineDistanceFieldCostFunction2D {
+ public:
+  LineDistanceFieldCostFunction2D(
+      const double weight,
+      const sensor::LineData& line_data,
+      const LineDistanceField* distance_field)
+      : weight_(weight),
+        line_start_(line_data.begin()),
+        line_end_(line_data.end()),
+        distance_field_(distance_field) {}
+
+  template <typename T>
+  bool operator()(const T* const pose, T* residual) const {
+    const T cos_theta = ceres::cos(pose[2]);
+    const T sin_theta = ceres::sin(pose[2]);
+
+    // 变换线段的两个端点
+    Eigen::Matrix<T, 2, 1> start_transformed;
+    start_transformed.x() = cos_theta * T(line_start_.x()) - 
+                            sin_theta * T(line_start_.y()) + pose[0];
+    start_transformed.y() = sin_theta * T(line_start_.x()) + 
+                            cos_theta * T(line_start_.y()) + pose[1];
+
+    Eigen::Matrix<T, 2, 1> end_transformed;
+    end_transformed.x() = cos_theta * T(line_end_.x()) - 
+                          sin_theta * T(line_end_.y()) + pose[0];
+    end_transformed.y() = sin_theta * T(line_end_.x()) + 
+                          cos_theta * T(line_end_.y()) + pose[1];
+
+    // 计算线段中点
+    Eigen::Matrix<T, 2, 1> mid_transformed = 
+        (start_transformed + end_transformed) * T(0.5);
+
+    // 查询三个点的距离
+    const T dist_start = distance_field_->GetDistance(start_transformed);
+    const T dist_end = distance_field_->GetDistance(end_transformed);
+    const T dist_mid = distance_field_->GetDistance(mid_transformed);
+
+    // 加权平均（端点权重1.0，中点权重0.5）
+    const T total_weight = T(2.5);  // 1.0 + 1.0 + 0.5
+    const T avg_distance = (dist_start + dist_end + dist_mid * T(0.5)) / total_weight;
+
+    // 残差 = 加权距离
+    residual[0] = T(weight_) * avg_distance;
+
+    return true;
+  }
+
+ private:
+  const double weight_;
+  const Eigen::Vector2d line_start_;
+  const Eigen::Vector2d line_end_;
+  const LineDistanceField* distance_field_;  // 不拥有所有权
+};
+
+// 工厂函数
+ceres::CostFunction* CreateLineDistanceFieldCostFunction2D(
+    const double weight,
+    const sensor::LineData& line_data,
+    const LineDistanceField& distance_field) {
+  
+  return new ceres::AutoDiffCostFunction<
+      LineDistanceFieldCostFunction2D,
+      1,   // 1个残差
+      3>(  // 3个参数 [x, y, theta]
+      new LineDistanceFieldCostFunction2D(
+          weight,
+          line_data,
+          &distance_field));
 }
 
 }  // namespace scan_matching
