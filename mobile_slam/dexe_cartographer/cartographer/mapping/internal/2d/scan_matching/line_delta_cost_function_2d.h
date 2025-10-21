@@ -44,6 +44,29 @@ ceres::CostFunction * CreateLineDeltaWithAngleCostFunction2D(
 ceres::CostFunction * CreateLineDeltaWithoutInitPoseCostFunction2D(
   const double parallel_scaling_factor, const double angle_scaling_factor,
   const sensor::LineData & line_data, const sensor::LineData & target_line);
+
+// ============================================================================
+// 方案B: 改进版本函数声明
+// ============================================================================
+
+// 改进版本1: 对称性距离 + 双端点 + 中点 + 自适应权重
+// 返回2个残差: [距离误差, 角度误差]
+ceres::CostFunction* CreateImprovedLineDeltaCostFunction2D(
+  const double parallel_scaling_factor, 
+  const double angle_scaling_factor,
+  const sensor::LineData& line_data, 
+  const sensor::LineData& target_line);
+
+// 改进版本2: 添加初始位姿约束 + 对称性距离
+// 返回4个残差: [距离误差, 角度误差, 平移先验误差, 旋转先验误差]
+ceres::CostFunction* CreateImprovedLineDeltaWithInitPoseCostFunction2D(
+  const double parallel_scaling_factor, 
+  const double angle_scaling_factor,
+  const double pose_prior_weight,
+  const sensor::LineData& line_data, 
+  const sensor::LineData& target_line,
+  const transform::Rigid2d& initial_pose);
+
 }  // namespace scan_matching
 }  // namespace mapping
 }  // namespace cartographer

@@ -74,6 +74,58 @@ CeresScanMatcher2D::CeresScanMatcher2D(
 
 CeresScanMatcher2D::~CeresScanMatcher2D() {}
 
+// ============================================================================
+// 辅助函数：创建线特征代价函数（支持切换原版本和改进版本）
+// ============================================================================
+namespace {
+// 配置选项：是否使用改进版本的线特征匹配
+constexpr bool kUseImprovedLineCostFunction = true;  // ✅ 设置为true使用方案B
+constexpr bool kUseRobustLossFunction = true;        // ✅ 是否使用鲁棒核函数
+constexpr double kHuberLossThreshold = 0.1;          // Huber核阈值(米)
+
+// 创建线特征代价函数的统一接口
+ceres::CostFunction* CreateLineCostFunction(
+    const double parallel_scaling_factor,
+    const double angle_scaling_factor,
+    const sensor::LineData& line_data,
+    const sensor::LineData& target_line) {
+  
+  if (kUseImprovedLineCostFunction) {
+    // ✅ 使用改进版本（方案B）：对称性距离 + 自适应权重
+    return CreateImprovedLineDeltaCostFunction2D(
+        parallel_scaling_factor,
+        angle_scaling_factor,
+        line_data,
+        target_line);
+  } else {
+    // 使用原版本（方案A已集成）
+    return CreateLineCostFunction(
+        parallel_scaling_factor,
+        angle_scaling_factor,
+        line_data,
+        target_line);
+  }
+}
+
+// 创建鲁棒核函数
+ceres::LossFunction* CreateRobustLossFunction() {
+  if (kUseRobustLossFunction) {
+    // Huber核：对小误差线性，大误差平方根，适合一般场景
+    return new ceres::HuberLoss(kHuberLossThreshold);
+    
+    // 其他可选项：
+    // return new ceres::CauchyLoss(kHuberLossThreshold);  // 更鲁棒，适合外点多的场景
+    // return new ceres::TukeyLoss(kHuberLossThreshold);   // 完全抑制大误差
+  } else {
+    return nullptr;  // 不使用鲁棒核
+  }
+}
+}  // namespace
+
+// ============================================================================
+// 原Match函数继续
+// ============================================================================
+
 // for localization
 void CeresScanMatcher2D::Match(
   const Eigen::Vector2d & target_translation,
@@ -184,11 +236,12 @@ void CeresScanMatcher2D::Match(
         if (static_cast<int>(iter.second.size()) == 1) {
           // 如果只匹配了一个线特征，则直接构建残差
           problem.AddResidualBlock(
-            CreateLineDeltaWithoutInitPoseCostFunction2D(
+            CreateLineCostFunction(  // ✅ 使用统一接口
               local_line_parallel_weight * options_.local_weight_factor(),
               local_line_angle_weight * options_.local_weight_factor(),
               iter.second[0], target_line),
-            nullptr, ceres_pose_estimate);
+            CreateRobustLossFunction(),  // ✅ 添加鲁棒核
+            ceres_pose_estimate);
         } else {
           // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
           double min_dis = 10.0;
@@ -202,11 +255,12 @@ void CeresScanMatcher2D::Match(
             Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
             if (fabs(matching_dis[0] - min_dis) < 0.005) {
               problem.AddResidualBlock(
-                CreateLineDeltaWithoutInitPoseCostFunction2D(
+                CreateLineCostFunction(  // ✅ 使用统一接口
                   local_line_parallel_weight * options_.local_weight_factor(),
                   local_line_angle_weight * options_.local_weight_factor(),
                   iter.second[i], target_line),
-                nullptr, ceres_pose_estimate);
+                CreateRobustLossFunction(),  // ✅ 添加鲁棒核
+                ceres_pose_estimate);
             }
           }
         }
@@ -233,10 +287,11 @@ void CeresScanMatcher2D::Match(
       if (static_cast<int>(iter.second.size()) == 1) {
         // 如果只匹配了一个线特征，则直接构建残差
         problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
+          CreateLineCostFunction(  // ✅ 使用统一接口
             global_line_parallel_weight, global_line_angle_weight,
             iter.second[0], target_line),
-          nullptr, ceres_pose_estimate);
+          CreateRobustLossFunction(),  // ✅ 添加鲁棒核
+          ceres_pose_estimate);
       } else {
         // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
         double min_dis = 10.0;
@@ -250,11 +305,12 @@ void CeresScanMatcher2D::Match(
           Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
           if (fabs(matching_dis[0] - min_dis) < 0.005) {
             problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
+              CreateLineCostFunction(  // ✅ 使用统一接口
                 global_line_parallel_weight,
                 global_line_angle_weight,
                 iter.second[i], target_line),
-              nullptr, ceres_pose_estimate);
+              CreateRobustLossFunction(),  // ✅ 添加鲁棒核
+              ceres_pose_estimate);
           }
         }
       }
@@ -608,10 +664,10 @@ void CeresScanMatcher2D::Match(
       if (static_cast<int>(iter.second.size()) == 1) {
         // 如果只匹配了一个线特征，则直接构建残差
         problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
+          CreateLineCostFunction(
             line_parallel_weight, line_angle_weight,
             iter.second[0], target_line),
-          nullptr, ceres_pose_estimate);
+          CreateRobustLossFunction(), ceres_pose_estimate);
       } else {
         // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
         double min_dis = 10.0;
@@ -625,10 +681,10 @@ void CeresScanMatcher2D::Match(
           Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
           if (fabs(matching_dis[0] - min_dis) < 0.005) {
             problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
+              CreateLineCostFunction(
                 line_parallel_weight, line_angle_weight,
                 iter.second[i], target_line),
-              nullptr, ceres_pose_estimate);
+              CreateRobustLossFunction(), ceres_pose_estimate);
           }
         }
       }
@@ -796,10 +852,10 @@ void CeresScanMatcher2D::Match(
       if (static_cast<int>(iter.second.size()) == 1) {
         // 如果只匹配了一个线特征，则直接构建残差
         problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
+          CreateLineCostFunction(
             line_parallel_weight, line_angle_weight,
             iter.second[0], target_line),
-          nullptr, ceres_pose_estimate);
+          CreateRobustLossFunction(), ceres_pose_estimate);
       } else {
         // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
         double min_dis = 10.0;
@@ -813,10 +869,10 @@ void CeresScanMatcher2D::Match(
           Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
           if (fabs(matching_dis[0] - min_dis) < 0.005) {
             problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
+              CreateLineCostFunction(
                 line_parallel_weight, line_angle_weight,
                 iter.second[i], target_line),
-              nullptr, ceres_pose_estimate);
+              CreateRobustLossFunction(), ceres_pose_estimate);
           }
         }
       }
@@ -1252,10 +1308,10 @@ void CeresScanMatcher2D::Match(
     if (static_cast<int>(iter.second.size()) == 1) {
       // 如果只匹配了一个线特征，则直接构建残差
       problem.AddResidualBlock(
-        CreateLineDeltaWithoutInitPoseCostFunction2D(
+        CreateLineCostFunction(
           line_parallel_weight, line_angle_weight,
           iter.second[0], target_line),
-        nullptr, ceres_pose_estimate);
+        CreateRobustLossFunction(), ceres_pose_estimate);
     } else {
       // 如果有多个匹配的线段，则知道啊最近的线段，构建残差
       double min_dis = 10.0;
@@ -1269,10 +1325,10 @@ void CeresScanMatcher2D::Match(
         Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
         if (fabs(matching_dis[0] - min_dis) < 0.005) {
           problem.AddResidualBlock(
-            CreateLineDeltaWithoutInitPoseCostFunction2D(
+            CreateLineCostFunction(
               line_parallel_weight, line_angle_weight,
               iter.second[i], target_line),
-            nullptr, ceres_pose_estimate);
+            CreateRobustLossFunction(), ceres_pose_estimate);
         }
       }
     }
@@ -1305,10 +1361,10 @@ void CeresScanMatcher2D::Match(
     //   // std::cout << "world data end x: " << world_e[0] << " y: " << world_e[1]
     //             << std::endl;
     //   problem.AddResidualBlock(
-    //       CreateLineDeltaWithoutInitPoseCostFunction2D(
+    //       CreateLineCostFunction(
     //           options_.line_weight() / 2, options_.line_weight() * 2,
     //           iter.second[i], target_line),
-    //       nullptr, ceres_pose_estimate);
+    //       CreateRobustLossFunction(), ceres_pose_estimate);
     // }
   }
 
