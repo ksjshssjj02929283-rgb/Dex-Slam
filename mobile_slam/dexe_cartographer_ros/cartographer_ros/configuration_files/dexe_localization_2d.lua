@@ -77,7 +77,7 @@ POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.intensity_threshold = 30
 POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.connect_threshold = 0.05
 POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.min_cluster_points = 5
 -- POSE_ESTIMATOR_2D.use_imu_data = false
-POSE_ESTIMATOR_2D.use_online_correlative_scan_matching = true
+POSE_ESTIMATOR_2D.use_online_correlative_scan_matching = false
 
 -- [[局部匹配参数]]
 POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.rotation_delta_cost_weight = 1
