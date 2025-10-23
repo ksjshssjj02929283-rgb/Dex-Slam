@@ -659,12 +659,8 @@ void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data
   }
   odom_data_buff_.push_back(odometry_data);
   
-  // 每添加100个数据点进行一次清理，避免频繁清理（约每秒一次）
-  static int add_count = 0;
-  if (++add_count >= 100) {
-    TrimOdomData();
-    add_count = 0;
-  }
+  // 每次添加都检查buffer大小，超过500个数据点就删除最旧的
+  TrimOdomData();
   
   // std::cout << "DataPreprocessor: Added odometry data at time: " << odometry_data.time
   //           << ", odom_buff_size: " << odom_data_buff_.size() << std::endl;
@@ -672,31 +668,16 @@ void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data
 
 void DataPreprocessor::TrimOdomData()
 {
-  // 保留最近30秒的里程计数据用于插值
+  // 简化逻辑：限制缓冲区最大大小为500个数据点
+  static const size_t MAX_ODOM_BUFFER_SIZE = 500;
+  
   if (odom_data_buff_.empty()) {
     return;
   }
   
-  const common::Time current_time = odom_data_buff_.back().time;
-  const common::Time cutoff_time = current_time - common::FromSeconds(10.0);
-  
-  // 优化：使用binary search快速定位需要删除的位置
-  auto it = std::lower_bound(odom_data_buff_.begin(), odom_data_buff_.end(), 
-                            cutoff_time, 
-                            [](const sensor::OdometryData& data, const common::Time& time) {
-                              return data.time < time;
-                            });
-  
-  // 批量删除过期数据，比逐个pop_front效率更高
-  if (it != odom_data_buff_.begin()) {
-    size_t removed_count = std::distance(odom_data_buff_.begin(), it);
-    odom_data_buff_.erase(odom_data_buff_.begin(), it);
-    
-    // 只在实际删除数据时打印日志
-    if (removed_count > 0) {
-      DLOG(INFO) << "TrimOdomData: Removed " << removed_count 
-                 << " old odometry entries, remaining: " << odom_data_buff_.size();
-    }
+  // 当缓冲区大小超过500时，删除最旧的数据点
+  if (odom_data_buff_.size() > MAX_ODOM_BUFFER_SIZE) {
+    odom_data_buff_.pop_front();
   }
 }
 
