@@ -137,13 +137,14 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
   }
 
   result.is_valid = true;
+  reference_buffer.pop_front(); // 同步成功，移除当前用于同步的reference数据
   
   // 同步成功后只移除reference buffer中sync_time之前的所有数据
   auto& reference_buffer_to_clean = sensor_buffers_[reference_sensor_id];
   while (reference_buffer_to_clean.size() > 2 && reference_buffer_to_clean.front().time <= sync_time) {
     reference_buffer_to_clean.pop_front();
   }
-  // 打印同步信息
+  // 打印同步信息pair
   // LOG(INFO) << "Successfully synchronized " << expected_sensor_ids_.size() 
   //           << " laser sensors with reference: " << reference_sensor_id 
   //           << " at time: " << common::ToUniversal(sync_time);
@@ -162,10 +163,10 @@ absl::optional<common::Time> LaserSynchronizer::GetLatestTime() const {
 }
 
 bool LaserSynchronizer::CanSynchronize() const {
-  // 检查所有传感器都至少有一帧数据
+  // 检查所有传感器都至少有2帧数据
   for (const std::string& sensor_id : expected_sensor_ids_) {
     const auto it = sensor_buffers_.find(sensor_id);
-    if (it == sensor_buffers_.end() || it->second.empty()) {
+    if (it == sensor_buffers_.end() || it->second.size() < 2) {
       return false;
     }
   }

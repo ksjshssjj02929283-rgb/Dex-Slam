@@ -484,21 +484,24 @@ absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(con
  */
 transform::Rigid3d DataPreprocessor::GetOdometryPose(const common::Time& time) const
 {
-  std::lock_guard<std::mutex> lock(odometry_buffer_mutex_);
-  
-  if (odom_data_buff_.empty()) {
-    return transform::Rigid3d::Identity();
+  std::vector<sensor::OdometryData> odom_buffer;
+  {
+    std::lock_guard<std::mutex> lock(odometry_buffer_mutex_);
+    if (odom_data_buff_.empty()) {
+      return transform::Rigid3d::Identity();
+    }
+    odom_buffer.assign(odom_data_buff_.begin(), odom_data_buff_.end());
   }
   
   // 如果查询时间早于最早的数据
-  if (time < odom_data_buff_.front().time) {
-    return odom_data_buff_.front().pose;
+  if (time < odom_buffer.front().time) {
+    return odom_buffer.front().pose;
   }
   
   // 如果查询时间晚于最新的数据，进行外插
-  if (time > odom_data_buff_.back().time) {
+  if (time > odom_buffer.back().time) {
     // 外插逻辑：使用最后一个数据点的速度信息
-    const auto& last = odom_data_buff_.back();
+    const auto& last = odom_buffer.back();
     const double dt = common::ToSeconds(time - last.time);
 
     const Eigen::Vector3d w = last.twist.angular; // 角速度
@@ -516,11 +519,11 @@ transform::Rigid3d DataPreprocessor::GetOdometryPose(const common::Time& time) c
   }
   
   // 从后往前查找合适的插值区间（优化：大多数查询都是最近时间）
-  auto it_lower = odom_data_buff_.end() - 1;
-  auto it_upper = odom_data_buff_.end();
+  auto it_lower = odom_buffer.end() - 1;
+  auto it_upper = odom_buffer.end();
   
   // 从后往前找到第一个时间小于等于查询时间的数据点
-  for (auto it = odom_data_buff_.rbegin(); it != odom_data_buff_.rend(); ++it) {
+  for (auto it = odom_buffer.rbegin(); it != odom_buffer.rend(); ++it) {
     if (it->time <= time) {
       it_lower = it.base() - 1;  // 转换反向迭代器到正向迭代器
       it_upper = it_lower + 1;
@@ -529,12 +532,12 @@ transform::Rigid3d DataPreprocessor::GetOdometryPose(const common::Time& time) c
   }
   
   // 如果没找到小于等于查询时间的点，说明查询时间早于所有数据
-  if (it_lower == odom_data_buff_.end() - 1 && odom_data_buff_.back().time > time) {
-    return odom_data_buff_.front().pose;
+  if (it_lower == odom_buffer.end() - 1 && odom_buffer.back().time > time) {
+    return odom_buffer.front().pose;
   }
   
   // 如果找到的是最后一个点，说明需要外插（但这种情况前面已经处理过了）
-  if (it_upper == odom_data_buff_.end()) {
+  if (it_upper == odom_buffer.end()) {
     return it_lower->pose;
   }
   
@@ -683,21 +686,25 @@ void DataPreprocessor::TrimOdomData()
 
 absl::optional<sensor::OdometryData> DataPreprocessor::GetOdometryAtTime(
     const common::Time& time) const {
-  std::lock_guard<std::mutex> lock(odometry_buffer_mutex_);
-  
-  if (odom_data_buff_.empty()) {
-    return absl::nullopt;
+  // Copy odometry buffer under lock to reduce lock hold time for interpolation.
+  std::vector<sensor::OdometryData> odom_buffer;
+  {
+    std::lock_guard<std::mutex> lock(odometry_buffer_mutex_);
+    if (odom_data_buff_.empty()) {
+      return absl::nullopt;
+    }
+    odom_buffer.assign(odom_data_buff_.begin(), odom_data_buff_.end());
   }
-  
+
   // 如果查询时间早于最早的数据
-  if (time < odom_data_buff_.front().time) {
-    return odom_data_buff_.front();
+  if (time < odom_buffer.front().time) {
+    return odom_buffer.front();
   }
-  
+
   // 如果查询时间晚于最新的数据，进行外插
-  if (time > odom_data_buff_.back().time) {
+  if (time > odom_buffer.back().time) {
     // 外插逻辑：使用最后一个数据点的速度信息
-    const auto& last = odom_data_buff_.back();
+    const auto& last = odom_buffer.back();
     const double dt = common::ToSeconds(time - last.time);
 
     const Eigen::Vector3d w = last.twist.angular; // 角速度
@@ -713,30 +720,30 @@ absl::optional<sensor::OdometryData> DataPreprocessor::GetOdometryAtTime(
 
     return sensor::OdometryData{time, transform::Rigid3d(t, q), last.twist};
   }
-  
+
   // 从后往前查找合适的插值区间（优化：大多数查询都是最近时间）
-  auto it_lower = odom_data_buff_.end() - 1;
-  auto it_upper = odom_data_buff_.end();
-  
+  auto it_lower = odom_buffer.end() - 1;
+  auto it_upper = odom_buffer.end();
+
   // 从后往前找到第一个时间小于等于查询时间的数据点
-  for (auto it = odom_data_buff_.rbegin(); it != odom_data_buff_.rend(); ++it) {
+  for (auto it = odom_buffer.rbegin(); it != odom_buffer.rend(); ++it) {
     if (it->time <= time) {
       it_lower = it.base() - 1;  // 转换反向迭代器到正向迭代器
       it_upper = it_lower + 1;
       break;
     }
   }
-  
+
   // 如果没找到小于等于查询时间的点，说明查询时间早于所有数据
-  if (it_lower == odom_data_buff_.end() - 1 && odom_data_buff_.back().time > time) {
-    return odom_data_buff_.front();
+  if (it_lower == odom_buffer.end() - 1 && odom_buffer.back().time > time) {
+    return odom_buffer.front();
   }
-  
+
   // 如果找到的是最后一个点，说明需要外插（但这种情况前面已经处理过了）
-  if (it_upper == odom_data_buff_.end()) {
+  if (it_upper == odom_buffer.end()) {
     return *it_lower;
   }
-  
+
   // 如果时间完全匹配
   if (it_lower->time == time) {
     return *it_lower;
@@ -744,26 +751,26 @@ absl::optional<sensor::OdometryData> DataPreprocessor::GetOdometryAtTime(
   if (it_upper->time == time) {
     return *it_upper;
   }
-  
+
   // 线性插值
   const double duration_to_lower = common::ToSeconds(time - it_lower->time);
   const double duration_between = common::ToSeconds(it_upper->time - it_lower->time);
-  
+
   if (duration_between <= 0.0) {
     return *it_lower;
   }
-  
+
   const double interpolation_ratio = duration_to_lower / duration_between;
-  
+
   // 插值位置
   const Eigen::Vector3d translation = 
       it_lower->pose.translation() + 
       interpolation_ratio * (it_upper->pose.translation() - it_lower->pose.translation());
-  
+
   // 插值旋转（球面线性插值）
   const Eigen::Quaterniond rotation = 
       it_lower->pose.rotation().slerp(interpolation_ratio, it_upper->pose.rotation());
-  
+
   // 插值速度
   const Eigen::Vector3d linear_velocity = 
       it_lower->twist.linear + 
@@ -771,7 +778,7 @@ absl::optional<sensor::OdometryData> DataPreprocessor::GetOdometryAtTime(
   const Eigen::Vector3d angular_velocity = 
       it_lower->twist.angular + 
       interpolation_ratio * (it_upper->twist.angular - it_lower->twist.angular);
-  
+
   return sensor::OdometryData{time, transform::Rigid3d(translation, rotation), 
                              sensor::Twist{linear_velocity, angular_velocity}};
 }
