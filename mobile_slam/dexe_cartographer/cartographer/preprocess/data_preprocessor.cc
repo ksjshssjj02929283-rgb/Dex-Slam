@@ -672,14 +672,14 @@ void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data
 void DataPreprocessor::TrimOdomData()
 {
   // 简化逻辑：限制缓冲区最大大小为500个数据点
-  static const size_t MAX_ODOM_BUFFER_SIZE = 500;
+  static const size_t MAX_ODOM_BUFFER_SIZE = 100;
   
   if (odom_data_buff_.empty()) {
     return;
   }
   
   // 当缓冲区大小超过500时，删除最旧的数据点
-  if (odom_data_buff_.size() > MAX_ODOM_BUFFER_SIZE) {
+  while (odom_data_buff_.size() > MAX_ODOM_BUFFER_SIZE) {
     odom_data_buff_.pop_front();
   }
 }
