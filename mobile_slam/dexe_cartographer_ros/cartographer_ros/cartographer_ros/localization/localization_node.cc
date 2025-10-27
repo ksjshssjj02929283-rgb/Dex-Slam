@@ -124,7 +124,7 @@ LocalizationNode::LocalizationNode(
     node_(node),
     localization_updater_bridge_(node_options_, std::move(localization_updater), tf_buffer.get())
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
 
   // TF 广播器  
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
@@ -263,7 +263,7 @@ void LocalizationNode::HandleSubmapQuery(
     const std::shared_ptr<cartographer_ros_msgs::srv::SubmapQuery::Request> request,
     std::shared_ptr<cartographer_ros_msgs::srv::SubmapQuery::Response> response)
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   
   // 调用bridge处理请求
   localization_updater_bridge_.HandleSubmapQuery(*request, *response);
@@ -276,7 +276,7 @@ void LocalizationNode::HandleTrajectoryQuery(
     const std::shared_ptr<cartographer_ros_msgs::srv::TrajectoryQuery::Request> request,
     std::shared_ptr<cartographer_ros_msgs::srv::TrajectoryQuery::Response> response)
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   response->status = TrajectoryStateToStatus(
       request->trajectory_id,
       {TrajectoryState::ACTIVE, TrajectoryState::FINISHED, TrajectoryState::FROZEN});
@@ -356,7 +356,7 @@ void LocalizationNode::PublishLocalizationState()
 
 void LocalizationNode::PublishLocalTrajectoryData()
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
 
       // 首次发布全局地图及全局特征  
     static bool first_publish_map = true;
@@ -596,7 +596,7 @@ bool LocalizationNode::SaveMap(
 
 void LocalizationNode::PublishSubmapList()
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   if (submap_list_publisher_) {
     submap_list_publisher_->publish(localization_updater_bridge_.GetSubmapList());
   }
@@ -606,7 +606,7 @@ void LocalizationNode::PublishTrajectoryNodeList()
 {
   if (trajectory_node_list_publisher_ &&
       trajectory_node_list_publisher_->get_subscription_count() > 0) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(&localization_updater_mutex_);
     trajectory_node_list_publisher_->publish(
         localization_updater_bridge_.GetTrajectoryNodeList());
   }
@@ -616,7 +616,7 @@ void LocalizationNode::PublishLandmarkPosesList()
 {
   if (landmark_poses_list_publisher_ &&
       landmark_poses_list_publisher_->get_subscription_count() > 0) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(&localization_updater_mutex_);
     landmark_poses_list_publisher_->publish(
         localization_updater_bridge_.GetLandmarkPosesList());
   }
@@ -626,7 +626,7 @@ void LocalizationNode::PublishConstraintList()
 {
   if (constraint_list_publisher_ &&
       constraint_list_publisher_->get_subscription_count() > 0) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(&localization_updater_mutex_);
     constraint_list_publisher_->publish(localization_updater_bridge_.GetConstraintList());
   }
 }
@@ -925,15 +925,14 @@ void LocalizationNode::HandleStartTrajectory(
 
 void LocalizationNode::StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options)
 {
-  absl::MutexLock lock(&mutex_);
   // 检查是否有是否有轨迹优化器参数
   CHECK(ValidateTrajectoryOptions(options));
-  // 创建轨迹优化器
+  // 创建轨迹优化器（内部使用对应的锁）
   AddTrajectory(options);
 }
 
 void LocalizationNode::FinishAllTrajectories() {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   for (const auto& entry : localization_updater_bridge_.GetTrajectoryStates()) {
     if (entry.second == TrajectoryState::ACTIVE) {
       const int trajectory_id = entry.first;
@@ -951,7 +950,7 @@ void LocalizationNode::HandleGetTrajectoryStates(
 {
   using TrajectoryState =
       ::cartographer::mapping::PoseGraphInterface::TrajectoryState;
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   response->status.code = ::cartographer_ros_msgs::msg::StatusCode::OK;
   response->trajectory_states.header.stamp = node_->get_clock()->now();
   for (const auto& entry : localization_updater_bridge_.GetTrajectoryStates()) {
@@ -981,7 +980,7 @@ void LocalizationNode::HandleFinishTrajectory(
     const std::shared_ptr<cartographer_ros_msgs::srv::FinishTrajectory::Request> request,
     std::shared_ptr<cartographer_ros_msgs::srv::FinishTrajectory::Response> response)
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   response->status = FinishTrajectoryUnderLock(request->trajectory_id);
 }
 
@@ -989,7 +988,7 @@ void LocalizationNode::HandleWriteState(
     const std::shared_ptr<cartographer_ros_msgs::srv::WriteState::Request> request,
     std::shared_ptr<cartographer_ros_msgs::srv::WriteState::Response> response)
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   if (localization_updater_bridge_.SerializeState(request->filename,
                                                  request->include_unfinished_submaps)) {
     response->status.code = cartographer_ros_msgs::msg::StatusCode::OK;
@@ -1163,26 +1162,11 @@ void LocalizationNode::HandleOdometryMessage(
   const int trajectory_id, const std::string& sensor_id,
   const nav_msgs::msg::Odometry::ConstSharedPtr& msg)
 {
-  absl::MutexLock lock(&mutex_);
-  // 统计每个 sensor_id 的数据频率
-  static std::map<std::string, std::pair<rclcpp::Time, int>> sensor_freq_map;
-  auto now = msg->header.stamp;
-  auto& entry = sensor_freq_map[sensor_id];
-  entry.second++;
-  if (entry.first.nanoseconds() == 0) {
-  entry.first = now;
-  } else {
-  double dt = (rclcpp::Time(now) - entry.first).seconds();
-  if (dt > 1.0) { // 每秒统计一次
-    double freq = entry.second / dt;
-    RCLCPP_INFO(node_->get_logger(), "Odometry sensor_id [%s] freq: %.2f Hz", sensor_id.c_str(), freq);
-    entry.first = now;
-    entry.second = 0;
-  }
-  }
-
-  if (!sensor_samplers_.at(trajectory_id).odometry_sampler.Pulse()) {
-  return;
+  {
+    absl::MutexLock lock(&sensor_samplers_mutex_);
+    if (!sensor_samplers_.at(trajectory_id).odometry_sampler.Pulse()) {
+      return;
+    }
   }
   auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
   // auto odometry_data_ptr = sensor_bridge_ptr->ToOdometryData(msg);
@@ -1198,9 +1182,11 @@ void LocalizationNode::HandleNavSatFixMessage(
     const int trajectory_id, const std::string& sensor_id,
     const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg)
 {
-  absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).fixed_frame_pose_sampler.Pulse()) {
-    return;
+  {
+    absl::MutexLock lock(&sensor_samplers_mutex_);
+    if (!sensor_samplers_.at(trajectory_id).fixed_frame_pose_sampler.Pulse()) {
+      return;
+    }
   }
   localization_updater_bridge_.sensor_bridge(trajectory_id)
       ->HandleNavSatFixMessage(sensor_id, msg);
@@ -1211,9 +1197,11 @@ void LocalizationNode::HandleLandmarkMessage(
     const int trajectory_id, const std::string& sensor_id,
     const cartographer_ros_msgs::msg::LandmarkList::ConstSharedPtr& msg)
 {
-  absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).landmark_sampler.Pulse()) {
-    return;
+  {
+    absl::MutexLock lock(&sensor_samplers_mutex_);
+    if (!sensor_samplers_.at(trajectory_id).landmark_sampler.Pulse()) {
+      return;
+    }
   }
   localization_updater_bridge_.sensor_bridge(trajectory_id)
       ->HandleLandmarkMessage(sensor_id, msg);
@@ -1224,9 +1212,11 @@ void LocalizationNode::HandleImuMessage(
     const int trajectory_id, const std::string& sensor_id,
     const sensor_msgs::msg::Imu::ConstSharedPtr& msg)
 {
-  absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).imu_sampler.Pulse()) {
-    return;
+  {
+    absl::MutexLock lock(&sensor_samplers_mutex_);
+    if (!sensor_samplers_.at(trajectory_id).imu_sampler.Pulse()) {
+      return;
+    }
   }
   auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
   auto imu_data_ptr = sensor_bridge_ptr->ToImuData(msg);
@@ -1242,26 +1232,11 @@ void LocalizationNode::HandleLaserScanMessage(
   const int trajectory_id, const std::string& sensor_id,
   const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg)
 {
-  absl::MutexLock lock(&mutex_);
-  // 统计每个 sensor_id 的数据频率
-  static std::map<std::string, std::pair<rclcpp::Time, int>> sensor_freq_map;
-  auto now = msg->header.stamp;
-  auto& entry = sensor_freq_map[sensor_id];
-  entry.second++;
-  if (entry.first.nanoseconds() == 0) {
-  entry.first = now;
-  } else {
-  double dt = (rclcpp::Time(now) - entry.first).seconds();
-  if (dt > 1.0) { // 每秒统计一次
-    double freq = entry.second / dt;
-    RCLCPP_INFO(node_->get_logger(), "LaserScan sensor_id [%s] freq: %.2f Hz", sensor_id.c_str(), freq);
-    entry.first = now;
-    entry.second = 0;
-  }
-  }
-
-  if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
-  return;
+  {
+    absl::MutexLock lock(&sensor_samplers_mutex_);
+    if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
+      return;
+    }
   }
   localization_updater_bridge_.sensor_bridge(trajectory_id)
     ->HandleLaserScanMessage(sensor_id, msg);
@@ -1272,9 +1247,11 @@ void LocalizationNode::HandlePointCloud2Message(
     const int trajectory_id, const std::string& sensor_id,
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg)
 {
-  absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
-    return;
+  {
+    absl::MutexLock lock(&sensor_samplers_mutex_);
+    if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
+      return;
+    }
   }
   localization_updater_bridge_.sensor_bridge(trajectory_id)
       ->HandlePointCloud2Message(sensor_id, msg);
@@ -1283,7 +1260,7 @@ void LocalizationNode::HandlePointCloud2Message(
 void LocalizationNode::SerializeState(const std::string& filename,
                                       const bool include_unfinished_submaps)
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   CHECK(
       localization_updater_bridge_.SerializeState(filename, include_unfinished_submaps))
       << "Could not write state.";
@@ -1293,14 +1270,14 @@ void LocalizationNode::SerializeState(const std::string& filename,
 void LocalizationNode::LoadState(const std::string& state_filename,
                                  const bool load_frozen_state)
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   localization_updater_bridge_.LoadState(state_filename, load_frozen_state);
 }
 
 
 void LocalizationNode::LoadMapData(const std::string& map_filename)
 {
-  absl::MutexLock lock(&mutex_);
+  absl::MutexLock lock(&localization_updater_mutex_);
   localization_updater_bridge_.LoadMapData(map_filename);
 }
 

@@ -171,7 +171,7 @@ private:
   bool ValidateTrajectoryOptions(const TrajectoryOptions& options);
   bool ValidateTopicNames(const TrajectoryOptions& options);
   cartographer_ros_msgs::msg::StatusResponse FinishTrajectoryUnderLock(
-    int trajectory_id) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+    int trajectory_id) EXCLUSIVE_LOCKS_REQUIRED(localization_updater_mutex_);
   void MaybeWarnAboutTopicMismatch();
 
   cartographer_ros_msgs::msg::StatusResponse TrajectoryStateToStatus(
@@ -189,11 +189,15 @@ private:
   // TF broadcaster (ROS2)
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
+  // Thread-safety: 拆分为两个独立的 mutex 以减少锁竞争
+  absl::Mutex localization_updater_mutex_;  // 保护 localization_updater_bridge_ 的访问
+  absl::Mutex sensor_samplers_mutex_;       // 保护 sensor_samplers_ 的访问
+
   // Metrics registry
   std::unique_ptr<cartographer_ros::metrics::FamilyFactory> metrics_registry_;
 
   // Bridge（非 Node，ROS2 化）
-  LocalizationUpdaterBridge localization_updater_bridge_ GUARDED_BY(mutex_);
+  LocalizationUpdaterBridge localization_updater_bridge_ GUARDED_BY(localization_updater_mutex_);
 
   // Publishers
   rclcpp::Publisher<cartographer_ros_msgs::msg::SubmapList>::SharedPtr submap_list_publisher_;
@@ -244,7 +248,7 @@ private:
   };
 
   std::map<int, rclcpp::Time> last_published_tf_stamps_;
-  std::unordered_map<int, TrajectorySensorSamplers> sensor_samplers_;
+  std::unordered_map<int, TrajectorySensorSamplers> sensor_samplers_ GUARDED_BY(sensor_samplers_mutex_);
 
   // Subscribers grouped by trajectory
   std::unordered_map<int, std::vector<Subscriber>> subscribers_;
@@ -266,9 +270,6 @@ private:
 
   // Flags
   bool need_set_pose_in_filter_ = false;
-
-  // Thread-safety
-  absl::Mutex mutex_;
 };
 
 }  // namespace localization
