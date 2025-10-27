@@ -87,8 +87,11 @@ template <typename MessageType>
                           const typename MessageType::ConstSharedPtr&),
     const int trajectory_id, const std::string& topic,
     ::rclcpp::Node::SharedPtr node_handle, LocalizationNode* const node) {
+
+  auto qos = rclcpp::SystemDefaultsQoS();
+
   return node_handle->create_subscription<MessageType>(
-      topic, rclcpp::SensorDataQoS(),
+      topic, qos,
       [node, handler, trajectory_id, topic](const typename MessageType::ConstSharedPtr msg) {
             (node->*handler)(trajectory_id, topic, msg);
           });
@@ -1157,12 +1160,29 @@ void LocalizationNode::HandleInitialPoseMessage(
 
 
 void LocalizationNode::HandleOdometryMessage(
-    const int trajectory_id, const std::string& sensor_id,
-    const nav_msgs::msg::Odometry::ConstSharedPtr& msg)
+  const int trajectory_id, const std::string& sensor_id,
+  const nav_msgs::msg::Odometry::ConstSharedPtr& msg)
 {
   absl::MutexLock lock(&mutex_);
+  // 统计每个 sensor_id 的数据频率
+  static std::map<std::string, std::pair<rclcpp::Time, int>> sensor_freq_map;
+  auto now = msg->header.stamp;
+  auto& entry = sensor_freq_map[sensor_id];
+  entry.second++;
+  if (entry.first.nanoseconds() == 0) {
+  entry.first = now;
+  } else {
+  double dt = (rclcpp::Time(now) - entry.first).seconds();
+  if (dt > 1.0) { // 每秒统计一次
+    double freq = entry.second / dt;
+    RCLCPP_INFO(node_->get_logger(), "Odometry sensor_id [%s] freq: %.2f Hz", sensor_id.c_str(), freq);
+    entry.first = now;
+    entry.second = 0;
+  }
+  }
+
   if (!sensor_samplers_.at(trajectory_id).odometry_sampler.Pulse()) {
-    return;
+  return;
   }
   auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
   // auto odometry_data_ptr = sensor_bridge_ptr->ToOdometryData(msg);
@@ -1219,15 +1239,32 @@ void LocalizationNode::HandleImuMessage(
 
 
 void LocalizationNode::HandleLaserScanMessage(
-    const int trajectory_id, const std::string& sensor_id,
-    const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg)
+  const int trajectory_id, const std::string& sensor_id,
+  const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg)
 {
   absl::MutexLock lock(&mutex_);
+  // 统计每个 sensor_id 的数据频率
+  static std::map<std::string, std::pair<rclcpp::Time, int>> sensor_freq_map;
+  auto now = msg->header.stamp;
+  auto& entry = sensor_freq_map[sensor_id];
+  entry.second++;
+  if (entry.first.nanoseconds() == 0) {
+  entry.first = now;
+  } else {
+  double dt = (rclcpp::Time(now) - entry.first).seconds();
+  if (dt > 1.0) { // 每秒统计一次
+    double freq = entry.second / dt;
+    RCLCPP_INFO(node_->get_logger(), "LaserScan sensor_id [%s] freq: %.2f Hz", sensor_id.c_str(), freq);
+    entry.first = now;
+    entry.second = 0;
+  }
+  }
+
   if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
-    return;
+  return;
   }
   localization_updater_bridge_.sensor_bridge(trajectory_id)
-      ->HandleLaserScanMessage(sensor_id, msg);
+    ->HandleLaserScanMessage(sensor_id, msg);
 }
 
 
