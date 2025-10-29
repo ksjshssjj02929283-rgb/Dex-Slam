@@ -66,9 +66,11 @@ template <typename MessageType>
     void (Node::*handler)(int, const std::string&,
                           const typename MessageType::ConstSharedPtr&),
     const int trajectory_id, const std::string& topic,
-    ::rclcpp::Node::SharedPtr node_handle, Node* const node) {
+    ::rclcpp::Node::SharedPtr node_handle, Node* const node,
+    const rclcpp::QoS& qos = rclcpp::SystemDefaultsQoS()) {
+
   return node_handle->create_subscription<MessageType>(
-      topic, rclcpp::SensorDataQoS(),
+      topic, qos,
       [node, handler, trajectory_id, topic](const typename MessageType::ConstSharedPtr msg) {
             (node->*handler)(trajectory_id, topic, msg);
           });
@@ -795,70 +797,86 @@ int Node::AddTrajectory(const TrajectoryOptions& options) {
  */
 void Node::LaunchSubscribers(const TrajectoryOptions& options,
                              const int trajectory_id) {
-  // noted by hz: 如果有多个激光雷达，会同时订阅多个laser数据，并传入 数据同步器 中，进行时间同步
+  auto node_handle = node_;
+
+  // 激光扫描和点云频率较低，使用 BEST_EFFORT 减少延迟
+  auto range_sensor_qos = rclcpp::QoS(rclcpp::KeepLast(50))
+                              .reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT)
+                              .durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+  
+  // IMU 和 Odometry 频率高，需要大缓冲和可靠传输
+  auto high_freq_sensor_qos = rclcpp::QoS(rclcpp::KeepLast(1000))
+                                  .reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE)
+                                  .durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+
+  // LaserScan
   for (const std::string& topic :
        ComputeRepeatedTopicNames(kLaserScanTopic, options.num_laser_scans)) {
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<sensor_msgs::msg::LaserScan>(
-             &Node::HandleLaserScanMessage, trajectory_id, topic, node_, this),
+             &Node::HandleLaserScanMessage, trajectory_id, topic, node_handle, this,
+             range_sensor_qos),
          topic});
-    // added by hz for test
-    std::cout << "\033[92;1m[hz test LaunchSubscribers]\033[0m Topic: " << topic <<std::endl;
-    // end
   }
+
+  // MultiEchoLaserScan
   for (const std::string& topic : ComputeRepeatedTopicNames(
            kMultiEchoLaserScanTopic, options.num_multi_echo_laser_scans)) {
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<sensor_msgs::msg::MultiEchoLaserScan>(
-             &Node::HandleMultiEchoLaserScanMessage, trajectory_id, topic, node_, this),
+             &Node::HandleMultiEchoLaserScanMessage, trajectory_id, topic, node_handle, this,
+             range_sensor_qos),
          topic});
   }
+
+  // PointCloud2
   for (const std::string& topic :
        ComputeRepeatedTopicNames(kPointCloud2Topic, options.num_point_clouds)) {
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<sensor_msgs::msg::PointCloud2>(
-             &Node::HandlePointCloud2Message, trajectory_id, topic, node_, this),
+             &Node::HandlePointCloud2Message, trajectory_id, topic, node_handle, this,
+             range_sensor_qos),
          topic});
   }
 
-  // For 2D SLAM, subscribe to the IMU if we expect it. For 3D SLAM, the IMU is
-  // required.
+  // IMU
   if (node_options_.map_builder_options.use_trajectory_builder_3d() ||
       (node_options_.map_builder_options.use_trajectory_builder_2d() &&
        options.trajectory_builder_options.trajectory_builder_2d_options()
            .use_imu_data())) {
-    // added by hz for test
-    std::cout << "\033[92;1m[hz test LaunchSubscribers]\033[0m kImuTopic: " << kImuTopic <<std::endl;
-    // end
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<sensor_msgs::msg::Imu>(&Node::HandleImuMessage,
                                                 trajectory_id, kImuTopic,
-                                                node_, this),
+                                                node_handle, this,
+                                                high_freq_sensor_qos),
          kImuTopic});
   }
 
+  // Odometry
   if (options.use_odometry) {
-    // added by hz for test
-    std::cout << "\033[92;1m[hz test LaunchSubscribers]\033[0m kOdometryTopic: " << kOdometryTopic <<std::endl;
-    // end
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<nav_msgs::msg::Odometry>(&Node::HandleOdometryMessage,
                                                   trajectory_id, kOdometryTopic,
-                                                  node_, this),
+                                                  node_handle, this,
+                                                  high_freq_sensor_qos),
          kOdometryTopic});
   }
+
+  // NavSatFix
   if (options.use_nav_sat) {
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<sensor_msgs::msg::NavSatFix>(
              &Node::HandleNavSatFixMessage, trajectory_id, kNavSatFixTopic,
-             node_, this),
+             node_handle, this),
          kNavSatFixTopic});
   }
+
+  // Landmarks
   if (options.use_landmarks) {
     subscribers_[trajectory_id].push_back(
         {SubscribeWithHandler<cartographer_ros_msgs::msg::LandmarkList>(
              &Node::HandleLandmarkMessage, trajectory_id, kLandmarkTopic,
-             node_, this),
+             node_handle, this),
          kLandmarkTopic});
   }
 }

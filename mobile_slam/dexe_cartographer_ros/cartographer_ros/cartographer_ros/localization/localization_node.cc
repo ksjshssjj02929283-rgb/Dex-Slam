@@ -86,9 +86,8 @@ template <typename MessageType>
     void (LocalizationNode::*handler)(int, const std::string&,
                           const typename MessageType::ConstSharedPtr&),
     const int trajectory_id, const std::string& topic,
-    ::rclcpp::Node::SharedPtr node_handle, LocalizationNode* const node) {
-
-  auto qos = rclcpp::SystemDefaultsQoS();
+    ::rclcpp::Node::SharedPtr node_handle, LocalizationNode* const node,
+    const rclcpp::QoS& qos = rclcpp::SystemDefaultsQoS()) {
 
   return node_handle->create_subscription<MessageType>(
       topic, qos,
@@ -130,9 +129,7 @@ LocalizationNode::LocalizationNode(
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
 
   // QoS  
-  auto qos_latest = rclcpp::QoS(rclcpp::KeepLast(kLatestOnlyPublisherQueueSize)).best_effort();
   auto qos_latched = rclcpp::QoS(rclcpp::KeepLast(kLatestOnlyPublisherQueueSize)).transient_local().reliable();
-  auto qos_sensor = rclcpp::SensorDataQoS();
 
   // 发布者  
   submap_list_publisher_ = node_->create_publisher<cartographer_ros_msgs::msg::SubmapList>(
@@ -703,7 +700,20 @@ void LocalizationNode::LaunchSubscribers(const TrajectoryOptions& options,
   // 使用传入的node_成员变量  
   auto node_handle = node_;  
 
-  // LaserScan  
+  // 🔧 Range sensors (LaserScan & PointCloud2): BEST_EFFORT QoS
+  // 激光扫描和点云频率较低，使用 BEST_EFFORT 减少延迟
+  auto range_sensor_qos = rclcpp::QoS(rclcpp::KeepLast(50))
+                              .reliability(RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT)
+                              .durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+  
+  // 🔧 High-frequency sensors (IMU & Odometry): RELIABLE QoS with large buffer
+  // IMU 和 Odometry 频率高，需要大缓冲和可靠传输
+  // 启动时需要足够的历史数据用于点云去畸变
+  auto high_freq_sensor_qos = rclcpp::QoS(rclcpp::KeepLast(1000))
+                                  .reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE)
+                                  .durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+
+  // LaserScan
   for (const std::string& topic :  
        ComputeRepeatedTopicNames(kLaserScanTopic, options.num_laser_scans)) {  
     auto sub = SubscribeWithHandler<sensor_msgs::msg::LaserScan>(  
@@ -711,11 +721,12 @@ void LocalizationNode::LaunchSubscribers(const TrajectoryOptions& options,
         trajectory_id,  
         topic,  
         node_handle,  
-        this);  
-    subscribers_[trajectory_id].push_back({sub, topic});  
+        this,
+        range_sensor_qos);  
+    subscribers_[trajectory_id].push_back({sub, topic});
   }  
 
-  // PointCloud2  
+  // PointCloud2
   for (const std::string& topic :  
        ComputeRepeatedTopicNames(kPointCloud2Topic, options.num_point_clouds)) {  
     auto sub = SubscribeWithHandler<sensor_msgs::msg::PointCloud2>(  
@@ -723,30 +734,33 @@ void LocalizationNode::LaunchSubscribers(const TrajectoryOptions& options,
         trajectory_id,  
         topic,  
         node_handle,  
-        this);  
-    subscribers_[trajectory_id].push_back({sub, topic});  
+        this,
+        range_sensor_qos);  
+    subscribers_[trajectory_id].push_back({sub, topic});
   }  
 
-  // IMU  
-  if (options.trajectory_builder_options.trajectory_builder_2d_options().use_imu_data()) {  
+  // IMU
+  if (options.trajectory_builder_options.trajectory_builder_2d_options().use_imu_data()) {
     auto sub = SubscribeWithHandler<sensor_msgs::msg::Imu>(  
         &LocalizationNode::HandleImuMessage,  
         trajectory_id,  
         kImuTopic,  
         node_handle,  
-        this);  
-    subscribers_[trajectory_id].push_back({sub, kImuTopic});  
+        this,
+        high_freq_sensor_qos);  
+    subscribers_[trajectory_id].push_back({sub, kImuTopic});
   }  
 
-  // Odometry  
-  if (options.use_odometry) {  
+  // Odometry
+  if (options.use_odometry) {
     auto sub = SubscribeWithHandler<nav_msgs::msg::Odometry>(  
         &LocalizationNode::HandleOdometryMessage,  
         trajectory_id,  
         kOdometryTopic,  
         node_handle,  
-        this);  
-    subscribers_[trajectory_id].push_back({sub, kOdometryTopic});  
+        this,
+        high_freq_sensor_qos);  
+    subscribers_[trajectory_id].push_back({sub, kOdometryTopic});
   }  
 
   // NavSatFix  
@@ -1169,11 +1183,6 @@ void LocalizationNode::HandleOdometryMessage(
     }
   }
   auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
-  // auto odometry_data_ptr = sensor_bridge_ptr->ToOdometryData(msg);
-  // if (odometry_data_ptr != nullptr &&
-  //     !sensor_bridge_ptr->IgnoreMessage(sensor_id, odometry_data_ptr->time)) {
-  //   extrapolators_.at(trajectory_id).AddOdometryData(*odometry_data_ptr);
-  // }
   sensor_bridge_ptr->HandleOdometryMessage(sensor_id, msg);
 }
 
