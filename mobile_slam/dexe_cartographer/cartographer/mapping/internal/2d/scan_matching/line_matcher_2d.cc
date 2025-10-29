@@ -48,6 +48,8 @@ proto::LineMatcherOptions CreateLineMatcherOptions2D(
     parameter_dictionary->GetDouble("line_delta_tra_elongation_threshold"));
   options.set_min_delta_tra_parallel(
     parameter_dictionary->GetDouble("min_delta_tra_parallel"));
+  options.set_max_match_distance(
+    parameter_dictionary->GetDouble("max_match_distance"));
   return options;
 }
 
@@ -95,7 +97,8 @@ void LineMatcher2D::TrackLineFromMap(
   for (size_t i = 0; i < line_data.size(); i++) {
     int local_id;
     sensor::LineData new_data(line_data[i]);
-    if (new_data.begin().norm() > 7.0 || new_data.end().norm() > 7.0) {
+    if (new_data.begin().norm() > options_.max_match_distance() || 
+        new_data.end().norm() > options_.max_match_distance()) {
       continue;
     }
     if (GetNearestLaneLine(pose_prediction, line_data[i],
@@ -133,7 +136,8 @@ void LineMatcher2D::TrackLineFromMap(
     for (size_t i = 0; i < it.second.size(); i++) {
       int local_id;
       sensor::LineData new_data(it.second[i]);
-      if (new_data.begin().norm() > 7.0 || new_data.end().norm() > 7.0) {
+      if (new_data.begin().norm() > options_.max_match_distance() || 
+          new_data.end().norm() > options_.max_match_distance()) {
         continue;
       }
       if (GetNearestLaneLine(pose_prediction, it.second[i],

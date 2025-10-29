@@ -135,7 +135,8 @@ POSE_ESTIMATOR_2D = {
   estimator_line_matcher = {
     line_delta_theta_threshold = math.rad(10.),
     line_delta_tra_elongation_threshold = 0.5,
-    min_delta_tra_parallel = 0.1;
+    min_delta_tra_parallel = 0.1,
+    max_match_distance = 12.0,
   },
 
   -- TODO(schwoere,wohe): Remove this constant. This is only kept for ROS.

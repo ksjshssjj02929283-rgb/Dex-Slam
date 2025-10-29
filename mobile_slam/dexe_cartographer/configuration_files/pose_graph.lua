@@ -65,7 +65,8 @@ POSE_GRAPH = {
     line_matcher_2d = {
       line_delta_theta_threshold = math.rad(5.),
       line_delta_tra_elongation_threshold = 0.5,
-      min_delta_tra_parallel = 0.1;
+      min_delta_tra_parallel = 0.1,
+      max_match_distance = 12.0,
     },
   },
   matcher_translation_weight = 5e2,

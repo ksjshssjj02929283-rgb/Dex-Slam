@@ -47,7 +47,8 @@ POSE_INITIALIZER_2D = {
   initializer_line_matcher = {
     line_delta_theta_threshold = math.rad(10.),
     line_delta_tra_elongation_threshold = 1.0,
-    min_delta_tra_parallel = 0.1;
+    min_delta_tra_parallel = 0.1,
+    max_match_distance = 12.0,
   },
 }
 
