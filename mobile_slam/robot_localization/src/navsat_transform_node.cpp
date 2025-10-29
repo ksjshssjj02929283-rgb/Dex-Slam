@@ -42,7 +42,16 @@ int main(int argc, char ** argv)
   const rclcpp::NodeOptions options;
   auto navsat_transform_node = std::make_shared<robot_localization::NavSatTransform>(options);
 
-  rclcpp::spin(navsat_transform_node->get_node_base_interface());
+  // 使用多线程执行器以提高并发性能
+  // 2个线程：处理 GPS 和 odometry 回调
+  rclcpp::executors::MultiThreadedExecutor executor(
+      rclcpp::ExecutorOptions(), 
+      2  // GPS 转换节点只需要较少线程
+  );
+  
+  executor.add_node(navsat_transform_node->get_node_base_interface());
+
+  executor.spin();
 
   rclcpp::shutdown();
   return 0;

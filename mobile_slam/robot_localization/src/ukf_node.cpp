@@ -51,7 +51,11 @@ int main(int argc, char ** argv)
   double beta = filter->declare_parameter("beta", 2.0);
   filter->getFilter().setConstants(alpha, kappa, beta);
   filter->initialize();
-  rclcpp::spin(filter->get_node_base_interface());
+  
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+  executor.add_node(filter->get_node_base_interface());
+  executor.spin();
+
   rclcpp::shutdown();
   return 0;
 }
