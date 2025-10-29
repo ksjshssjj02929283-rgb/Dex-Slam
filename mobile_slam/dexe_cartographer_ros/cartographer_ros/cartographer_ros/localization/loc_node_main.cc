@@ -415,8 +415,11 @@ int main(int argc, char** argv) {
   cartographer_ros::ScopedRosLogSink ros_log_sink;
   
   auto node = std::make_shared<cartographer_ros::LocalizationManagerNode>();
-  
-  rclcpp::spin(node);
+
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+  executor.add_node(node);
+  executor.spin();
+
   rclcpp::shutdown();
   
   return 0;
