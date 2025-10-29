@@ -62,7 +62,7 @@ TRAJECTORY_BUILDER_2D.max_range = 50.
 --TRAJECTORY_BUILDER_2D.loop_closure_adaptive_voxel_filter.max_range = 50.
 
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = false  -- csm粗匹配
-TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 1.
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.occupied_space_weight = 30.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 1.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 1.
 --TRAJECTORY_BUILDER_2D.ceres_scan_matcher.ceres_solver_options.max_num_iterations = 12
@@ -78,6 +78,6 @@ POSE_GRAPH.optimize_every_n_nodes = 160.
 POSE_GRAPH.constraint_builder.sampling_ratio = 0.3
 POSE_GRAPH.constraint_builder.max_constraint_distance = 15.
 POSE_GRAPH.constraint_builder.min_score = 0.48
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.60
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.40
 
 return options
