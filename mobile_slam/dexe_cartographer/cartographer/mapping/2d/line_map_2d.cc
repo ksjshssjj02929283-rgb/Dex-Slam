@@ -313,6 +313,7 @@ void LineMap2DList::PushBack(
     std::pair<int, MapLine2D>(
       local_id,
       MapLine2D(local_id, line_data[0])));
+  observations_.insert(std::pair<int, size_t>(local_id, 1));
   
   // If there are multiple line data, use UpdateLineMap for the remaining ones
   if (line_data.size() > 1) {
