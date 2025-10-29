@@ -26,6 +26,7 @@
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
 #include "cartographer/sensor/timed_point_cloud_data.h"
+#include "cartographer/sensor/odometry_data.h"
 #include "glog/logging.h"
 
 namespace cartographer {
@@ -69,6 +70,13 @@ class LaserSynchronizer {
                     const sensor::TimedPointCloudData& timed_point_cloud_data);
 
   /**
+   * @brief 添加里程计数据
+   * @param odometry_data 里程计数据
+   * @return 是否成功添加
+   */
+  bool AddOdometryData(const sensor::OdometryData& odometry_data);
+
+  /**
    * @brief 获取同步后的激光雷达数据
    * @return 同步后的数据结构，如果无法同步则返回无效数据
    */
@@ -107,12 +115,18 @@ class LaserSynchronizer {
    */
   void RemoveOldData(const common::Time& cutoff_time);
 
+  // 激光数据最早不能早于里程计数据的最大时间差（秒）
+  static constexpr double kMaxLaserOdomTimeDiff = 0.1;
+
   const std::vector<std::string> expected_sensor_ids_;
   const double max_time_diff_seconds_;
   const size_t buffer_size_;
 
   // 每个传感器的数据缓冲区
   std::map<std::string, std::deque<sensor::TimedPointCloudData>> sensor_buffers_;
+  
+  // 里程计数据缓冲区
+  std::deque<sensor::OdometryData> odom_buffer_;
   
   // 最新的同步时间
   absl::optional<common::Time> latest_sync_time_;

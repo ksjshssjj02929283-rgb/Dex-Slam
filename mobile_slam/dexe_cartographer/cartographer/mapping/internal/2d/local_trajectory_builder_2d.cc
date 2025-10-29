@@ -521,6 +521,9 @@ void LocalTrajectoryBuilder2D::AddOdometryData(
   if (data_preprocessor_) {
     data_preprocessor_->AddOdometryData(curr_odom_data_);
   }
+    
+  // 将里程计数据添加到激光同步器，用于时间一致性检查
+  laser_synchronizer_.AddOdometryData(odometry_data);
 }
 
 void LocalTrajectoryBuilder2D::InitializeExtrapolator(const common::Time time) {

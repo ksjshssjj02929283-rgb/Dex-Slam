@@ -74,6 +74,19 @@ bool LaserSynchronizer::AddLaserData(
   return true;
 }
 
+bool LaserSynchronizer::AddOdometryData(const sensor::OdometryData& odometry_data) {
+  // 添加里程计数据到缓冲区
+  odom_buffer_.push_back(odometry_data);
+
+  // 限制缓冲区大小（保持足够长的历史记录，至少buffer_size_ * 10）
+  const size_t max_odom_buffer_size = buffer_size_ * 10;
+  while (odom_buffer_.size() > max_odom_buffer_size) {
+    odom_buffer_.pop_front();
+  }
+
+  return true;
+}
+
 LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData() {
   SynchronizedLaserData result;
   
@@ -92,6 +105,45 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
   // 使用第一个传感器的第一帧数据作为同步基准
   const sensor::TimedPointCloudData& reference_data = reference_buffer.front();
   const common::Time sync_time = reference_data.time;
+
+  // 检查里程计数据的时间同步性
+  // 要求：1. 雷达时间不能比最新里程计数据晚超过0.1s
+  //      2. 雷达数据前0.1s必须有里程计数据（用于去畸变）
+  if (!odom_buffer_.empty()) {
+    const common::Time oldest_odom_time = odom_buffer_.front().time;
+    const common::Time latest_odom_time = odom_buffer_.back().time;
+    
+    // 检查1: 雷达时间不能比最新里程计晚超过0.1s
+    const double time_diff_with_latest = common::ToSeconds(sync_time - latest_odom_time);
+    if (time_diff_with_latest > kMaxLaserOdomTimeDiff) {
+      LOG(WARNING) << "Laser data is too late compared to latest odometry data. "
+                   << "Laser time: " << common::ToUniversal(sync_time)
+                   << ", Latest odom time: " << common::ToUniversal(latest_odom_time)
+                   << ", Time diff: " << time_diff_with_latest << "s (max allowed: "
+                   << kMaxLaserOdomTimeDiff << "s). Removing reference data from "
+                   << reference_sensor_id;
+      reference_buffer.pop_front();
+      return result;  // is_valid = false
+    }
+    
+    // 检查2: 雷达数据前0.1s必须有里程计数据
+    const common::Time required_odom_time = sync_time - common::FromSeconds(kMaxLaserOdomTimeDiff);
+    if (oldest_odom_time > required_odom_time) {
+      LOG(WARNING) << "No odometry data available 0.1s before laser data. "
+                   << "Laser time: " << common::ToUniversal(sync_time)
+                   << ", Required odom time: " << common::ToUniversal(required_odom_time)
+                   << ", Oldest odom time: " << common::ToUniversal(oldest_odom_time)
+                   << ". Removing reference data from " << reference_sensor_id;
+      reference_buffer.pop_front();
+      return result;  // is_valid = false
+    }
+  } else {
+    // 如果没有里程计数据，同步失败
+    LOG(WARNING) << "No odometry data available for synchronization. "
+                 << "Removing reference data from " << reference_sensor_id;
+    reference_buffer.pop_front();
+    return result;  // is_valid = false
+  }
   
   result.sync_time = sync_time;
   result.laser_data_map[reference_sensor_id] = reference_data;
