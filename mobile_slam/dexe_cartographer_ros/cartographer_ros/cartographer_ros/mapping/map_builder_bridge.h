@@ -64,7 +64,6 @@ class MapBuilderBridge {
   struct LocalSlamData {
     ::cartographer::common::Time time;  // 时间
     ::cartographer::transform::Rigid3d local_pose;  // 本体在局部坐标系中的位姿 base_to_local
-    std::vector<::cartographer::transform::Rigid2d> particle_poses;
     ::cartographer::sensor::RangeData range_data_in_local;  // 局部坐标系下的激光数据
     std::shared_ptr<::cartographer::sensor::PointCloud> local_map;
     std::map<int, std::vector<::cartographer::sensor::LineData>>  line_data_in_local;
@@ -146,7 +145,6 @@ class MapBuilderBridge {
   void OnLocalSlamResult(const int trajectory_id,
                          const ::cartographer::common::Time time,
                          const ::cartographer::transform::Rigid3d local_pose,
-            std::vector<::cartographer::transform::Rigid2d> particle_poses,
             ::cartographer::sensor::RangeData range_data_in_local,
             std::shared_ptr<::cartographer::sensor::PointCloud> local_map,
             std::map<int, std::vector<::cartographer::sensor::LineData>>  line_data_in_local,

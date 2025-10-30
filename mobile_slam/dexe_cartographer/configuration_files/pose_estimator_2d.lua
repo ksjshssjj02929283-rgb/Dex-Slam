@@ -13,7 +13,6 @@
 -- limitations under the License.
 
 include "pose_initializer_2d.lua"
-include "amcl_core.lua"
 
 POSE_ESTIMATOR_2D = {
   use_imu_data = true,
@@ -25,7 +24,6 @@ POSE_ESTIMATOR_2D = {
   voxel_filter_size = 0.04,
 
   pose_initializer_2d = POSE_INITIALIZER_2D,
-  amcl_core = AMCL_CORE,
   auto_trigger_global_relocalization = true,  -- 控制是否自动触发全局重定位
 
   adaptive_voxel_filter = {

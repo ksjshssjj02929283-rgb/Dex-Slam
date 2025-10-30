@@ -140,8 +140,6 @@ LocalizationNode::LocalizationNode(
       kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
   constraint_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
       kConstraintListTopic, kLatestOnlyPublisherQueueSize);
-  particle_poses_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseArray>(
-      kParticlePosesTopic, kLatestOnlyPublisherQueueSize);
 
   // 发布跟踪的位姿
   if (node_options_.publish_tracked_pose) {
@@ -546,24 +544,6 @@ void LocalizationNode::PublishLocalTrajectoryData()
         // tracked_path_msg_.header.frame_id = node_options_.map_frame;
         // tracked_path_msg_.poses.push_back(pose_stamped_msg);
         // tracked_path_publisher_->publish(tracked_path_msg_);
-
-        // 发布粒子姿态（可选）
-        if (particle_poses_publisher_ && particle_poses_publisher_->get_subscription_count() > 0) {
-          const auto& pf_poses = trajectory_data.local_slam_data->particle_poses;
-          geometry_msgs::msg::PoseArray pose_array_msg;
-          pose_array_msg.header.stamp = stamped_transform.header.stamp;
-          pose_array_msg.header.frame_id = node_options_.map_frame;
-          pose_array_msg.poses.resize(pf_poses.size());
-          for (size_t i = 0; i < pf_poses.size(); ++i) {
-            pose_array_msg.poses[i].position.x = pf_poses[i].translation().x();
-            pose_array_msg.poses[i].position.y = pf_poses[i].translation().y();
-            pose_array_msg.poses[i].position.z = 0.;
-            tf2::Quaternion q;
-            q.setRPY(0, 0, pf_poses[i].rotation().angle());
-            pose_array_msg.poses[i].orientation = tf2::toMsg(q);
-          }
-          particle_poses_publisher_->publish(pose_array_msg);
-        }
       }
 
       // 保存位姿（可选）

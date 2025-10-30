@@ -105,7 +105,6 @@ class MapBuilderTestBase : public T {
   MapBuilderInterface::LocalSlamResultCallback GetLocalSlamResultCallback() {
     return [=](const int trajectory_id, const ::cartographer::common::Time time,
                const ::cartographer::transform::Rigid3d local_pose,
-                std::vector<transform::Rigid2d> particle_poses,
                ::cartographer::sensor::RangeData range_data_in_local,
                 std::map<int, std::vector<::cartographer::sensor::LineData>>  line_data_in_local,
                const std::unique_ptr<

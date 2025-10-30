@@ -26,7 +26,6 @@ import "cartographer/mapping/proto/scan_matching/line_matcher_options.proto";
 import "cartographer/mapping/proto/submaps_options_2d.proto";
 import "cartographer/laser_perception/proto/laser_perception_options.proto";
 import "cartographer/localization/proto/pose_initializer_options_2d.proto";
-import "cartographer/localization/proto/amcl_core_options.proto";
 import "cartographer/localization/proto/local_map_updater_options_2d.proto";
 // NEXT ID: 30
 message PoseEstimatorOptions2D {
@@ -86,8 +85,6 @@ message PoseEstimatorOptions2D {
   bool use_imu_data = 12;
 
   PoseInitializerOptions2D pose_initializer_options = 27;
-
-  AMCLCoreOptions amcl_core_options = 28;
 
   LocalMapUpdaterOptions2D local_map_updater_options = 29;
   

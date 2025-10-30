@@ -68,9 +68,6 @@ PoseEstimator2D::PoseEstimator2D(
       std::make_unique<mapping::scan_matching::LineMatcher2D>(
             options_.line_matcher_options());
 
-  amcl_core_ =
-      std::make_unique<amcl::AMCLCore>(options_.amcl_core_options());
-
   local_map_updater_ =
       std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options());
 
@@ -240,8 +237,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
-    std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
-    Eigen::Matrix3d & cov)
+    std::map<int, std::vector<sensor::LineData>> & tracked_lane_data)
 {
   // 1. 如果active_submaps_中没有submap，则直接返回pose_prediction
   //    一般情况下，第一帧激光数据进来时，active_submaps_中没有submap
@@ -311,6 +307,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
   common::TicToc tic_toc;
 
+  Eigen::Matrix3d cov;
   ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
                           filtered_gravity_aligned_point_cloud,
                           highlight_point_cloud,
@@ -326,16 +323,6 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   double match_time = tic_toc.toc();
   // LOG(INFO) << "ceres scan matcher cost time: " << match_time << " ms";
   // time_file_ << match_time << std::endl;
-
-  // ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
-  //                           filtered_gravity_aligned_point_cloud,
-  //                           *laser_perception_->getHighlightCloud(),
-  //                           *global_grid_map_,
-  //                           *local_cloud_ikdtree.get(),
-  //                           *global_highlight_cloud_ikdtree_,
-  //                           pose_observation.get(),
-  //                           &summary);
-  cov = amcl_core_->GetCovariance();
   if (!summary.IsSolutionUsable() || summary.final_cost == -1 ||
       std::isinf(summary.final_cost) || std::isnan(summary.final_cost))
   {
@@ -557,7 +544,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   transform::Rigid2d pose_prediction;
   bool pose_prediction_valid = false;
   
-  // 1. 尝试从里程计获取delta pose预测
+  // 从里程计获取delta pose预测
   const transform::Rigid3d odom_delta_pose = GetOdomDeltaPose(time);
   if (local_pose_.IsValid() && odom_delta_pose.IsValid()) {
     const auto pose_prediction_odom = transform::Project2D(local_pose_ * odom_delta_pose);
@@ -568,28 +555,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     }
   }
   
-  // 2. 尝试从AMCL获取位姿预测
-  if (!amcl_core_->IsInitialized() && pose_prediction_valid) {
-    amcl_core_->SetInitialPose(pose_prediction);
-  } else if (amcl_core_->IsInitialized()) {
-    auto current_odom = GetOdometryAtTime(time);
-    if (current_odom.has_value()) {
-      amcl_core_->UpdateWithSensorData(time, merged_data.merged_filtered_cloud, *current_odom);
-    }
-    
-    const auto amcl_pose = amcl_core_->GetPose2D();
-    if (amcl_pose && amcl_pose->IsValid() && pose_prediction_valid) {
-      double delta_dist = (pose_prediction.translation() - amcl_pose->translation()).norm();
-      if (delta_dist < 0.1) {  // AMCL和里程计预测接近，使用AMCL
-        pose_prediction = *amcl_pose;
-        // LOG(INFO) << "Using AMCL prediction: " << pose_prediction;
-      } else {
-        LOG(WARNING) << "AMCL pose differs too much from odom prediction, delta: " << delta_dist;
-      }
-    }
-  }
-  
-  // 3. 如果没有有效的预测位姿，使用上次的位姿作为初始值
+  // 如果没有有效的预测位姿，使用上次的位姿作为初始值
   if (!pose_prediction_valid) {
     if (local_pose_.IsValid()) {
       pose_prediction = transform::Project2D(local_pose_);
@@ -606,15 +572,13 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   }
 
   // ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
-  Eigen::Matrix3d loc_cov;
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
       ScanMatch(time, pose_prediction,
                 filtered_gravity_aligned_point_cloud,
                 merged_data.merged_highlight_cloud,
                 merged_data.merged_line_data,
-                tracked_lane_data,
-                loc_cov);
+                tracked_lane_data);
   
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
@@ -629,25 +593,6 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   UpdateLastOdomForDelta(time);
 
   local_map_updater_->UpdateRobotPose(*pose_estimate_2d);
-
-  // 在AMCL已初始化时进行位姿校验
-  if (amcl_core_->IsInitialized()) {
-    const auto amcl_pose = amcl_core_->GetPose2D();
-    if (amcl_pose && amcl_pose->IsValid() && pose_estimate_2d->IsValid()) {
-      double delta_dist = (amcl_pose->translation() - pose_estimate_2d->translation()).norm();
-      
-      if (!std::isfinite(delta_dist)) {
-        LOG(WARNING) << "Invalid delta distance, resetting AMCL";
-        amcl_core_->SetInitialPose(*pose_estimate_2d);
-      } else if (delta_dist > 0.15) {  // 稍微放宽阈值
-        LOG(WARNING) << "AMCL pose diverged from scan match result, delta: " << delta_dist 
-                     << ", resetting AMCL";
-        amcl_core_->SetInitialPose(*pose_estimate_2d);
-      } else {
-        // LOG(INFO) << "AMCL and scan match poses are consistent, delta: " << delta_dist;
-      }
-    }
-  }
 
   sensor::RangeData range_data_in_local =
       sensor::TransformRangeData(merged_data.merged_range_data,
@@ -667,10 +612,6 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       merged_data,
       tracked_lane_data,
       pose_estimate,gravity_alignment.rotation());
-
-  if (insertion_result) {
-    amcl_core_->SetGrid(active_submaps_.submaps().front()->grid());
-  }
 
   // 计算local slam的频率
   const auto wall_time = std::chrono::steady_clock::now();
@@ -697,14 +638,8 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   last_thread_cpu_time_seconds_ = thread_cpu_time_seconds;
   
   // 返回匹配结果
-  std::vector<transform::Rigid2d> particle_poses;
-  if (amcl_core_->IsInitialized()) {
-    particle_poses = amcl_core_->GetParticlePoses();
-  }
-  
   return absl::make_unique<MatchingResult>(
       MatchingResult{time, local_pose_,
-                     std::move(particle_poses),
                      std::move(range_data_in_local),
                      std::move(lines_in_local),
                      std::move(insertion_result)});

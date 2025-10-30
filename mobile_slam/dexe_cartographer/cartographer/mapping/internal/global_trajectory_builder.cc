@@ -139,7 +139,6 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
     if (local_slam_result_callback_) {
       local_slam_result_callback_(
           trajectory_id_, matching_result->time, matching_result->local_pose,
-          std::move(matching_result->particle_poses),
           std::move(matching_result->range_data_in_local),
           std::move(matching_result->line_data_in_local),
           std::move(insertion_result));

@@ -154,7 +154,6 @@ int MapBuilderBridge::AddTrajectory(
       expected_sensor_ids, trajectory_options.trajectory_builder_options,
       [this](const int trajectory_id, const ::cartographer::common::Time time,
              const Rigid3d local_pose,
-             std::vector<::cartographer::transform::Rigid2d> particle_poses,
              ::cartographer::sensor::RangeData range_data_in_local,
              std::map<int, std::vector<::cartographer::sensor::LineData>>  line_data_in_local,
              const std::unique_ptr<
@@ -169,7 +168,7 @@ int MapBuilderBridge::AddTrajectory(
           cloud_map = insertion_result->local_map;
           line_map_2d_list = insertion_result->line_map_2d_list;
         }
-        OnLocalSlamResult(trajectory_id, time, local_pose, particle_poses,
+        OnLocalSlamResult(trajectory_id, time, local_pose,
                           range_data_in_local, cloud_map,
                           line_data_in_local, line_map_2d_list);
       });
@@ -1280,7 +1279,6 @@ SensorBridge* MapBuilderBridge::sensor_bridge(const int trajectory_id) {
 void MapBuilderBridge::OnLocalSlamResult(
     const int trajectory_id, const ::cartographer::common::Time time,
     const Rigid3d local_pose,
-    std::vector<::cartographer::transform::Rigid2d> particle_poses,
     ::cartographer::sensor::RangeData range_data_in_local,
     std::shared_ptr<::cartographer::sensor::PointCloud> local_map,
     std::map<int, std::vector<::cartographer::sensor::LineData>>  line_data_in_local,
@@ -1288,7 +1286,7 @@ void MapBuilderBridge::OnLocalSlamResult(
   // 构造当前轨迹的local_slam_data
   std::shared_ptr<const LocalTrajectoryData::LocalSlamData> local_slam_data =
       std::make_shared<LocalTrajectoryData::LocalSlamData>(
-          LocalTrajectoryData::LocalSlamData{time, local_pose, particle_poses,
+          LocalTrajectoryData::LocalSlamData{time, local_pose,
                                              std::move(range_data_in_local),
                                              local_map,
                                              std::move(line_data_in_local),

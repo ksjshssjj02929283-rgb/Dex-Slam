@@ -26,7 +26,6 @@
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer/localization/internal/2d/pose_initializer_options_2d.h"
-#include "cartographer/localization/amcl/core/amcl_core_options.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 
 namespace cartographer {
@@ -81,9 +80,6 @@ proto::PoseEstimatorOptions2D CreatePoseEstimatorOptions2D(
   *options.mutable_pose_initializer_options() =
     CreatePoseInitializerOptions2D(
       parameter_dictionary->GetDictionary("pose_initializer_2d").get());
-  *options.mutable_amcl_core_options() =
-    amcl::CreateAMCLCoreOptions(
-      parameter_dictionary->GetDictionary("amcl_core").get());
   *options.mutable_local_map_updater_options() =
     CreateLocalMapUpdaterOptions2D(
       parameter_dictionary->GetDictionary("local_map_updater").get());

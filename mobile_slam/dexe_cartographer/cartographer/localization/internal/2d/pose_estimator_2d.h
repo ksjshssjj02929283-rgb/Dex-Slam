@@ -49,7 +49,6 @@
 #include "cartographer/localization/2d/cloud_map_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
-#include "cartographer/localization/amcl/core/amcl_core.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -80,7 +79,6 @@ class PoseEstimator2D {
   struct MatchingResult {
     common::Time time;
     transform::Rigid3d local_pose;  // 位姿(in local frame)
-    std::vector<transform::Rigid2d> particle_poses;
     sensor::RangeData range_data_in_local;  // range data
     std::map<int, std::vector<sensor::LineData>>  line_data_in_local;
     // 'nullptr' if dropped by the motion filter.
@@ -169,14 +167,10 @@ class PoseEstimator2D {
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
-    std::map<int, std::vector<sensor::LineData>> & track_lane_data,
-    Eigen::Matrix3d & cov);
+    std::map<int, std::vector<sensor::LineData>> & track_lane_data);
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
-
-  static amcl::pf_vector_t UniformPoseGenerator(void* arg);
-  static std::vector<std::pair<int, int>> free_space_indices_;
 
 private:
   const proto::PoseEstimatorOptions2D options_;
@@ -224,8 +218,6 @@ private:
   std::unique_ptr<laser_perception::LaserPerception> laser_perception_;
 
   std::unique_ptr<mapping::scan_matching::LineMatcher2D> line_matcher_;
-
-  std::unique_ptr<amcl::AMCLCore> amcl_core_;
 
   std::mutex data_mutex_;
   
