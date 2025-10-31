@@ -42,6 +42,7 @@
 #include <vector>
 
 #include <robot_localization/ekf.hpp>
+#include <robot_localization/eskf.hpp>
 #include <robot_localization/filter_utilities.hpp>
 #include <robot_localization/ros_filter.hpp>
 #include <robot_localization/ros_filter_utilities.hpp>
@@ -4011,3 +4012,4 @@ void RosFilter<T>::clearMeasurementQueue()
 
 template class robot_localization::RosFilter<robot_localization::Ekf>;
 template class robot_localization::RosFilter<robot_localization::Ukf>;
+template class robot_localization::RosFilter<robot_localization::Eskf>;
