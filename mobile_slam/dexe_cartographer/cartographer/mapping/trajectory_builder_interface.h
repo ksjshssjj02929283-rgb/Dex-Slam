@@ -21,6 +21,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <optional>
 
 #include "absl/memory/memory.h"
 #include "cartographer/common/lua_parameter_dictionary.h"

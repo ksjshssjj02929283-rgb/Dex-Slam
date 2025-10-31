@@ -16,7 +16,6 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/ximgproc/fast_line_detector.hpp>
 
 #include "cartographer_ros/mapping/ros_map.h"
 

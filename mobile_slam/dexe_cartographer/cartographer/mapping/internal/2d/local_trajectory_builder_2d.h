@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <deque>
+#include <optional>
 
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/2d/submap_2d.h"

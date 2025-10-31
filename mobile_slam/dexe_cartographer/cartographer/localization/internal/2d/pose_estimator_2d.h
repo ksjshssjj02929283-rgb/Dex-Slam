@@ -22,6 +22,7 @@
 #include <mutex>
 #include <fstream>
 #include <string>
+#include <optional>
 
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/2d/submap_2d.h"
