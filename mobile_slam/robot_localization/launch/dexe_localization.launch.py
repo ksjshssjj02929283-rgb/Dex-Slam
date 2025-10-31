@@ -39,15 +39,15 @@ def launch_setup(context, *args, **kwargs):
     # Determine executable and params file based on filter type
     if filter_type.lower() == 'ekf':
         executable = 'ekf_node'
-        node_name = 'ekf_filter_node'
+        node_name = 'robot_localization'
         params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ekf.yaml')
     elif filter_type.lower() == 'ukf':
         executable = 'ukf_node'
-        node_name = 'ukf_filter_node'
+        node_name = 'robot_localization'
         params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ukf.yaml')
     elif filter_type.lower() == 'eskf':
         executable = 'eskf_node'
-        node_name = 'eskf_filter_node'
+        node_name = 'robot_localization'
         params_file = os.path.join(robot_localization_dir, 'params', 'dexe_eskf.yaml')
     else:
         raise ValueError(f"Invalid filter_type: {filter_type}. Must be 'ekf', 'ukf', or 'eskf'")
@@ -79,7 +79,7 @@ def generate_launch_description():
     # Declare launch arguments
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
-        default_value='ukf',
+        default_value='eskf',
         description='Type of filter to use: ekf, ukf, or eskf',
         choices=['ekf', 'ukf', 'eskf']
     )
