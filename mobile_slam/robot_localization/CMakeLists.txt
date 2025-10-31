@@ -66,6 +66,7 @@ add_library(
   ${library_name}
   src/ekf.cpp
   src/ukf.cpp
+  src/eskf.cpp
   src/filter_base.cpp
   src/filter_utilities.cpp
   src/navsat_transform.cpp
@@ -85,6 +86,11 @@ add_executable(
 add_executable(
   ukf_node
   src/ukf_node.cpp
+)
+
+add_executable(
+  eskf_node
+  src/eskf_node.cpp
 )
 
 add_executable(
@@ -140,6 +146,16 @@ target_link_libraries(
 
 ament_target_dependencies(
   ukf_node
+  rclcpp
+)
+
+target_link_libraries(
+  eskf_node
+  ${library_name}
+)
+
+ament_target_dependencies(
+  eskf_node
   rclcpp
 )
 
@@ -327,6 +343,7 @@ install(
   navsat_transform_node
   ekf_node
   ukf_node
+  eskf_node
   robot_localization_listener_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
