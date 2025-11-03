@@ -97,12 +97,17 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
   // 以第一个传感器为基准，使用其第一帧数据（FIFO模式）
   const std::string& reference_sensor_id = expected_sensor_ids_[0];
   auto& reference_buffer = sensor_buffers_.at(reference_sensor_id);
-  
-  if (reference_buffer.empty()) {
-    return result;  // is_valid = false
+  // 步骤1: 检查reference buffer长度是否 >= 2
+  if (reference_buffer.size() < 2) {
+    return result;  // is_valid = false, 数据不足，不进行同步
   }
 
-  // 使用第一个传感器的第一帧数据作为同步基准
+  // 步骤2: Trim reference buffer到只剩2个数据
+  while (reference_buffer.size() > 2) {
+    reference_buffer.pop_front();
+  }
+
+  // 步骤3: 使用front数据尝试同步
   const sensor::TimedPointCloudData& reference_data = reference_buffer.front();
   const common::Time sync_time = reference_data.time;
 
@@ -120,10 +125,8 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
                    << "Laser time: " << common::ToUniversal(sync_time)
                    << ", Latest odom time: " << common::ToUniversal(latest_odom_time)
                    << ", Time diff: " << time_diff_with_latest << "s (max allowed: "
-                   << kMaxLaserOdomTimeDiff << "s). Removing reference data from "
-                   << reference_sensor_id;
-      reference_buffer.pop_front();
-      return result;  // is_valid = false
+                   << kMaxLaserOdomTimeDiff << "s). Sync failed.";
+      return result;  // is_valid = false, 同步失败，不pop
     }
     
     // 检查2: 雷达数据前0.1s必须有里程计数据
@@ -133,16 +136,13 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
                    << "Laser time: " << common::ToUniversal(sync_time)
                    << ", Required odom time: " << common::ToUniversal(required_odom_time)
                    << ", Oldest odom time: " << common::ToUniversal(oldest_odom_time)
-                   << ". Removing reference data from " << reference_sensor_id;
-      reference_buffer.pop_front();
-      return result;  // is_valid = false
+                   << ". Sync failed.";
+      return result;  // is_valid = false, 同步失败，不pop
     }
   } else {
     // 如果没有里程计数据，同步失败
-    LOG(WARNING) << "No odometry data available for synchronization. "
-                 << "Removing reference data from " << reference_sensor_id;
-    reference_buffer.pop_front();
-    return result;  // is_valid = false
+    LOG(WARNING) << "No odometry data available for synchronization. Sync failed.";
+    return result;  // is_valid = false, 同步失败，不pop
   }
   
   result.sync_time = sync_time;
@@ -156,10 +156,8 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
     
     if (closest_data == nullptr) {
       LOG(WARNING) << "No data found for sensor: " << sensor_id 
-                   << ", removing reference data from " << reference_sensor_id;
-      // 同步失败，移除reference sensor的第一帧数据，尝试下一帧
-      reference_buffer.pop_front();
-      return result;  // is_valid = false
+                   << ". Sync failed.";
+      return result;  // is_valid = false, 同步失败，不pop
     }
     
     // 检查时间差是否在允许范围内
@@ -167,11 +165,8 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
     if (time_diff > max_time_diff_seconds_) {
       LOG(WARNING) << "Time difference too large for sensor " << sensor_id 
                    << ": " << time_diff << " seconds (max allowed: " 
-                   << max_time_diff_seconds_ << "), removing reference data from " 
-                   << reference_sensor_id;
-      // 同步失败，移除reference sensor的第一帧数据，尝试下一帧
-      reference_buffer.pop_front();
-      return result;  // is_valid = false
+                   << max_time_diff_seconds_ << "). Sync failed.";
+      return result;  // is_valid = false, 同步失败，不pop
     }
     
     result.laser_data_map[sensor_id] = *closest_data;
@@ -181,22 +176,16 @@ LaserSynchronizer::SynchronizedLaserData LaserSynchronizer::GetSynchronizedData(
   if (result.laser_data_map.size() != expected_sensor_ids_.size()) {
     LOG(WARNING) << "Not all expected sensors have data. Expected: " 
                  << expected_sensor_ids_.size() << ", Got: " << result.laser_data_map.size()
-                 << ", removing reference data from " << reference_sensor_id;
+                 << ". Sync failed.";
     result.laser_data_map.clear();
-    // 同步失败，移除reference sensor的第一帧数据，尝试下一帧
-    reference_buffer.pop_front();
-    return result;  // is_valid = false
+    return result;  // is_valid = false, 同步失败，不pop
   }
 
+  // 步骤4: 同步成功，标记为valid并pop front数据
   result.is_valid = true;
-  reference_buffer.pop_front(); // 同步成功，移除当前用于同步的reference数据
+  reference_buffer.pop_front();
   
-  // 同步成功后只移除reference buffer中sync_time之前的所有数据
-  auto& reference_buffer_to_clean = sensor_buffers_[reference_sensor_id];
-  while (reference_buffer_to_clean.size() > 2 && reference_buffer_to_clean.front().time <= sync_time) {
-    reference_buffer_to_clean.pop_front();
-  }
-  // 打印同步信息pair
+  // 打印同步信息（可选）
   // LOG(INFO) << "Successfully synchronized " << expected_sensor_ids_.size() 
   //           << " laser sensors with reference: " << reference_sensor_id 
   //           << " at time: " << common::ToUniversal(sync_time);
