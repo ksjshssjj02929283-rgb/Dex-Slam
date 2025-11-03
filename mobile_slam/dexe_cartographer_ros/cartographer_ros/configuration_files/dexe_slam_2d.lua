@@ -97,10 +97,10 @@ TRAJECTORY_BUILDER_2D.ceres_scan_matcher.point_weight = 60
 
 TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_distance_meters = 0.2
 TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_time_seconds = 2
-TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_angle_radians = math.rad(2.)
+TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_angle_radians = math.rad(15.)
 TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_distance_meters = 0.2
-TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_time_seconds = 5
-TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_angle_radians = math.rad(30.)
+TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_time_seconds = 30
+TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_angle_radians = math.rad(45.)
 
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.hit_probability = 0.65
 TRAJECTORY_BUILDER_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.miss_probability = 0.48

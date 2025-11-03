@@ -35,7 +35,7 @@ options = {
   num_point_clouds = 0,
   lookup_transform_timeout_sec = 0.2,
   submap_publish_period_sec = 0.3,
-  pose_publish_period_sec = 5e-2,
+  pose_publish_period_sec = 0.1,
   trajectory_publish_period_sec = 0.5,
   rangefinder_sampling_ratio = 1.,
   odometry_sampling_ratio = 1.,
@@ -91,9 +91,9 @@ POSE_ESTIMATOR_2D.ceres_scan_matcher.line_weight = 60
 POSE_ESTIMATOR_2D.ceres_scan_matcher.point_weight = 60
 POSE_ESTIMATOR_2D.keyframe_motion_filter.max_distance_meters = 0.1
 POSE_ESTIMATOR_2D.keyframe_motion_filter.max_time_seconds = 0.5
-POSE_ESTIMATOR_2D.keyframe_motion_filter.max_angle_radians = math.rad(5.)
-POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_distance_meters = 0.5
-POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_time_seconds = 60
+POSE_ESTIMATOR_2D.keyframe_motion_filter.max_angle_radians = math.rad(15.)
+POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_distance_meters = 0.2
+POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_time_seconds = 30
 POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_angle_radians = math.rad(45.)
 
 -- 需要测试num_range_data对定位的影响
