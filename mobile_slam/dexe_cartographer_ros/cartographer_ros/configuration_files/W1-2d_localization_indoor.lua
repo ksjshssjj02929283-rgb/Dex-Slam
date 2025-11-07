@@ -1,5 +1,5 @@
 include "W1-2d_mapping_indoor.lua"
-options.provide_odom_frame = true
+options.provide_odom_frame = false
 options.use_odometry = false
 
 -- added by hz

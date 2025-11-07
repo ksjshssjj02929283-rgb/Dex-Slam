@@ -7,12 +7,13 @@ options = {
   
   map_frame = "map",                        -- 地图坐标系的名字
   tracking_frame = "imu_chassis_link",             -- 将所有传感器数据转换到这个坐标系下，如果有imu，这里一般设置为imu_link
-  published_frame = "base_footprint",            -- tf: map -> footprint，其实footprint和base_link坐标系是静态tf转换
+  published_frame = "odom",            -- tf: map -> footprint，其实footprint和base_link坐标系是静态tf转换
   odom_frame = "odom",                      -- 里程计的坐标系名字
-  provide_odom_frame = true,               -- 是否提供odom的tf, 如果为true,则tf树为map->odom->footprint
+  publish_to_tf = true,                     
+  provide_odom_frame = false,               -- 是否提供odom的tf, 如果为true,则tf树为map->odom->footprint
                                             -- 如果为false tf树为map->footprint。如果 机器人/bag 中提供odom坐标系，设置成false，不然机器人位姿会来回跳
-  publish_frame_projected_to_2d = false,    -- 是否将坐标系投影到平面上
-  --use_pose_extrapolator = false,          -- 发布tf时是使用pose_extrapolator的位姿还是前端计算出来的位姿，一般不使用位姿估计器
+  publish_frame_projected_to_2d = true,    -- 是否将坐标系投影到平面上
+  use_pose_extrapolator = false,          -- 发布tf时是使用pose_extrapolator的位姿还是前端计算出来的位姿，一般不使用位姿估计器
 
   use_odometry = false,                      -- 是否使用里程计,如果使用,一定要有odom的tf
   use_nav_sat = false,                      -- 是否使用gps
