@@ -106,6 +106,20 @@ def generate_launch_description():
         output = 'screen'
         )
 
+    ## ***** robot_localization融合定位节点 *****
+    robot_localization_node = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('robot_localization'),
+                'launch',
+                'dexe_localization.launch.py'
+            )
+        ),
+        launch_arguments={
+            'use_sim_time': use_sim_time
+        }.items()
+    )
+
     ## ***** 发布静态tf,如果有urdf，则不需要 *****
     # static_tf_publisher_1_node = Node(
     #     parameters=[
@@ -173,6 +187,7 @@ def generate_launch_description():
         location_name_arg,
         # Nodes
         # robot_state_publisher_node,
+        robot_localization_node,
         cartographer_node,
         # cartographer_occupancy_grid_node,
         # rviz_node,

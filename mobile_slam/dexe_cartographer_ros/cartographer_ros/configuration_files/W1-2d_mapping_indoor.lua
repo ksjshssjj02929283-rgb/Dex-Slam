@@ -13,7 +13,7 @@ options = {
   provide_odom_frame = false,               -- 是否提供odom的tf, 如果为true,则tf树为map->odom->footprint
                                             -- 如果为false tf树为map->footprint。如果 机器人/bag 中提供odom坐标系，设置成false，不然机器人位姿会来回跳
   publish_frame_projected_to_2d = true,    -- 是否将坐标系投影到平面上
-  use_pose_extrapolator = false,          -- 发布tf时是使用pose_extrapolator的位姿还是前端计算出来的位姿，一般不使用位姿估计器
+  use_pose_extrapolator = true,          -- 发布tf时是使用pose_extrapolator的位姿还是前端计算出来的位姿，一般不使用位姿估计器
 
   use_odometry = false,                      -- 是否使用里程计,如果使用,一定要有odom的tf
   use_nav_sat = false,                      -- 是否使用gps
