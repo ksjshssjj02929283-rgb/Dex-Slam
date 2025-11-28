@@ -162,6 +162,15 @@ Node::Node(
             node_options_.localPoseTopic, 10);
   }
 
+  // 添加定位位姿发布器（带协方差），用于robot_localization融合
+  loc_pose_publisher_ =
+      node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+          "/cartographer/loc_pose", 10);
+  
+  // 添加SetPose服务客户端，用于在重定位成功后设置robot_localization的初始位姿
+  set_pose_client_ =
+      node_->create_client<robot_localization::srv::SetPose>("/robot_localization/set_pose");
+
 
   scan_matched_point_cloud_publisher_ =
       node_->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -262,6 +271,9 @@ void Node::HandleInitPoseMsg(const geometry_msgs::msg::PoseWithCovarianceStamped
           AddTrajectory(trajectory_options);
 
           flag_finish_initial_localization = true;
+          
+          // 标记需要在下一次发布位姿时设置robot_localization的初始位姿
+          need_set_pose_in_filter_ = true;
         }
       }
     }
@@ -287,6 +299,9 @@ void Node::HandleApriltagPoseMsg(const geometry_msgs::msg::PoseArray::SharedPtr 
         flag_finish_initial_localization = true;
         miss_apriltag_detection_count = 0;
         flag_recorded_initial_pose_received = false;
+        
+        // 标记需要设置robot_localization的初始位姿
+        need_set_pose_in_filter_ = true;
       }
       return;
     }
@@ -366,6 +381,9 @@ void Node::HandleApriltagPoseMsg(const geometry_msgs::msg::PoseArray::SharedPtr 
         StartLocalizationWithInitialPose(adjusted_pose);
 
         flag_recorded_initial_pose_received = false;
+        
+        // 标记需要设置robot_localization的初始位姿
+        need_set_pose_in_filter_ = true;
       }
       else
       {
@@ -378,6 +396,63 @@ void Node::HandleApriltagPoseMsg(const geometry_msgs::msg::PoseArray::SharedPtr 
   }
 }
 // added by hz end
+
+// new added by hz: 调用robot_localization的SetPose服务设置初始位姿
+// 参考 localization_node.cc 中的实现
+bool Node::SetInitialPoseInFilter(
+    const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg)
+{
+  RCLCPP_INFO(node_->get_logger(), "Setting initial pose in robot_localization filter");
+  
+  if (!set_pose_client_) {
+    RCLCPP_ERROR(node_->get_logger(), "SetPose client not initialized");
+    need_set_pose_in_filter_ = false;
+    return false;
+  }
+  
+  // Wait for service to be available
+  if (!set_pose_client_->wait_for_service(std::chrono::seconds(3))) {
+    RCLCPP_WARN(node_->get_logger(), 
+                "Timed out waiting for robot_localization SetPose service, will retry later");
+    // 不设置 need_set_pose_in_filter_ = false，允许后续重试
+    return false;
+  }
+
+  auto pose_cmd = std::make_shared<robot_localization::srv::SetPose::Request>();
+  pose_cmd->pose = pose_cov_msg;
+
+  // Call service asynchronously with timeout
+  auto future = set_pose_client_->async_send_request(pose_cmd);
+  
+  // Wait for response with timeout
+  auto status = future.wait_for(std::chrono::seconds(5));
+  if (status != std::future_status::ready) {
+    RCLCPP_ERROR(node_->get_logger(), "SetPose service call timed out");
+    need_set_pose_in_filter_ = false;
+    return false;
+  }
+
+  auto result = future.get();
+  if (!result) {
+    RCLCPP_ERROR(node_->get_logger(), "SetPose service returned null result");
+    need_set_pose_in_filter_ = false;
+    return false;
+  }
+
+  need_set_pose_in_filter_ = false;
+  
+  // 手动计算yaw角（从四元数）
+  const auto& q = pose_cov_msg.pose.pose.orientation;
+  double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 
+                          1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+  
+  RCLCPP_INFO(node_->get_logger(), 
+              "Successfully set initial pose in robot_localization: [%.3f, %.3f, yaw=%.3f]",
+              pose_cov_msg.pose.pose.position.x,
+              pose_cov_msg.pose.pose.position.y,
+              yaw);
+  return true;  // SetPose service has no response field, so we return true if call succeeded
+}
 
 bool Node::handleSubmapQuery(
     const cartographer_ros_msgs::srv::SubmapQuery::Request::SharedPtr request,
@@ -617,6 +692,33 @@ void Node::PublishLocalTrajectoryData() {
         // 发布map坐标系下的tracking frame位姿
         tracked_pose_publisher_->publish(pose_msg);
       }
+      
+      // new added by hz: 发布定位位姿（带协方差），用于robot_localization融合
+      // 参考 localization_node 中的逻辑
+      if (loc_pose_publisher_) {
+        geometry_msgs::msg::PoseWithCovarianceStamped loc_pose_msg;
+        loc_pose_msg.header.frame_id = node_options_.map_frame;
+        loc_pose_msg.header.stamp = stamped_transform.header.stamp;
+        loc_pose_msg.pose.pose = ToGeometryMsgPose(tracking_to_map);
+        
+        // 设置协方差（根据Cartographer定位精度设置）
+        // 位置协方差 (x, y): 5cm精度 -> (0.05)^2 = 0.0025
+        // 姿态协方差 (yaw): 2度精度 -> (0.034rad)^2 ≈ 0.0012
+        loc_pose_msg.pose.covariance[0] = 0.0025;   // x
+        loc_pose_msg.pose.covariance[7] = 0.0025;   // y
+        loc_pose_msg.pose.covariance[14] = 0.0;     // z (2D模式)
+        loc_pose_msg.pose.covariance[21] = 0.0;     // roll (2D模式)
+        loc_pose_msg.pose.covariance[28] = 0.0;     // pitch (2D模式)
+        loc_pose_msg.pose.covariance[35] = 0.0012;  // yaw
+        
+        loc_pose_publisher_->publish(loc_pose_msg);
+        
+        // 如果需要设置robot_localization的初始位姿（在重定位成功后）
+        if (need_set_pose_in_filter_) {
+          SetInitialPoseInFilter(loc_pose_msg);
+        }
+      }
+      
       // new added by hz: 发布局部位姿
       if(node_options_.publish_local_pose)
       {

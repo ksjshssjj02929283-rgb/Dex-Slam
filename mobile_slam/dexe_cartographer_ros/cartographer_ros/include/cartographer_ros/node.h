@@ -52,6 +52,7 @@
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
+#include "robot_localization/srv/set_pose.hpp"
 // addded by hz end
 
 namespace cartographer_ros {
@@ -204,10 +205,13 @@ class Node {
   ::rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_matched_point_cloud_publisher_;
   // new added by hz:
   ::rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr local_pose_publisher_;
+  ::rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr loc_pose_publisher_;  // 添加定位位姿发布器（带协方差）
+  ::rclcpp::Client<robot_localization::srv::SetPose>::SharedPtr set_pose_client_;  // 添加SetPose服务客户端
   ::rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr init_pose_subscriber_;
   ::rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr apriltag_pose_subscriber_;
   void HandleInitPoseMsg(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
   void HandleApriltagPoseMsg(const geometry_msgs::msg::PoseArray::SharedPtr msg);
+  bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);  // 新增：调用robot_localization的SetPose服务
   cartographer::transform::Rigid3d init_pose;
   bool flag_init_pose_received = false;
   TrajectoryOptions trajectory_options;
@@ -218,7 +222,8 @@ class Node {
   cartographer::transform::Rigid3d recorded_apriltag_pose;
   bool flag_recorded_apriltag_pose_received = false;
   int miss_apriltag_detection_count = 0;
-  bool flag_finish_initial_localization = false; 
+  bool flag_finish_initial_localization = false;
+  bool need_set_pose_in_filter_ = false;  // 标记是否需要设置robot_localization的初始位姿
   // new added by hz end
   // These ros service servers need to live for the lifetime of the node.
   ::rclcpp::Service<cartographer_ros_msgs::srv::SubmapQuery>::SharedPtr submap_query_server_;
