@@ -53,6 +53,7 @@ find_package(visualization_msgs REQUIRED)
 # added by hz
 # find_package(apriltag_ros REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(robot_localization REQUIRED)
 
 include_directories(
   include
@@ -106,6 +107,7 @@ set(dependencies
   rosbag2_storage
   urdf
   urdfdom
+  robot_localization
 )
 ament_target_dependencies(${PROJECT_NAME}
   ${dependencies}
@@ -168,6 +170,14 @@ install(DIRECTORY include/
 
 install(DIRECTORY configuration_files urdf launch
   DESTINATION share/${PROJECT_NAME}/
+)
+
+# Install Python scripts
+install(PROGRAMS
+  scripts/collect_trajectory_data.py
+  scripts/evaluate_static_localization.py
+  scripts/evaluate_trajectory.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_export_include_directories(include)
