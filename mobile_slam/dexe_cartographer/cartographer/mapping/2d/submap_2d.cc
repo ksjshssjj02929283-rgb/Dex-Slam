@@ -124,7 +124,97 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
   highlight_cloud_ = std::make_unique<sensor::PointCloud>();
   cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
   highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
-  line_map_2d_list_ = std::make_unique<LineMap2DList>();
+  
+  // Task 4: 从 proto 反序列化 line_map_2d_list
+  if (proto.has_line_map_2d_list()) {
+    const auto& line_map_proto = proto.line_map_2d_list();
+    int latest_local_id = line_map_proto.latest_local_id();
+    std::map<int, MapLine2D> line_map_data;
+    
+    // 遍历所有的地图线段数据
+    for (const auto& map_line_proto : line_map_proto.line_map_data()) {
+      // 反序列化主线段数据
+      const auto& line_data_proto = map_line_proto.line_data();
+      Eigen::Vector2d begin(line_data_proto.begin_x(), line_data_proto.begin_y());
+      Eigen::Vector2d end(line_data_proto.end_x(), line_data_proto.end_y());
+      sensor::LineData line_data(begin, end, line_data_proto.weight());
+      
+      if (line_data_proto.has_normal()) {
+        Eigen::Vector2d normal(line_data_proto.normal_x(), line_data_proto.normal_y());
+        line_data.set_normal(normal);
+      }
+      
+      // 创建 MapLine2D 对象（使用 global_id 作为 key）
+      MapLine2D map_line(MapLine2D::static_line, map_line_proto.global_id(), line_data);
+      map_line.SetLoseTime(map_line_proto.lose_time());
+      
+      // 反序列化线段数据列表
+      for (const auto& line_list_proto : map_line_proto.line_data_list()) {
+        Eigen::Vector2d list_begin(line_list_proto.begin_x(), line_list_proto.begin_y());
+        Eigen::Vector2d list_end(line_list_proto.end_x(), line_list_proto.end_y());
+        sensor::LineData list_line_data(list_begin, list_end, line_list_proto.weight());
+        
+        if (line_list_proto.has_normal()) {
+          Eigen::Vector2d list_normal(line_list_proto.normal_x(), line_list_proto.normal_y());
+          list_line_data.set_normal(list_normal);
+        }
+        
+        // 更新到 MapLine2D 中（这里需要调用 UpdateLineData）
+        map_line.UpdateLineData(list_line_data);
+      }
+      
+      line_map_data.insert({map_line_proto.global_id(), std::move(map_line)});
+    }
+    
+    line_map_2d_list_ = std::make_unique<LineMap2DList>(latest_local_id, std::move(line_map_data));
+  } else {
+    line_map_2d_list_ = std::make_unique<LineMap2DList>();
+  }
+  
+  // 从 proto 反序列化点云数据
+  if (proto.has_cloud() && proto.cloud().points_size() > 0) {
+    std::vector<sensor::RangefinderPoint> points;
+    std::vector<float> intensities;
+    
+    for (const auto& point_proto : proto.cloud().points()) {
+      points.push_back(sensor::RangefinderPoint{
+        Eigen::Vector3f(point_proto.x(), point_proto.y(), point_proto.z())
+      });
+    }
+    
+    // 反序列化强度信息（如果有）
+    if (proto.cloud().intensities_size() > 0) {
+      for (float intensity : proto.cloud().intensities()) {
+        intensities.push_back(intensity);
+      }
+      cloud_ = std::make_unique<sensor::PointCloud>(std::move(points), std::move(intensities));
+    } else {
+      cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
+    }
+  }
+  
+  // 从 proto 反序列化高亮点云数据
+  if (proto.has_highlight_cloud() && proto.highlight_cloud().points_size() > 0) {
+    std::vector<sensor::RangefinderPoint> points;
+    std::vector<float> intensities;
+    
+    for (const auto& point_proto : proto.highlight_cloud().points()) {
+      points.push_back(sensor::RangefinderPoint{
+        Eigen::Vector3f(point_proto.x(), point_proto.y(), point_proto.z())
+      });
+    }
+    
+    // 反序列化强度信息（如果有）
+    if (proto.highlight_cloud().intensities_size() > 0) {
+      for (float intensity : proto.highlight_cloud().intensities()) {
+        intensities.push_back(intensity);
+      }
+      highlight_cloud_ = std::make_unique<sensor::PointCloud>(std::move(points), std::move(intensities));
+    } else {
+      highlight_cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
+    }
+  }
+  
   set_num_range_data(proto.num_range_data());  // 设置激光点数量
   set_insertion_finished(proto.finished());
 }
@@ -139,6 +229,99 @@ proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
     CHECK(grid_);
     *submap_2d->mutable_grid() = grid_->ToProto();
   }
+  
+  // Task 3: 序列化 line_map_2d_list 到 proto
+  if (line_map_2d_list_ && line_map_2d_list_->size() > 0) {
+    auto* line_map_proto = submap_2d->mutable_line_map_2d_list();
+    line_map_proto->set_latest_local_id(line_map_2d_list_->latest_local_id());
+    
+    // 遍历所有的地图线段数据
+    const auto& line_map_data_list = line_map_2d_list_->GetLineMapData2DList();
+    for (const auto& line_map_entry : line_map_data_list) {
+      auto* map_line_proto = line_map_proto->add_line_map_data();
+      const MapLine2D& map_line = line_map_entry.second;
+      
+      // 设置地图线段的基本信息
+      map_line_proto->set_global_id(map_line.global_id());
+      map_line_proto->set_local_id(map_line.local_id());
+      map_line_proto->set_lose_time(map_line.lose_time());
+      map_line_proto->set_inliers(map_line.inliers());
+      
+      // 序列化主线段数据
+      const sensor::LineData& line_data = map_line.line_data();
+      auto* line_data_proto = map_line_proto->mutable_line_data();
+      line_data_proto->set_begin_x(line_data.begin().x());
+      line_data_proto->set_begin_y(line_data.begin().y());
+      line_data_proto->set_end_x(line_data.end().x());
+      line_data_proto->set_end_y(line_data.end().y());
+      line_data_proto->set_weight(line_data.weight());
+      
+      // 尝试获取法向量
+      Eigen::Vector2d normal = Eigen::Vector2d::Zero();
+      bool has_normal = line_data.GetNormal(normal);
+      line_data_proto->set_has_normal(!has_normal);  // GetNormal返回false表示有法向量
+      if (!has_normal) {
+        line_data_proto->set_normal_x(normal.x());
+        line_data_proto->set_normal_y(normal.y());
+      }
+      
+      // 序列化线段数据列表
+      for (const auto& line_in_list : map_line.line_data_list()) {
+        auto* line_list_proto = map_line_proto->add_line_data_list();
+        line_list_proto->set_begin_x(line_in_list.begin().x());
+        line_list_proto->set_begin_y(line_in_list.begin().y());
+        line_list_proto->set_end_x(line_in_list.end().x());
+        line_list_proto->set_end_y(line_in_list.end().y());
+        line_list_proto->set_weight(line_in_list.weight());
+        
+        // 尝试获取法向量
+        Eigen::Vector2d list_normal = Eigen::Vector2d::Zero();
+        bool has_list_normal = line_in_list.GetNormal(list_normal);
+        line_list_proto->set_has_normal(!has_list_normal);  // GetNormal返回false表示有法向量
+        if (!has_list_normal) {
+          line_list_proto->set_normal_x(list_normal.x());
+          line_list_proto->set_normal_y(list_normal.y());
+        }
+      }
+    }
+  }
+  
+  // 序列化点云数据
+  if (cloud_ && !cloud_->empty()) {
+    auto* cloud_proto = submap_2d->mutable_cloud();
+    for (const auto& point : cloud_->points()) {
+      auto* point_proto = cloud_proto->add_points();
+      point_proto->set_x(point.position.x());
+      point_proto->set_y(point.position.y());
+      point_proto->set_z(point.position.z());
+    }
+    // 序列化强度信息（如果有）
+    const auto& intensities = cloud_->intensities();
+    if (!intensities.empty()) {
+      for (float intensity : intensities) {
+        cloud_proto->add_intensities(intensity);
+      }
+    }
+  }
+  
+  // 序列化高亮点云数据
+  if (highlight_cloud_ && !highlight_cloud_->empty()) {
+    auto* highlight_cloud_proto = submap_2d->mutable_highlight_cloud();
+    for (const auto& point : highlight_cloud_->points()) {
+      auto* point_proto = highlight_cloud_proto->add_points();
+      point_proto->set_x(point.position.x());
+      point_proto->set_y(point.position.y());
+      point_proto->set_z(point.position.z());
+    }
+    // 序列化强度信息（如果有）
+    const auto& intensities = highlight_cloud_->intensities();
+    if (!intensities.empty()) {
+      for (float intensity : intensities) {
+        highlight_cloud_proto->add_intensities(intensity);
+      }
+    }
+  }
+  
   return proto;
 }
 
@@ -156,6 +339,93 @@ void Submap2D::UpdateFromProto(const proto::Submap& proto) {
                                         conversion_tables_);
     } else {
       LOG(FATAL) << "proto::Submap2D has grid with unknown type.";
+    }
+  }
+  
+  // Task 4: 从 proto 反序列化 line_map_2d_list (在 UpdateFromProto 中也需要处理)
+  if (submap_2d.has_line_map_2d_list()) {
+    const auto& line_map_proto = submap_2d.line_map_2d_list();
+    int latest_local_id = line_map_proto.latest_local_id();
+    std::map<int, MapLine2D> line_map_data;
+    
+    // 遍历所有的地图线段数据
+    for (const auto& map_line_proto : line_map_proto.line_map_data()) {
+      // 反序列化主线段数据
+      const auto& line_data_proto = map_line_proto.line_data();
+      Eigen::Vector2d begin(line_data_proto.begin_x(), line_data_proto.begin_y());
+      Eigen::Vector2d end(line_data_proto.end_x(), line_data_proto.end_y());
+      sensor::LineData line_data(begin, end, line_data_proto.weight());
+      
+      if (line_data_proto.has_normal()) {
+        Eigen::Vector2d normal(line_data_proto.normal_x(), line_data_proto.normal_y());
+        line_data.set_normal(normal);
+      }
+      
+      // 创建 MapLine2D 对象
+      MapLine2D map_line(MapLine2D::static_line, map_line_proto.global_id(), line_data);
+      map_line.SetLoseTime(map_line_proto.lose_time());
+      
+      // 反序列化线段数据列表
+      for (const auto& line_list_proto : map_line_proto.line_data_list()) {
+        Eigen::Vector2d list_begin(line_list_proto.begin_x(), line_list_proto.begin_y());
+        Eigen::Vector2d list_end(line_list_proto.end_x(), line_list_proto.end_y());
+        sensor::LineData list_line_data(list_begin, list_end, line_list_proto.weight());
+        
+        if (line_list_proto.has_normal()) {
+          Eigen::Vector2d list_normal(line_list_proto.normal_x(), line_list_proto.normal_y());
+          list_line_data.set_normal(list_normal);
+        }
+        
+        map_line.UpdateLineData(list_line_data);
+      }
+      
+      line_map_data.insert({map_line_proto.global_id(), std::move(map_line)});
+    }
+    
+    line_map_2d_list_ = std::make_unique<LineMap2DList>(latest_local_id, std::move(line_map_data));
+  }
+  
+  // 从 proto 反序列化点云数据（在 UpdateFromProto 中也需要处理）
+  if (submap_2d.has_cloud() && submap_2d.cloud().points_size() > 0) {
+    std::vector<sensor::RangefinderPoint> points;
+    std::vector<float> intensities;
+    
+    for (const auto& point_proto : submap_2d.cloud().points()) {
+      points.push_back(sensor::RangefinderPoint{
+        Eigen::Vector3f(point_proto.x(), point_proto.y(), point_proto.z())
+      });
+    }
+    
+    // 反序列化强度信息（如果有）
+    if (submap_2d.cloud().intensities_size() > 0) {
+      for (float intensity : submap_2d.cloud().intensities()) {
+        intensities.push_back(intensity);
+      }
+      cloud_ = std::make_unique<sensor::PointCloud>(std::move(points), std::move(intensities));
+    } else {
+      cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
+    }
+  }
+  
+  // 从 proto 反序列化高亮点云数据
+  if (submap_2d.has_highlight_cloud() && submap_2d.highlight_cloud().points_size() > 0) {
+    std::vector<sensor::RangefinderPoint> points;
+    std::vector<float> intensities;
+    
+    for (const auto& point_proto : submap_2d.highlight_cloud().points()) {
+      points.push_back(sensor::RangefinderPoint{
+        Eigen::Vector3f(point_proto.x(), point_proto.y(), point_proto.z())
+      });
+    }
+    
+    // 反序列化强度信息（如果有）
+    if (submap_2d.highlight_cloud().intensities_size() > 0) {
+      for (float intensity : submap_2d.highlight_cloud().intensities()) {
+        intensities.push_back(intensity);
+      }
+      highlight_cloud_ = std::make_unique<sensor::PointCloud>(std::move(points), std::move(intensities));
+    } else {
+      highlight_cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
     }
   }
 }
