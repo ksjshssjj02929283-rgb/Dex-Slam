@@ -237,27 +237,23 @@ private:
       // 创建定位更新器
       auto localization_updater = cartographer::localization::CreateLocalizationUpdater(
           node_options_->localization_updater_options);
-        std::cout <<1122 << std::endl;
 
       // 创建定位节点
       localization_node_ = std::make_unique<localization::LocalizationNode>(
           *node_options_, std::move(localization_updater), tf_buffer_, shared_from_this());
-        std::cout <<11 << std::endl;
+
       // 加载状态文件
       std::string state_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
       localization_node_->LoadState(state_filename, FLAGS_load_frozen_state);
-        std::cout <<22 << std::endl;
 
       // 加载地图数据
       std::string yaml_filepath = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.yaml";
       localization_node_->LoadMapData(yaml_filepath);
-        std::cout <<33 << std::endl;
 
       // 启动轨迹
       if (FLAGS_start_trajectory_with_default_topics) {
         localization_node_->StartTrajectoryWithDefaultTopics(*trajectory_options_);
       }
-        std::cout <<44 << std::endl;
 
       state_ = LocalizationState::RUNNING;
       RCLCPP_INFO(get_logger(), "Localization started successfully");

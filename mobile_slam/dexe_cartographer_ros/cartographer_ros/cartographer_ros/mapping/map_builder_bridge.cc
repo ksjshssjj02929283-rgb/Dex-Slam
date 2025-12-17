@@ -530,10 +530,11 @@ bool MapBuilderBridge::SaveGridMapFromRange(
            node_options_.mapping_occ_thresh,
            node_options_.mapping_free_thresh);
 
-  cartographer::io::StreamFileWriter png_writer(map_filename + ".png");
-  WritePng(image, map_filename + ".png",
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
+  // Task 1: 注释掉PNG图像的生成，只保留PGM格式
+  // cartographer::io::StreamFileWriter png_writer(map_filename + ".png");
+  // WritePng(image, map_filename + ".png",
+  //          node_options_.mapping_occ_thresh,
+  //          node_options_.mapping_free_thresh);
 
   const Eigen::Vector2d map_origin(
     -result.origin.x() * resolution,
@@ -753,9 +754,10 @@ bool MapBuilderBridge::SaveGridMap(
   WritePgm(image, resolution, &pgm_writer,
            node_options_.mapping_occ_thresh,
            node_options_.mapping_free_thresh);
-  WritePng(image, map_filename + ".png",
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
+  // Task 1: 注释掉PNG图像的生成，只保留PGM格式
+  // WritePng(image, map_filename + ".png",
+  //          node_options_.mapping_occ_thresh,
+  //          node_options_.mapping_free_thresh);
   const Eigen::Vector2d origin(
     -result.origin.x() * resolution,
     (result.origin.y() - image.height()) * resolution);

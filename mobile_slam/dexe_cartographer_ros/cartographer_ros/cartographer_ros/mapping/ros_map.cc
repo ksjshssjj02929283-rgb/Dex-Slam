@@ -58,7 +58,6 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                double occ_thresh, double free_thresh)
 {  
   const std::string pgm_filename = map_file_name + ".pgm";
-  const std::string grid_map_filename = map_file_name + ".png";
   const std::string line_map_filename = map_file_name + "_line_map.json";
   const std::string cloud_map_filename = map_file_name + ".pcd";
   const std::string highlight_cloud_map_filename = map_file_name + "_highlight.pcd";
@@ -67,7 +66,6 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
   // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
   const std::string output = absl::StrCat(
       "image: ", pgm_filename, "\n",
-      "grid_map: ", grid_map_filename, "\n",
       "line_map: ", line_map_filename, "\n",
       "cloud_map: ", cloud_map_filename, "\n",
       "highlight_cloud_map: ", highlight_cloud_map_filename, "\n",
