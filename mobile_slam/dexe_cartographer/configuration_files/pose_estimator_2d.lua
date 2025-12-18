@@ -26,6 +26,12 @@ POSE_ESTIMATOR_2D = {
   pose_initializer_2d = POSE_INITIALIZER_2D,
   auto_trigger_global_relocalization = true,  -- 控制是否自动触发全局重定位
 
+  -- 位姿验证参数：用于检测定位质量并在必要时重置
+  enable_pose_validation = true,                -- 是否启用位姿验证
+  pose_validation_min_score = 0.3,              -- 验证的最小匹配分数阈值
+  pose_validation_max_translation_error = 0.05, -- 最大允许的平移误差(米) 5cm
+  pose_validation_max_rotation_error = 0.035,   -- 最大允许的旋转误差(弧度) ~2度
+
   adaptive_voxel_filter = {
     max_length = 0.5,
     min_num_points = 200,

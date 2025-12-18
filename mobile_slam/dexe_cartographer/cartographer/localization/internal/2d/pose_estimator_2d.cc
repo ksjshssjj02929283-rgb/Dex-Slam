@@ -370,6 +370,83 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 }
 
 /**
+ * @brief 验证位姿估计质量
+ * 
+ * 使用real time correlative scan matcher在局部地图上进行匹配，
+ * 比较scan match估计的位姿和real time matcher估计的位姿。
+ * 
+ * @param estimated_pose scan match估计得到的位姿
+ * @param point_cloud 用于验证的点云
+ * @return PoseValidationResult 包含验证结果、验证位姿和评分
+ */
+PoseEstimator2D::PoseValidationResult PoseEstimator2D::ValidatePoseEstimate(
+    const transform::Rigid2d& estimated_pose,
+    const sensor::PointCloud& point_cloud)
+{
+  PoseValidationResult result;
+  result.validated_pose = estimated_pose;
+  result.validation_score = 0.0;
+  result.is_valid = true;
+
+  // 检查是否启用位姿验证
+  if (!options_.enable_pose_validation()) {
+    return result;  // 验证功能未启用，直接通过
+  }
+
+  // 获取局部地图
+  auto local_grid_map = local_map_updater_->local_grid_map();
+  if (local_grid_map == nullptr) {
+    LOG(WARNING) << "Local grid map not available for pose validation";
+    return result;  // 如果局部地图不可用，暂不验证
+  }
+
+  // 从配置文件读取参数
+  const double kMinValidationScore = options_.pose_validation_min_score();
+  const double kMaxTranslationError = options_.pose_validation_max_translation_error();
+  const double kMaxRotationError = options_.pose_validation_max_rotation_error();
+
+  // 使用real time correlative scan matcher在局部地图上进行验证匹配
+  transform::Rigid2d validation_pose = estimated_pose;
+  const double validation_score = real_time_correlative_scan_matcher_.Match(
+      estimated_pose, 
+      point_cloud, 
+      *local_grid_map,
+      &validation_pose);
+
+  // 保存验证结果
+  result.validated_pose = validation_pose;
+  result.validation_score = validation_score;
+
+  // 计算scan match位姿和real time matcher位姿之间的误差
+  const double translation_error = 
+      (validation_pose.translation() - estimated_pose.translation()).norm();
+  const double rotation_error = 
+      std::abs(validation_pose.rotation().angle() - estimated_pose.rotation().angle());
+
+  // 综合判断：评分和位姿误差
+  const bool score_valid = validation_score >= kMinValidationScore;
+  const bool translation_valid = translation_error <= kMaxTranslationError;
+  const bool rotation_valid = rotation_error <= kMaxRotationError;
+
+  result.is_valid = score_valid && translation_valid && rotation_valid;
+
+  // 记录验证信息
+  if (!result.is_valid) {
+    LOG(WARNING) << "Pose validation failed!"
+                 << "\n  Validation score: " << validation_score 
+                 << " (threshold: " << kMinValidationScore << ")"
+                 << "\n  Translation error: " << translation_error << " m"
+                 << " (threshold: " << kMaxTranslationError << " m)"
+                 << "\n  Rotation error: " << rotation_error << " rad"
+                 << " (threshold: " << kMaxRotationError << " rad)"
+                 << "\n  Scan match pose: " << estimated_pose
+                 << "\n  Real time matcher pose: " << validation_pose;
+  }
+  
+  return result;
+}
+
+/**
  * @brief 向PoseEstimator2D中加入激光雷达数据，使用激光同步器进行同步
  * 
  * @param sensor_id 
@@ -591,6 +668,86 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
 
   // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
   UpdateLastOdomForDelta(time);
+
+  // 验证位姿估计质量，通过real time matcher在局部地图上匹配
+  PoseValidationResult validation_result = ValidatePoseEstimate(
+      *pose_estimate_2d, 
+      filtered_gravity_aligned_point_cloud);
+  
+  if (!validation_result.is_valid)
+  {
+    LOG(WARNING) << "Pose validation failed! Validation score: " 
+                 << validation_result.validation_score 
+                 << ", attempting recovery with global map...";
+    
+    // 尝试使用验证得到的位姿和全局地图进行恢复性匹配
+    // 使用验证的位姿作为初始位姿，在全局地图上用real time matcher搜索
+    transform::Rigid2d recovery_pose = validation_result.validated_pose;
+    const double recovery_score = real_time_correlative_scan_matcher_.Match(
+        validation_result.validated_pose,  // 使用验证位姿作为初始位姿
+        filtered_gravity_aligned_point_cloud,
+        *global_grid_map_,
+        &recovery_pose);
+    
+    LOG(INFO) << "Recovery matching score: " << recovery_score;
+    
+    // 如果恢复匹配成功，使用恢复的位姿进行ceres优化
+    if (recovery_score > 0.4) {
+      LOG(INFO) << "Recovery correlative match successful, performing ceres refinement...";
+      
+      auto recovery_pose_refined = absl::make_unique<transform::Rigid2d>();
+      ceres::Solver::Summary recovery_summary;
+      
+      // 使用全局地图进行ceres优化
+      ceres_scan_matcher_.Match(
+          recovery_pose.translation(),
+          recovery_pose,
+          filtered_gravity_aligned_point_cloud,
+          merged_data.merged_highlight_cloud,
+          *global_grid_map_,
+          *local_map_updater_->local_cloud_map_ikdtree(),
+          *global_highlight_cloud_ikdtree_,
+          recovery_pose_refined.get(),
+          &recovery_summary);
+      
+      // 检查恢复的位姿是否可用
+      if (recovery_summary.IsSolutionUsable() && 
+          recovery_summary.final_cost != -1 &&
+          !std::isinf(recovery_summary.final_cost) && 
+          !std::isnan(recovery_summary.final_cost))
+      {
+        LOG(WARNING) << "Recovery successful! Using recovered pose: " << *recovery_pose_refined;
+        
+        // 更新位姿为恢复后的位姿
+        pose_estimate_2d = std::move(recovery_pose_refined);
+        const transform::Rigid3d recovered_pose_estimate =
+            transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
+        local_pose_ = recovered_pose_estimate;
+        
+        // 清空active_submaps，使用恢复后的位姿重新开始建图
+        active_submaps_.clear();
+        
+        LOG(INFO) << "Cleared active submaps, continuing with recovered pose";
+      } else {
+        LOG(ERROR) << "Recovery matching with global map failed! Localization lost.";
+        
+        // 恢复失败，标记为定位丢失
+        loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+        active_submaps_.clear();
+        
+        return nullptr;  // 返回空，表示定位失败
+      }
+    } else {
+      LOG(ERROR) << "Recovery correlative match failed (score: " << recovery_score 
+                 << ")! Localization lost.";
+      
+      // 恢复失败，标记为定位丢失
+      loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+      active_submaps_.clear();
+      
+      return nullptr;  // 返回空，表示定位失败
+    }
+  }
 
   local_map_updater_->UpdateRobotPose(*pose_estimate_2d);
 

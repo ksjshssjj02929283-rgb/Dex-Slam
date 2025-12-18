@@ -85,6 +85,17 @@ proto::PoseEstimatorOptions2D CreatePoseEstimatorOptions2D(
       parameter_dictionary->GetDictionary("local_map_updater").get());
   options.set_auto_trigger_global_relocalization(
     parameter_dictionary->GetBool("auto_trigger_global_relocalization"));
+  
+  // 读取位姿验证参数
+  options.set_enable_pose_validation(
+    parameter_dictionary->GetBool("enable_pose_validation"));
+  options.set_pose_validation_min_score(
+    parameter_dictionary->GetDouble("pose_validation_min_score"));
+  options.set_pose_validation_max_translation_error(
+    parameter_dictionary->GetDouble("pose_validation_max_translation_error"));
+  options.set_pose_validation_max_rotation_error(
+    parameter_dictionary->GetDouble("pose_validation_max_rotation_error"));
+  
   return options;
 }
 

@@ -170,6 +170,19 @@ class PoseEstimator2D {
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data);
 
+  // 验证位姿估计质量的结果
+  struct PoseValidationResult {
+    bool is_valid;              // 验证是否通过
+    transform::Rigid2d validated_pose;  // 验证后的位姿（real time matcher的结果）
+    double validation_score;    // 验证评分
+  };
+
+  // 验证位姿估计质量，通过real time matcher在局部地图上匹配
+  // 比较scan match估计的位姿和real time matcher估计的位姿
+  PoseValidationResult ValidatePoseEstimate(
+    const transform::Rigid2d& estimated_pose,
+    const sensor::PointCloud& point_cloud);
+
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
 
