@@ -19,12 +19,9 @@ Includes Cartographer 2D localization.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression, PathJoinSubstitution
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -38,10 +35,6 @@ def launch_setup(context, *args, **kwargs):
     # Get launch configuration values
     filter_type = LaunchConfiguration('filter_type').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
-    enable_cartographer = LaunchConfiguration('enable_cartographer').perform(context)
-    map_folder = LaunchConfiguration('map_folder')
-    map_name = LaunchConfiguration('map_name')
-    resolution = LaunchConfiguration('resolution')
     
     # Determine executable and params file based on filter type
     if filter_type.lower() == 'ekf':
@@ -77,39 +70,11 @@ def launch_setup(context, *args, **kwargs):
         ]
     )
     
-    nodes_to_launch = [localization_node]
-    
-    # Add Cartographer launch file if enabled
-    if enable_cartographer.lower() == 'true':
-        # Get cartographer_ros package share directory
-        cartographer_ros_dir = get_package_share_directory('cartographer_ros')
-        cartographer_launch_file = os.path.join(
-            cartographer_ros_dir,
-            'launch',
-            'dexe_localization.launch.py'
-        )
-        
-        # Include Cartographer localization launch file
-        cartographer_launch = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(cartographer_launch_file),
-            launch_arguments={
-                'map_folder': map_folder,
-                'map_name': map_name,
-                'resolution': resolution,
-            }.items()
-        )
-        
-        nodes_to_launch.append(cartographer_launch)
-    
-    return nodes_to_launch
+    return [localization_node]
 
 
 def generate_launch_description():
     """Generate launch description with configurable filter type."""
-    
-    # Get user home directory for default map location
-    home_dir = os.path.expanduser('~')
-    default_data_dir = os.path.join(home_dir, '.dexe', 'data')
     
     # Declare launch arguments
     filter_type_arg = DeclareLaunchArgument(
@@ -125,36 +90,8 @@ def generate_launch_description():
         description='Use simulation time'
     )
     
-    enable_cartographer_arg = DeclareLaunchArgument(
-        'enable_cartographer',
-        default_value='true',
-        description='Enable Cartographer 2D localization'
-    )
-    
-    map_folder_arg = DeclareLaunchArgument(
-        'map_folder',
-        default_value=os.path.join(default_data_dir, 'maps'),
-        description='Path to the folder containing maps (for Cartographer)'
-    )
-    
-    map_name_arg = DeclareLaunchArgument(
-        'map_name',
-        default_value='map_2_standard',
-        description='Name of the map to load (for Cartographer)'
-    )
-    
-    resolution_arg = DeclareLaunchArgument(
-        'resolution',
-        default_value='0.04',
-        description='Resolution for occupancy grid (for Cartographer)'
-    )
-    
     return LaunchDescription([
         filter_type_arg,
         use_sim_time_arg,
-        enable_cartographer_arg,
-        map_folder_arg,
-        map_name_arg,
-        resolution_arg,
         OpaqueFunction(function=launch_setup)
     ])

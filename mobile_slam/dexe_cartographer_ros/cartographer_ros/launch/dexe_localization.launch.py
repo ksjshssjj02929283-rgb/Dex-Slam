@@ -17,7 +17,8 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -57,6 +58,22 @@ def generate_launch_description():
         cartographer_ros_share,
         'configuration_files'
     ])
+
+    # Get robot_localization package directory
+    robot_localization_dir = get_package_share_directory('robot_localization')
+    robot_localization_launch_file = os.path.join(
+        robot_localization_dir,
+        'launch',
+        'dexe_localization.launch.py'
+    )
+
+    # Include robot_localization launch file
+    robot_localization_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(robot_localization_launch_file),
+        launch_arguments={
+            'filter_type': 'ukf',
+        }.items()
+    )
 
     # Localization node
     localization_node = Node(
@@ -103,6 +120,9 @@ def generate_launch_description():
         map_folder_arg,
         map_name_arg,
         resolution_arg,
+        
+        # Robot localization
+        robot_localization_launch,
         
         # Nodes
         localization_node,
