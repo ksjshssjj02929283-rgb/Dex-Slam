@@ -209,13 +209,30 @@ void SerializeLandmarkNodes(
   }
 }
 
+void SerializeGlobalStaticSubmap(
+    std::shared_ptr<mapping::Submap2D> global_static_submap,
+    ProtoStreamWriterInterface* const writer) {
+  if (!global_static_submap) {
+    return;
+  }
+  
+  LOG(INFO) << "Serializing global static submap to pbstream";
+  SerializedData proto;
+  auto submap_proto = global_static_submap->ToProto(
+      /*include_probability_grid_data=*/true);
+  proto.mutable_global_static_submap()->CopyFrom(submap_proto.submap_2d());
+  writer->WriteProto(proto);
+  LOG(INFO) << "Global static submap serialized successfully";
+}
+
 }  // namespace
 
 void WritePbStream(
     const mapping::PoseGraph& pose_graph,
     const std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>&
         trajectory_builder_options,
-    ProtoStreamWriterInterface* const writer, bool include_unfinished_submaps) {
+    ProtoStreamWriterInterface* const writer, bool include_unfinished_submaps,
+    std::shared_ptr<mapping::Submap2D> global_static_submap) {
   writer->WriteProto(CreateHeader());
   writer->WriteProto(
       SerializePoseGraph(pose_graph, include_unfinished_submaps));
@@ -231,6 +248,9 @@ void WritePbStream(
   SerializeOdometryData(pose_graph.GetOdometryData(), writer);
   SerializeFixedFramePoseData(pose_graph.GetFixedFramePoseData(), writer);
   SerializeLandmarkNodes(pose_graph.GetLandmarkNodes(), writer);
+  
+  // Serialize global static submap if available
+  SerializeGlobalStaticSubmap(global_static_submap, writer);
 }
 
 }  // namespace io

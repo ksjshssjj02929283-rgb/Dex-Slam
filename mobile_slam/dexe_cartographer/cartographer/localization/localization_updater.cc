@@ -108,63 +108,71 @@ LocalizationUpdater::LocalizationUpdater(const proto::LocalizationUpdaterOptions
   }
 }
 
-void LocalizationUpdater::InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map)
-{
-  CHECK(grid_map != nullptr);
-  global_grid_map_ = grid_map;
-}
-
-void LocalizationUpdater::InitGlobalCloudMap(
-                              std::shared_ptr<CloudMap2D> cloud_map,
-                              std::shared_ptr<CloudMap2D> highlight_cloud_map)
-{
-  CHECK(cloud_map != nullptr);
-  global_cloud_map_ = cloud_map;
-  if (highlight_cloud_map != nullptr) {
-    if (highlight_cloud_map->cloud()->size() > 0) {
-      global_highlight_cloud_map_ = highlight_cloud_map;
-    } else {
-      global_highlight_cloud_map_ = std::make_shared<CloudMap2D>();
-      LOG(WARNING) << "highlight_cloud_map is empty";
-    }
-  } else {
-    global_highlight_cloud_map_ = std::make_shared<CloudMap2D>();
-    LOG(WARNING) << "highlight_cloud_map is empty";
-  }
-}
-
-void LocalizationUpdater::InitGlobalLineMap(const std::shared_ptr<sensor::LineMapData>& line_map_data)
-{
-  CHECK(line_map_data != nullptr);
-  std::shared_ptr<mapping::LineMap2DList> line_map_2d(new mapping::LineMap2DList());
-  for (const auto& line_data_w_normal : *line_map_data) {
-    sensor::LineData line_data(line_data_w_normal.data.line_data.begin,
-                               line_data_w_normal.data.line_data.end);
-    line_map_2d->PushBack({line_data});
-  }
-  global_line_map_ = line_map_2d;
-}
 
 std::shared_ptr<GridMap2D> LocalizationUpdater::GetGlobalGridMap() const
 {
-  return global_grid_map_;
+  CHECK(global_static_submap_ != nullptr)
+      << "Global static submap not available. Please load state from pbstream first.";
+  
+  // 从Submap2D中的Grid2D创建GridMap2D wrapper
+  // global_static_submap_->grid() 返回 const Grid2D*
+  // 需要将其转换为 shared_ptr<GridMap2D>
+  auto grid = global_static_submap_->grid();
+  if (!grid) {
+    LOG(WARNING) << "Grid is null in global static submap";
+    return nullptr;
+  }
+  
+  // 创建一个GridMap2D对象来包装underlying grid
+  // 注：这可能需要根据实际的GridMap2D构造函数进行调整
+  return std::make_shared<GridMap2D>(*dynamic_cast<const GridMap2D*>(grid));
 }
 
 std::shared_ptr<CloudMap2D> LocalizationUpdater::GetGlobalCloudMap() const
 {
-  return global_cloud_map_;
+  CHECK(global_static_submap_ != nullptr)
+      << "Global static submap not available. Please load state from pbstream first.";
+  
+  auto cloud = global_static_submap_->cloud();
+  if (!cloud) {
+    LOG(WARNING) << "Cloud is null in global static submap";
+    return nullptr;
+  }
+  
+  // 创建CloudMap2D来包装点云数据
+  return std::make_shared<CloudMap2D>(*cloud);
 }
 
 std::shared_ptr<CloudMap2D> LocalizationUpdater::GetGlobalHighlighCloudMap() const
 {
-  return global_highlight_cloud_map_;
+  CHECK(global_static_submap_ != nullptr)
+      << "Global static submap not available. Please load state from pbstream first.";
+  
+  auto highlight_cloud = global_static_submap_->highlight_cloud();
+  if (!highlight_cloud) {
+    LOG(WARNING) << "Highlight cloud is null in global static submap";
+    return std::make_shared<CloudMap2D>();  // 返回空的CloudMap2D
+  }
+  
+  // 创建CloudMap2D来包装高亮点云数据
+  return std::make_shared<CloudMap2D>(*highlight_cloud);
 }
 
 std::shared_ptr<sensor::LineMapData> LocalizationUpdater::GetGlobalLineMap() const
 {
+  CHECK(global_static_submap_ != nullptr)
+      << "Global static submap not available. Please load state from pbstream first.";
+  
   std::shared_ptr<sensor::LineMapData> line_map_data(new sensor::LineMapData());
-  const auto line_map_2d_list = global_line_map_->GetLineMapData2DList();
-  for (const auto& map_line : line_map_2d_list) {
+  
+  auto line_map_2d_list = global_static_submap_->line_map_2d_list();
+  if (!line_map_2d_list) {
+    LOG(WARNING) << "Line map is null in global static submap";
+    return line_map_data;
+  }
+  
+  const auto line_map_2d_list_data = line_map_2d_list->GetLineMapData2DList();
+  for (const auto& map_line : line_map_2d_list_data) {
     sensor::LaneDataWithNormal lane_data;
     lane_data.data.line_data.begin = map_line.second.line_data().begin();
     lane_data.data.line_data.end = map_line.second.line_data().end();
@@ -215,10 +223,9 @@ int LocalizationUpdater::AddTrajectoryBuilder(
       trajectory_options.pose_estimator_2d_options(),
       SelectRangeSensorIds(expected_sensor_ids));
 
-  pose_estimator_2d->InitGlobalGridMap(global_grid_map_);
-  pose_estimator_2d->InitGlobalLineMap(global_line_map_);
-  pose_estimator_2d->InitGlobalCloudMap(global_cloud_map_);
-  pose_estimator_2d->InitGlobalHighlightCloudMap(global_highlight_cloud_map_);
+  CHECK(global_static_submap_ != nullptr)
+      << "Global static submap not available. Please load state from pbstream first.";
+  pose_estimator_2d->InitGlobalMapsFromSubmap(global_static_submap_);
 
   // 创建全局轨迹优化器
   DCHECK(dynamic_cast<mapping::PoseGraph2D*>(pose_graph_.get()));
@@ -446,6 +453,13 @@ std::map<int, int> LocalizationUpdater::LoadState(
             sensor::FromProto(proto.landmark_data().landmark_data()));
         break;
       }
+      case SerializedData::kGlobalStaticSubmap: {
+        mapping::ValueConversionTables conversion_tables;
+        global_static_submap_ = std::make_shared<mapping::Submap2D>(
+            proto.global_static_submap(), &conversion_tables);
+        LOG(INFO) << "Global static submap loaded successfully";
+        break;
+      }
       default:
         LOG(WARNING) << "Skipping unknown message type in stream: "
                      << proto.GetTypeName();
@@ -475,6 +489,67 @@ std::map<int, int> LocalizationUpdater::LoadState(
         mapping::FromProto(pose_graph_proto.constraint()));
   }
   CHECK(reader->eof());
+  
+  // 验证global static submap是否加载成功
+  if (!global_static_submap_) {
+    LOG(WARNING) << "No global static submap found in pbstream. "
+                 << "This pbstream may be from an older version that doesn't include global submap.";
+  } else {
+    LOG(INFO) << "=== Global Static Submap Load Statistics ===";
+    
+    // 统计轨迹数量
+    LOG(INFO) << "Trajectories loaded: " << trajectory_remapping.size();
+    
+    // 统计节点数量
+    mapping::MapById<mapping::NodeId, mapping::TrajectoryNode> nodes = 
+        pose_graph_->GetTrajectoryNodes();
+    LOG(INFO) << "Total trajectory nodes loaded: " << nodes.size();
+    
+    // 统计点云数量
+    const auto* cloud = global_static_submap_->cloud();
+    if (cloud) {
+      LOG(INFO) << "Global point cloud size: " << cloud->size() << " points";
+    } else {
+      LOG(INFO) << "Global point cloud: empty or not available";
+    }
+    
+    const auto* highlight_cloud = global_static_submap_->highlight_cloud();
+    if (highlight_cloud) {
+      LOG(INFO) << "Global highlight point cloud size: " << highlight_cloud->size() << " points";
+    } else {
+      LOG(INFO) << "Global highlight point cloud: empty or not available";
+    }
+    
+    // 统计线特征数量
+    const auto* line_map_2d_list = global_static_submap_->line_map_2d_list();
+    if (line_map_2d_list) {
+      const auto& line_data_map = line_map_2d_list->GetLineMapData2DList();
+      LOG(INFO) << "Global line features: " << line_data_map.size() << " line segments";
+    } else {
+      LOG(INFO) << "Global line features: empty or not available";
+    }
+    
+    // 统计range data数量
+    LOG(INFO) << "Global submap range data entries: " << global_static_submap_->num_range_data();
+    
+    // 统计栅格地图信息
+    const auto* grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_static_submap_->grid());
+    if (grid) {
+      const auto& limits = grid->limits();
+      LOG(INFO) << "Grid map resolution: " << limits.resolution() << " meters/cell";
+      LOG(INFO) << "Grid map size: " << limits.cell_limits().num_x_cells << " x " 
+                << limits.cell_limits().num_y_cells << " cells";
+    } else {
+      LOG(INFO) << "Grid map: not available";
+    }
+    
+    LOG(INFO) << "============================================";
+  }
+  
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // std::string folder = home_dir + "/.dexe/data/submaps/";
+  // global_static_submap_->grid()->DrawAsImage(folder, "global_static_submap.png");
+
   return trajectory_remapping;
 }
 
@@ -495,7 +570,11 @@ std::map<int, int> LocalizationUpdater::LoadStateFromFile(
   }
   LOG(INFO) << "Loading saved state '" << state_filename << "'...";
   io::ProtoStreamReader stream(state_filename);
-  return LoadState(&stream, load_frozen_state);
+  
+  // 加载状态
+  std::map<int, int> trajectory_remapping = LoadState(&stream, load_frozen_state);
+  
+  return trajectory_remapping;
 }
 
 /**

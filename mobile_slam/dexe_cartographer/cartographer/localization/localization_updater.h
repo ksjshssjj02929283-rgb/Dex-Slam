@@ -47,10 +47,7 @@ public:
   LocalizationUpdater(const LocalizationUpdater &) = delete;
   LocalizationUpdater &operator=(const LocalizationUpdater &) = delete;
 
-  void InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map);
-  void InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map, std::shared_ptr<CloudMap2D> highlight_cloud_map);
-  void InitGlobalLineMap(const std::shared_ptr<sensor::LineMapData>& line_map_data);
-
+  // 从全局静态submap中获取地图数据（仅在加载pbstream后可用）
   std::shared_ptr<GridMap2D> GetGlobalGridMap() const;
   std::shared_ptr<CloudMap2D> GetGlobalCloudMap() const;
   std::shared_ptr<CloudMap2D> GetGlobalHighlighCloudMap() const;
@@ -117,13 +114,7 @@ private:
 
   std::unique_ptr<mapping::PoseGraph> pose_graph_;
 
-
-  std::shared_ptr<GridMap2D> global_grid_map_;
-
-  std::shared_ptr<mapping::LineMap2DList> global_line_map_;
-
-  std::shared_ptr<CloudMap2D> global_cloud_map_;
-  std::shared_ptr<CloudMap2D> global_highlight_cloud_map_;
+  std::shared_ptr<mapping::Submap2D> global_static_submap_;
 
   std::shared_ptr<std::vector<Eigen::Vector2d>> global_reflector_map_;
 

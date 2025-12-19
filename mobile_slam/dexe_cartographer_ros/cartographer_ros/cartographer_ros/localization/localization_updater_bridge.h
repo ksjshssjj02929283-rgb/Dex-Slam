@@ -99,8 +99,6 @@ class LocalizationUpdaterBridge {
   // 状态/地图加载与控制
   void LoadState(const std::string& state_filename, bool load_frozen_state);
 
-  void LoadMapData(const std::string& map_filename);
-
   bool SetInitialPose(const ::cartographer::transform::Rigid3d& initial_pose);
 
   std::optional<::cartographer::localization::LocalizationState> GetLocalizationState() const;

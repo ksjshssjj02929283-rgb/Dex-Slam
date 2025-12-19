@@ -1351,13 +1351,6 @@ void LocalizationNode::LoadState(const std::string& state_filename,
 }
 
 
-void LocalizationNode::LoadMapData(const std::string& map_filename)
-{
-  absl::MutexLock lock(&localization_updater_mutex_);
-  localization_updater_bridge_.LoadMapData(map_filename);
-}
-
-
 void LocalizationNode::MaybeWarnAboutTopicMismatch()
 {
   // 获取当前可用 topic 名称及类型

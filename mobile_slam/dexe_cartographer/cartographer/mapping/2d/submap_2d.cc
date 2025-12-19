@@ -147,9 +147,11 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
         line_data.set_normal(normal);
       }
       
-      // 创建 MapLine2D 对象（使用 global_id 作为 key）
+      // 创建 MapLine2D 对象（使用 global_id，local_id 在构造时设置）
       MapLine2D map_line(MapLine2D::static_line, map_line_proto.global_id(), line_data);
+      map_line.SetLocalId(map_line_proto.local_id());  // 显式设置 local_id
       map_line.SetLoseTime(map_line_proto.lose_time());
+      map_line.SetInliers(map_line_proto.inliers());  // 恢复 inliers
       
       // 反序列化线段数据列表
       for (const auto& line_list_proto : map_line_proto.line_data_list()) {
@@ -166,7 +168,8 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
         map_line.UpdateLineData(list_line_data);
       }
       
-      line_map_data.insert({map_line_proto.global_id(), std::move(map_line)});
+      // 使用 local_id 作为 key（与序列化时一致）
+      line_map_data.insert({map_line_proto.local_id(), std::move(map_line)});
     }
     
     line_map_2d_list_ = std::make_unique<LineMap2DList>(latest_local_id, std::move(line_map_data));
@@ -175,6 +178,7 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
   }
   
   // 从 proto 反序列化点云数据
+  // 无论 proto 中是否有点云数据，都要创建点云对象，确保指针不为 nullptr
   if (proto.has_cloud() && proto.cloud().points_size() > 0) {
     std::vector<sensor::RangefinderPoint> points;
     std::vector<float> intensities;
@@ -198,9 +202,13 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     } else {
       cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
     }
+  } else {
+    // 如果没有点云数据，创建空的点云对象
+    cloud_ = std::make_unique<sensor::PointCloud>();
   }
   
   // 从 proto 反序列化高亮点云数据
+  // 无论 proto 中是否有高亮点云数据，都要创建点云对象，确保指针不为 nullptr
   if (proto.has_highlight_cloud() && proto.highlight_cloud().points_size() > 0) {
     std::vector<sensor::RangefinderPoint> points;
     std::vector<float> intensities;
@@ -224,6 +232,9 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     } else {
       highlight_cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
     }
+  } else {
+    // 如果没有高亮点云数据，创建空的点云对象
+    highlight_cloud_ = std::make_unique<sensor::PointCloud>();
   }
   
   set_num_range_data(proto.num_range_data());  // 设置激光点数量
@@ -324,9 +335,9 @@ proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
     }
   }
   
-  // 序列化点云数据
+  // 序列化点云数据 - 即使为空也要序列化，确保反序列化时指针不为nullptr
+  auto* cloud_proto = submap_2d->mutable_cloud();
   if (cloud_ && !cloud_->empty()) {
-    auto* cloud_proto = submap_2d->mutable_cloud();
     for (const auto& point : cloud_->points()) {
       auto* point_proto = cloud_proto->add_points();
       point_proto->set_x(point.position.x());
@@ -341,10 +352,11 @@ proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
       }
     }
   }
+  // 如果 cloud_ 为空或nullptr，cloud_proto 仍然存在但没有 points，这样反序列化时会创建空点云
   
-  // 序列化高亮点云数据
+  // 序列化高亮点云数据 - 即使为空也要序列化，确保反序列化时指针不为nullptr
+  auto* highlight_cloud_proto = submap_2d->mutable_highlight_cloud();
   if (highlight_cloud_ && !highlight_cloud_->empty()) {
-    auto* highlight_cloud_proto = submap_2d->mutable_highlight_cloud();
     for (const auto& point : highlight_cloud_->points()) {
       auto* point_proto = highlight_cloud_proto->add_points();
       point_proto->set_x(point.position.x());
@@ -359,6 +371,7 @@ proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
       }
     }
   }
+  // 如果 highlight_cloud_ 为空或nullptr，highlight_cloud_proto 仍然存在但没有 points，这样反序列化时会创建空点云
   
   return proto;
 }

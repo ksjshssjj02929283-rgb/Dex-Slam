@@ -92,7 +92,6 @@ public:
   // Serialization
   void SerializeState(const std::string& filename, const bool include_unfinished_submaps);
   void LoadState(const std::string& state_filename, bool load_frozen_state);
-  void LoadMapData(const std::string& map_filename);
 
   bool SaveMap(const std::string& map_filename, const double resolution);
 

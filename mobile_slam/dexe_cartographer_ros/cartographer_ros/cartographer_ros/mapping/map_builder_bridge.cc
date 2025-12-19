@@ -225,17 +225,17 @@ bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double res
     return false;
   }
   
-  bool cloud_map_success = SaveCloudMap(map_filename, final_submap);
-  if (!cloud_map_success) {
-    LOG(ERROR) << "Failed to save cloud map for " << map_filename;
-    return false;
-  }
+  // bool cloud_map_success = SaveCloudMap(map_filename, final_submap);
+  // if (!cloud_map_success) {
+  //   LOG(ERROR) << "Failed to save cloud map for " << map_filename;
+  //   return false;
+  // }
   
-  bool line_map_success = SaveLineMap(map_filename, final_submap);
-  if (!line_map_success) {
-    LOG(ERROR) << "Failed to save line map for " << map_filename;
-    return false;
-  }
+  // bool line_map_success = SaveLineMap(map_filename, final_submap);
+  // if (!line_map_success) {
+  //   LOG(ERROR) << "Failed to save line map for " << map_filename;
+  //   return false;
+  // }
 
   LOG(INFO) << "Optimized SaveMap process completed successfully for " << map_filename;
   return true;

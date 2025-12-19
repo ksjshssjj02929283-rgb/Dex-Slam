@@ -144,35 +144,6 @@ void LocalizationUpdaterBridge::LoadState(const std::string& state_filename,
   localization_updater_->LoadState(&stream, load_frozen_state);
 }
 
-void LocalizationUpdaterBridge::LoadMapData(const std::string& map_filename)
-{
-  carto::localization::MapDataInfo map_data_info;
-  map_loader_.LoadMapDataInfo(map_filename, map_data_info);
-
-  std::shared_ptr<carto::localization::GridMap2D> grid_map;
-  map_loader_.LoadGridMap(map_data_info, grid_map);
-
-  std::shared_ptr<carto::sensor::LineMapData> line_map;
-  map_loader_.LoadLaneLineMap(map_data_info.line_filename, line_map);
-
-  std::shared_ptr<carto::localization::CloudMap2D> cloud_map;
-  map_loader_.LoadCloudMap(map_data_info.cloud_filename, cloud_map);
-
-  std::shared_ptr<carto::localization::CloudMap2D> highlight_cloud_map;
-  if (!map_data_info.highlight_cloud_filename.empty()) {
-    if (std::filesystem::exists(map_data_info.highlight_cloud_filename)) {
-      map_loader_.LoadCloudMap(map_data_info.highlight_cloud_filename, highlight_cloud_map);
-    } else {
-      LOG(WARNING) << "Highlight cloud file does not exist: " << map_data_info.highlight_cloud_filename;
-    }
-  }
-
-  localization_updater_->InitGlobalGridMap(grid_map);
-  localization_updater_->InitGlobalLineMap(line_map);
-  localization_updater_->InitGlobalCloudMap(cloud_map, highlight_cloud_map);
-}
-
-
 bool LocalizationUpdaterBridge::SetInitialPose(const carto::transform::Rigid3d &initial_pose)
 {
   return localization_updater_->SetInitialPose(initial_pose);
@@ -245,42 +216,6 @@ void LocalizationUpdaterBridge::FinishTrajectory(const int trajectory_id)
   localization_updater_->FinishTrajectory(trajectory_id);
   sensor_bridges_.erase(trajectory_id);
 }
-
-
-// bool LocalizationUpdaterBridge::SaveCloudMap(
-//   const std::string& map_filename, const double resolution)
-// {
-//   // 1. 先获取node信息
-//   cartographer::mapping::MapById<
-//     cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
-//   nodes = localization_updater_->pose_graph()->GetTrajectoryNodes();
-//   // 2. 将点云转换到global坐标系下
-//   cartographer::sensor::PointCloud cloud_map;
-//   for (const auto& node : nodes) {
-//     // LOG(ERROR) << "node id: " << node.id << " pose global_pose: " << node.data.global_pose;
-
-//     auto transformed_cloud = cartographer::sensor::TransformPointCloud(
-//                                 node.data.constant_data->filtered_gravity_aligned_point_cloud,
-//                                 node.data.global_pose.cast<float>());
-//     cloud_map.InsertCloud(transformed_cloud);
-//   }
-//   auto poses = 
-//       localization_updater_->pose_graph()->GetTrajectoryNodePoses();
-
-//   cartographer::sensor::PointCloud filtered_cloud_map;
-//   filtered_cloud_map = cartographer::sensor::VoxelFilter(cloud_map, resolution );
-//   // 3. 保存点云
-//   pcl::PointCloud<pcl::PointXYZ> pcl_cloud_map;
-//   for (const auto& point : filtered_cloud_map.points()) {
-//     pcl_cloud_map.push_back(
-//       pcl::PointXYZ(point.position.x(), point.position.y(), point.position.z()));
-//   }
-//   std::string pcd_filename = map_filename + ".pcd";
-//   pcl::io::savePCDFileBinary(pcd_filename, pcl_cloud_map);
-//   // LOG(ERROR) << filtered_cloud_map.size();
-//   return true;
-// }
-
 
 /**
  * @brief 获取指定id的submap的texture（内容信息）

@@ -94,10 +94,7 @@ class PoseEstimator2D {
   PoseEstimator2D(const PoseEstimator2D&) = delete;
   PoseEstimator2D& operator=(const PoseEstimator2D&) = delete;
 
-  void InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map);
-  void InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map);
-  void InitGlobalHighlightCloudMap(std::shared_ptr<CloudMap2D> highlight_cloud_map);
-  void InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2DList>& line_map);
+  void InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
   std::shared_ptr<GridMap2D> GetGlobalGridMap() const { return global_grid_map_; }
   std::shared_ptr<CloudMap2D> GetGlobalCloudMap() const { return global_cloud_map_; }

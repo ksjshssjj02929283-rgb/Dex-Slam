@@ -105,63 +105,93 @@ PoseEstimator2D::~PoseEstimator2D() {
   line_matcher_.reset();
 }
 
-void PoseEstimator2D::InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map)
+void PoseEstimator2D::InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap)
 {
-  global_grid_map_ = grid_map;
-  local_map_updater_->SetGlobalGridMap(grid_map);
-
-  loc_state_ = LocalizationState::INITIALIZED;
-}
-
-void PoseEstimator2D::InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map)
-{
-  if (global_grid_map_ == nullptr) {
-    LOG(ERROR) << "Global grid map is not iUpdateLocalCloudMapnitialized!";
+  if (!global_submap) {
+    LOG(ERROR) << "Cannot initialize global maps from null submap";
     return;
   }
 
-  global_cloud_map_ = cloud_map;
-  // insert成功，就获取submap的cloud，并将其加入的gicp的target中
-    // 这个过程的平均时间是0.25~0.5ms
-  pcl::PointCloud<pcl::PointXYZ>::Ptr global_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  for (const auto& point : global_cloud_map_->cloud()->points()) {
-    pcl::PointXYZ p;
-    p.x = point.position.x();
-    p.y = point.position.y();
-    p.z = 0.0;
-    global_map_cloud->push_back(p);
+  // 从global submap中提取gridmap
+  auto grid_ptr = global_submap->grid();
+  if (grid_ptr) {
+    // 总是从ProbabilityGrid拷贝构造，确保数据完整性
+    const auto* probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(grid_ptr);
+    if (probability_grid) {
+      // 使用拷贝构造函数从ProbabilityGrid创建GridMap2D（通过Proto确保完整复制）
+      global_grid_map_ = std::make_shared<GridMap2D>(*probability_grid);
+      
+      // 获取地图统计信息
+      const auto& limits = global_grid_map_->limits();
+      int total_cells = limits.cell_limits().num_x_cells * limits.cell_limits().num_y_cells;
+    } else {
+      LOG(ERROR) << "Failed to cast grid to ProbabilityGrid";
+      return;
+    }
+  } else {
+    LOG(WARNING) << "No grid data in global submap";
   }
 
-  local_map_updater_->SetGlobalCloudMap(cloud_map);
-  // box_filter_->SetOrigin(pose_estimate.translation().cast<float>());
-  // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_submap(new pcl::PointCloud<pcl::PointXYZ>());
-  // box_filter_->Filter(submap_cloud, filtered_sub
-}
-
-void PoseEstimator2D::InitGlobalHighlightCloudMap(std::shared_ptr<CloudMap2D> highlight_cloud_map)
-{
-  global_highlight_cloud_map_ = highlight_cloud_map;
-  // insert成功，就获取submap的cloud，并将其加入的gicp的target中
-    // 这个过程的平均时间是0.25~0.5ms
-  pcl::PointCloud<pcl::PointXYZ>::Ptr global_highlight_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  for (const auto& point : global_cloud_map_->cloud()->points()) {
-    pcl::PointXYZ p;
-    p.x = point.position.x();
-    p.y = point.position.y();
-    p.z = 0.0;
-    global_highlight_map_cloud->push_back(p);
+  // 从global submap中提取点云数据
+  auto cloud = global_submap->cloud();
+  if (cloud && !cloud->empty()) {
+    auto cloud_map = std::make_shared<CloudMap2D>(*cloud);
+    global_cloud_map_ = cloud_map;
+  } else {
+    LOG(WARNING) << "No cloud data in global submap";
   }
 
+  // 从global submap中提取高亮点云数据
+  auto highlight_cloud = global_submap->highlight_cloud();
+  if (highlight_cloud) {
+    auto highlight_cloud_map = std::make_shared<CloudMap2D>(*highlight_cloud);
+    global_highlight_cloud_map_ = highlight_cloud_map;
+  }
+
+  // 从global submap中提取线特征数据
+  auto line_map_2d_list = global_submap->line_map_2d_list();
+  if (line_map_2d_list) {
+    // line_map_2d_list是指针，需要通过shared_ptr包装
+    global_line_map_ = std::shared_ptr<mapping::LineMap2DList>(
+        const_cast<mapping::LineMap2DList*>(line_map_2d_list),
+        [](void*){});  // 空删除器，因为所有权由submap保持
+  }
+
+  // 初始化 local_map_updater_ 的全局地图引用
+  if (global_grid_map_) {
+    local_map_updater_->SetGlobalGridMap(global_grid_map_);
+  }
+  
+  if (global_cloud_map_) {
+    local_map_updater_->SetGlobalCloudMap(global_cloud_map_);
+  }
+  
+  // 初始化全局高亮点云的ikd-tree（用于扫描匹配）
+  // 必须总是初始化 ikd-tree，即使点云为空，因为 ScanMatch 中会解引用它
   global_highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  
+  if (global_highlight_cloud_map_ && !global_highlight_cloud_map_->cloud()->empty()) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr ikd_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+    for (const auto& point : global_highlight_cloud_map_->cloud()->points()) {
+      pcl::PointXYZ p;
+      p.x = point.position.x();
+      p.y = point.position.y();
+      p.z = 0.0;
+      ikd_cloud->push_back(p);
+    }
+    global_highlight_cloud_ikdtree_->Build(ikd_cloud->points);
+  } else {
+    LOG(WARNING) << "Global highlight cloud is empty";
+  }
 
-  float resolution = global_grid_map_->limits().resolution();
-  global_highlight_cloud_ikdtree_->set_downsample_param(resolution);
-  global_highlight_cloud_ikdtree_->Build(global_highlight_map_cloud->points);
-}
+  LOG(INFO) << "All global maps initialized successfully from global submap";
 
-void PoseEstimator2D::InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2DList>& line_map)
-{
-  global_line_map_ = line_map;
+  // 地图初始化完成，状态设置为INITIALIZED
+  loc_state_ = LocalizationState::INITIALIZED;
+
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // std::string folder = home_dir + "/.dexe/data/submaps/";
+  // global_grid_map_->DrawAsImage(folder, "pose_estimator.png");
 }
 
 bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)

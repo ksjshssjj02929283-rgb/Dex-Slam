@@ -364,10 +364,6 @@ private:
       std::string state_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
       localization_node_->LoadState(state_filename, FLAGS_load_frozen_state);
 
-      // 加载地图数据
-      std::string yaml_filepath = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.yaml";
-      localization_node_->LoadMapData(yaml_filepath);
-
       // 启动轨迹
       if (FLAGS_start_trajectory_with_default_topics) {
         localization_node_->StartTrajectoryWithDefaultTopics(*trajectory_options_);

@@ -22,6 +22,7 @@
 #include "cartographer/common/thread_pool.h"
 #include "cartographer/mapping/map_builder_interface.h"
 #include "cartographer/mapping/pose_graph.h"
+#include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/proto/map_builder_options.pb.h"
 #include "cartographer/sensor/collator_interface.h"
 
@@ -105,6 +106,9 @@ class MapBuilder : public MapBuilderInterface {
     return all_trajectory_builder_options_;
   }
 
+  // Generate global static submap from all trajectory nodes
+  std::shared_ptr<Submap2D> GenerateGlobalStaticSubmap(double resolution);
+
  private:
   const proto::MapBuilderOptions options_;
   common::ThreadPool thread_pool_;
@@ -126,6 +130,9 @@ class MapBuilder : public MapBuilderInterface {
       trajectory_builders_;
   std::vector<proto::TrajectoryBuilderOptionsWithSensorIds>
       all_trajectory_builder_options_;
+  
+  // Global static submap generated from all trajectory nodes
+  std::shared_ptr<Submap2D> global_static_submap_;
 };
 
 std::unique_ptr<MapBuilderInterface> CreateMapBuilder(

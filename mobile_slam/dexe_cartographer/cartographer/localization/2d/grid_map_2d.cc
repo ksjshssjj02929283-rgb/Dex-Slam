@@ -34,6 +34,19 @@ GridMap2D::GridMap2D(
 {
 }
 
+GridMap2D::GridMap2D(const mapping::ProbabilityGrid& source_grid)
+: mapping::ProbabilityGrid(source_grid.ToProto(), &conversion_tables_)
+{
+  // 通过Proto方式复制，保证完整复制所有数据（包括protected成员）
+}
+
+GridMap2D::GridMap2D(
+  const mapping::proto::Grid2D& proto,
+  mapping::ValueConversionTables* conversion_tables)
+: mapping::ProbabilityGrid(proto, conversion_tables)
+{
+}
+
 GridMap2D::~GridMap2D()
 {
 }
