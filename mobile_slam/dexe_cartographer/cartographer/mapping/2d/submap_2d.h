@@ -113,6 +113,10 @@ class Submap2D : public Submap {
   void SetCullingInterval(const int& interval) { culling_interval_ = interval; }
 
   void FreshCloudData() const;
+  
+  // 重建ikd-tree (从已有的点云数据)
+  void RebuildIkdTrees();
+  
  private:
   void CloudDataCulling();
   // void GenerateCloudKdTree();

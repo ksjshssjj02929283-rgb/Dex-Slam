@@ -6,6 +6,7 @@
 
 #include "cartographer/localization/2d/grid_map_2d.h"
 #include "cartographer/localization/2d/cloud_map_2d.h"
+#include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/localization/proto/local_map_updater_options_2d.pb.h"
 #include "cartographer/sensor/internal/box_filter.h"
@@ -23,15 +24,11 @@ public:
   LocalMapUpdater2D(const proto::LocalMapUpdaterOptions2D& options);
   ~LocalMapUpdater2D() = default;
 
-  void SetGlobalGridMap(std::shared_ptr<GridMap2D> grid_map);
-  void SetGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map);
+  void SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
   void UpdateRobotPose(const transform::Rigid2d& robot_pose);
 
   bool IsLocalMapUpdated() const { return is_local_map_updated_; }
-
-  std::shared_ptr<GridMap2D> global_grid_map();
-  std::shared_ptr<CloudMap2D> global_cloud_map();
 
   std::shared_ptr<GridMap2D> local_grid_map();
   std::shared_ptr<CloudMap2D> local_cloud_map();
@@ -50,8 +47,7 @@ private:
 private:
   const proto::LocalMapUpdaterOptions2D options_;
 
-  std::shared_ptr<GridMap2D> global_grid_map_;
-  std::shared_ptr<CloudMap2D> global_cloud_map_;
+  std::shared_ptr<mapping::Submap2D> global_static_submap_;
 
   std::shared_ptr<GridMap2D> local_grid_map_;
   std::shared_ptr<CloudMap2D> local_cloud_map_;

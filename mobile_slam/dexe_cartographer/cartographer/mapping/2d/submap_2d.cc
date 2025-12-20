@@ -648,6 +648,57 @@ void Submap2D::FreshCloudData() const
   is_dirty_cloud_ = false;
 }
 
+void Submap2D::RebuildIkdTrees()
+{
+  // 重建cloud的ikd-tree
+  if (cloud_ && !cloud_->empty()) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl(new pcl::PointCloud<pcl::PointXYZ>());
+    for (const auto& point : cloud_->points()) {
+      pcl::PointXYZ p;
+      p.x = point.position.x();
+      p.y = point.position.y();
+      p.z = 0.0;
+      cloud_pcl->push_back(p);
+    }
+    
+    // 检查是否需要构建
+    if (!cloud_ikdtree_) {
+      LOG(ERROR) << "Cloud ikd-tree not initialized";
+    } else if (cloud_ikdtree_->Root_Node == nullptr) {
+      cloud_ikdtree_->Build(cloud_pcl->points);
+      LOG(INFO) << "Rebuilt cloud ikd-tree with " << cloud_pcl->points.size() << " points";
+    } else {
+      LOG(INFO) << "Cloud ikd-tree already built, skipping";
+    }
+  } else {
+    LOG(INFO) << "Cloud is empty, skipping ikd-tree build";
+  }
+  
+  // 重建highlight_cloud的ikd-tree
+  if (highlight_cloud_ && !highlight_cloud_->empty()) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr highlight_cloud_pcl(new pcl::PointCloud<pcl::PointXYZ>());
+    for (const auto& point : highlight_cloud_->points()) {
+      pcl::PointXYZ p;
+      p.x = point.position.x();
+      p.y = point.position.y();
+      p.z = 0.0;
+      highlight_cloud_pcl->push_back(p);
+    }
+    
+    // 检查是否需要构建
+    if (!highlight_cloud_ikdtree_) {
+      LOG(ERROR) << "Highlight cloud ikd-tree not initialized";
+    } else if (highlight_cloud_ikdtree_->Root_Node == nullptr) {
+      highlight_cloud_ikdtree_->Build(highlight_cloud_pcl->points);
+      LOG(INFO) << "Rebuilt highlight cloud ikd-tree with " << highlight_cloud_pcl->points.size() << " points";
+    } else {
+      LOG(INFO) << "Highlight cloud ikd-tree already built, skipping";
+    }
+  } else {
+    LOG(INFO) << "Highlight cloud is empty, skipping ikd-tree build";
+  }
+}
+
 void Submap2D::PointCloudToPCL(const sensor::PointCloud & cloud_data,
                                pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud)
 {

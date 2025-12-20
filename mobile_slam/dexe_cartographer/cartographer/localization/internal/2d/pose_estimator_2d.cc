@@ -112,77 +112,16 @@ void PoseEstimator2D::InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D
     return;
   }
 
-  // 从global submap中提取gridmap
-  auto grid_ptr = global_submap->grid();
-  if (grid_ptr) {
-    // 总是从ProbabilityGrid拷贝构造，确保数据完整性
-    const auto* probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(grid_ptr);
-    if (probability_grid) {
-      // 使用拷贝构造函数从ProbabilityGrid创建GridMap2D（通过Proto确保完整复制）
-      global_grid_map_ = std::make_shared<GridMap2D>(*probability_grid);
-      
-      // 获取地图统计信息
-      const auto& limits = global_grid_map_->limits();
-      int total_cells = limits.cell_limits().num_x_cells * limits.cell_limits().num_y_cells;
-    } else {
-      LOG(ERROR) << "Failed to cast grid to ProbabilityGrid";
-      return;
-    }
-  } else {
-    LOG(WARNING) << "No grid data in global submap";
-  }
-
-  // 从global submap中提取点云数据
-  auto cloud = global_submap->cloud();
-  if (cloud && !cloud->empty()) {
-    auto cloud_map = std::make_shared<CloudMap2D>(*cloud);
-    global_cloud_map_ = cloud_map;
-  } else {
-    LOG(WARNING) << "No cloud data in global submap";
-  }
-
-  // 从global submap中提取高亮点云数据
-  auto highlight_cloud = global_submap->highlight_cloud();
-  if (highlight_cloud) {
-    auto highlight_cloud_map = std::make_shared<CloudMap2D>(*highlight_cloud);
-    global_highlight_cloud_map_ = highlight_cloud_map;
-  }
-
-  // 从global submap中提取线特征数据
-  auto line_map_2d_list = global_submap->line_map_2d_list();
-  if (line_map_2d_list) {
-    // line_map_2d_list是指针，需要通过shared_ptr包装
-    global_line_map_ = std::shared_ptr<mapping::LineMap2DList>(
-        const_cast<mapping::LineMap2DList*>(line_map_2d_list),
-        [](void*){});  // 空删除器，因为所有权由submap保持
-  }
+  global_static_submap_ = global_submap;
 
   // 初始化 local_map_updater_ 的全局地图引用
-  if (global_grid_map_) {
-    local_map_updater_->SetGlobalGridMap(global_grid_map_);
-  }
-  
-  if (global_cloud_map_) {
-    local_map_updater_->SetGlobalCloudMap(global_cloud_map_);
-  }
-  
-  // 初始化全局高亮点云的ikd-tree（用于扫描匹配）
-  // 必须总是初始化 ikd-tree，即使点云为空，因为 ScanMatch 中会解引用它
-  global_highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
-  
-  if (global_highlight_cloud_map_ && !global_highlight_cloud_map_->cloud()->empty()) {
-    pcl::PointCloud<pcl::PointXYZ>::Ptr ikd_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-    for (const auto& point : global_highlight_cloud_map_->cloud()->points()) {
-      pcl::PointXYZ p;
-      p.x = point.position.x();
-      p.y = point.position.y();
-      p.z = 0.0;
-      ikd_cloud->push_back(p);
-    }
-    global_highlight_cloud_ikdtree_->Build(ikd_cloud->points);
-  } else {
-    LOG(WARNING) << "Global highlight cloud is empty";
-  }
+  CHECK(global_static_submap_->grid());
+  CHECK(global_static_submap_->cloud());
+  CHECK(global_static_submap_->highlight_cloud());
+  CHECK(global_static_submap_->line_map_2d_list());
+
+  // 直接将 global_static_submap_ 传递给 local_map_updater_
+  local_map_updater_->SetGlobalSubmap(global_static_submap_);
 
   LOG(INFO) << "All global maps initialized successfully from global submap";
 
@@ -205,7 +144,6 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
   if (!pose_initializer_) {
     pose_initializer_ = std::make_unique<PoseInitializer>(
                                   options_.pose_initializer_options());
-    pose_initializer_->InitGlobalLineMap(global_line_map_);
   }
 
   local_map_updater_->UpdateRobotPose(transform::Project2D(initial_pose));
@@ -215,6 +153,10 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
 
   pose_initializer_->InitGlobalGridMap(local_map_updater_->local_grid_map());
   pose_initializer_->InitGlobalCloudMap(local_map_updater_->local_cloud_map());
+  pose_initializer_->InitGlobalLineMap(
+      std::shared_ptr<mapping::LineMap2DList>(
+          const_cast<mapping::LineMap2DList*>(global_static_submap_->line_map_2d_list()),
+          [](void*){}));  // 空删除器
 
   pose_initializer_->SetInitialPose(transform::Project2D(initial_pose));
   pose_initializer_->start();
@@ -228,8 +170,8 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
 
 void PoseEstimator2D::TriggerGlobalRelocalization()
 {
-  if (global_grid_map_ == nullptr) {
-    LOG(ERROR) << "Global grid map is not initialized, cannot trigger global relocalization.";
+  if (!global_static_submap_ || !global_static_submap_->grid()) {
+    LOG(ERROR) << "Global static submap is not initialized, cannot trigger global relocalization.";
     return;
   }
   
@@ -237,12 +179,22 @@ void PoseEstimator2D::TriggerGlobalRelocalization()
   if (!pose_initializer_) {
     pose_initializer_ = std::make_unique<PoseInitializer>(
                                   options_.pose_initializer_options());
-    pose_initializer_->InitGlobalLineMap(global_line_map_);
   }
 
-  // 设置全局地图用于全局重定位
-  pose_initializer_->InitGlobalGridMap(global_grid_map_);
-  pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+  // 从global_static_submap_获取grid和cloud数据
+  auto grid = global_static_submap_->grid();
+  const auto* probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(grid);
+  auto global_grid_map = std::make_shared<GridMap2D>(*probability_grid);
+  pose_initializer_->InitGlobalGridMap(global_grid_map);
+
+  auto cloud = global_static_submap_->cloud();
+  auto global_cloud_map = std::make_shared<CloudMap2D>(*cloud);
+  pose_initializer_->InitGlobalCloudMap(global_cloud_map);
+
+  pose_initializer_->InitGlobalLineMap(
+      std::shared_ptr<mapping::LineMap2DList>(
+          const_cast<mapping::LineMap2DList*>(global_static_submap_->line_map_2d_list()),
+          [](void*){}));  // 空删除器
 
   // 触发全局重定位
   pose_initializer_->TriggerGlobalRelocalization();
@@ -357,7 +309,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                                     tracked_lane_data);
     line_matcher_->TrackLineFromMap(initial_ceres_pose,
                                     line_data,
-                                    *global_line_map_,
+                                    *global_static_submap_->line_map_2d_list(),
                                     global_tracked_lane_data);
   }
 
@@ -384,10 +336,11 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                           tracked_lane_data,
                           global_tracked_lane_data,
                           *matching_submap->grid(), *local_grid_map,
-                          *matching_submap->line_map_2d_list(), *global_line_map_,
+                          *matching_submap->line_map_2d_list(),
+                          *global_static_submap_->line_map_2d_list(),
                           *matching_submap->cloud_ikdtree(),
                           *local_cloud_ikdtree,
-                          *global_highlight_cloud_ikdtree_,
+                          *global_static_submap_->highlight_cloud_ikdtree(),
                           pose_observation.get(), cov,
                           &summary);
   double match_time = tic_toc.toc();
@@ -407,7 +360,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                               highlight_point_cloud,
                               *local_grid_map,
                               *local_cloud_ikdtree,
-                              *global_highlight_cloud_ikdtree_,
+                              *global_static_submap_->highlight_cloud_ikdtree(),
                               pose_observation.get(),
                               &summary);
 
@@ -705,9 +658,15 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
         LOG(INFO) << "Local relocalization failed, trying global relocalization...";
         pose_initializer_->stop();
         
-        // 触发全局重定位
-        pose_initializer_->InitGlobalGridMap(global_grid_map_);
-        pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+        auto grid = global_static_submap_->grid();
+        const auto* probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(grid);
+        auto global_grid_map = std::make_shared<GridMap2D>(*probability_grid);
+        pose_initializer_->InitGlobalGridMap(global_grid_map);
+
+        auto cloud = global_static_submap_->cloud();
+        auto global_cloud_map = std::make_shared<CloudMap2D>(*cloud);
+        pose_initializer_->InitGlobalCloudMap(global_cloud_map);
+
         pose_initializer_->TriggerGlobalRelocalization();
         pose_initializer_->start();
         
@@ -826,7 +785,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     const double recovery_score = real_time_correlative_scan_matcher_.Match(
         validation_result.validated_pose,
         filtered_gravity_aligned_point_cloud,
-        *global_grid_map_,
+        *global_static_submap_->grid(),
         &recovery_pose);
     
     LOG(INFO) << "Recovery correlative matching score: " << recovery_score;
@@ -843,9 +802,9 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
           recovery_pose,
           filtered_gravity_aligned_point_cloud,
           merged_data.merged_highlight_cloud,
-          *global_grid_map_,
+          *global_static_submap_->grid(),
           *local_map_updater_->local_cloud_map_ikdtree(),
-          *global_highlight_cloud_ikdtree_,
+          *global_static_submap_->highlight_cloud_ikdtree(),
           recovery_pose_refined.get(),
           &recovery_summary);
       

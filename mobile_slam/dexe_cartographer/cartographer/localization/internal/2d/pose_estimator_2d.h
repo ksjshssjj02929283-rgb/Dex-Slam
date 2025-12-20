@@ -96,10 +96,7 @@ class PoseEstimator2D {
 
   void InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
-  std::shared_ptr<GridMap2D> GetGlobalGridMap() const { return global_grid_map_; }
-  std::shared_ptr<CloudMap2D> GetGlobalCloudMap() const { return global_cloud_map_; }
-  std::shared_ptr<CloudMap2D> GetGlobalHighlighCloudMap() const { return global_highlight_cloud_map_; }
-  std::shared_ptr<mapping::LineMap2DList> GetGlobalLineMap() const { return global_line_map_; }
+  std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const { return global_static_submap_; }
 
   bool SetInitialPose(const transform::Rigid3d &initial_pose);
 
@@ -187,11 +184,9 @@ private:
   const proto::PoseEstimatorOptions2D options_;
   mapping::ActiveSubmaps2D active_submaps_;
 
-  std::shared_ptr<GridMap2D> global_grid_map_ = nullptr;
-  std::shared_ptr<CloudMap2D> global_cloud_map_ = nullptr;
-  std::shared_ptr<CloudMap2D> global_highlight_cloud_map_ = nullptr;
-  std::unique_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> global_highlight_cloud_ikdtree_ = nullptr;
-  std::shared_ptr<mapping::LineMap2DList> global_line_map_ = nullptr;
+  // 全局静态地图submap，包含所有全局地图数据(包括cloud和highlight_cloud的ikd-tree)
+  std::shared_ptr<mapping::Submap2D> global_static_submap_ = nullptr;
+  
   // MotionFilter motion_filter_;
   mapping::MotionFilter keyframe_motion_filter_;
   mapping::MotionFilter map_insertion_motion_filter_;

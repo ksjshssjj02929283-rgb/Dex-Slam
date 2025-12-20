@@ -458,6 +458,10 @@ std::map<int, int> LocalizationUpdater::LoadState(
         global_static_submap_ = std::make_shared<mapping::Submap2D>(
             proto.global_static_submap(), &conversion_tables);
         LOG(INFO) << "Global static submap loaded successfully";
+        
+        // 重建ikd-tree (使用Submap2D的方法)
+        global_static_submap_->RebuildIkdTrees();
+        
         break;
       }
       default:

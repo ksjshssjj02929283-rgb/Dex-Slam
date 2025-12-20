@@ -31,16 +31,10 @@ LocalMapUpdater2D::LocalMapUpdater2D(
   box_filter_ = std::make_unique<sensor::BoxFilter>(box_);
 }
 
-void LocalMapUpdater2D::SetGlobalGridMap(std::shared_ptr<GridMap2D> grid_map)
+void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> global_submap)
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  global_grid_map_ = grid_map;
-}
-
-void LocalMapUpdater2D::SetGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map)
-{
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  global_cloud_map_ = cloud_map;
+  global_static_submap_ = global_submap;
 }
 
 void LocalMapUpdater2D::UpdateRobotPose(const transform::Rigid2d& robot_pose)
@@ -86,13 +80,8 @@ bool LocalMapUpdater2D::NeedUpdateLocalMap()
 void LocalMapUpdater2D::UpdateLocalMap()
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  if (global_grid_map_ == nullptr) {
-    LOG(ERROR) << "Global grid map is not initialized, please set global grid map first.";
-    return;
-  }
-
-  if (global_cloud_map_ == nullptr) {
-    LOG(ERROR) << "Global cloud map is not initialized, please set global cloud map first.";
+  if (!global_static_submap_) {
+    LOG(ERROR) << "Global static submap is not initialized, please set global submap first.";
     return;
   }
 
@@ -110,12 +99,19 @@ void LocalMapUpdater2D::UpdateLocalMap()
 
 void LocalMapUpdater2D::UpdateLocalGridMap()
 {
-  CHECK(global_grid_map_ != nullptr);
+  CHECK(global_static_submap_ != nullptr);
   CHECK(origin_pose_ != nullptr);
+  
+  // 从 global_static_submap_ 获取 grid
+  auto global_grid = global_static_submap_->grid();
+  CHECK(global_grid != nullptr);
+  const auto* global_probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_grid);
+  CHECK(global_probability_grid != nullptr);
+  
   // 1. 构建MapLimits
   double origin_x = origin_pose_->translation().x();
   double origin_y = origin_pose_->translation().y();
-  double resolution = global_grid_map_->limits().resolution();
+  double resolution = global_probability_grid->limits().resolution();
   int num_x_cells = (box_.max_x - box_.min_x) / resolution;
   int num_y_cells = (box_.max_y - box_.min_y) / resolution;
   
@@ -131,8 +127,7 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
   // 2. create submap
   local_grid_map_.reset(new GridMap2D(map_limits));
 
-  const mapping::MapLimits& global_map_limits =
-                                global_grid_map_->limits();
+  const mapping::MapLimits& global_map_limits = global_probability_grid->limits();
 
   // 给submap赋值
   // 注意：Cartographer的索引约定是 Array2i[0]=行(y), Array2i[1]=列(x)
@@ -143,7 +138,7 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
       Eigen::Vector2f sub_cell_center = map_limits.GetCellCenter(local_cell_index);
       Eigen::Array2i global_cell_index = global_map_limits.GetCellIndex(sub_cell_center);
       if (global_map_limits.Contains(global_cell_index)) {
-        if (!global_grid_map_->IsKnown(global_cell_index)) {
+        if (!global_probability_grid->IsKnown(global_cell_index)) {
           // 全局地图中的未知区域：保持为 kUnknownCorrespondenceValue
           // ProbabilityGrid 构造时已将所有单元格初始化为 kUnknownCorrespondenceValue
           // 这里不需要任何操作，跳过即可
@@ -151,7 +146,7 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
           continue;
         }
         // 全局地图中的已知区域：复制概率值
-        float prob = global_grid_map_->GetProbability(global_cell_index);
+        float prob = global_probability_grid->GetProbability(global_cell_index);
         local_grid_map_->SetProbability(local_cell_index, prob);
       } else {
         // 超出全局地图范围：设置为最小概率（障碍物）
@@ -176,14 +171,18 @@ void LocalMapUpdater2D::UpdateLocalGridMap()
 
 void LocalMapUpdater2D::UpdateLocalCloudMap()
 {
-  CHECK(global_cloud_map_ != nullptr);
+  CHECK(global_static_submap_ != nullptr);
   CHECK(origin_pose_ != nullptr);
+
+  // 从 global_static_submap_ 获取 cloud
+  auto global_cloud = global_static_submap_->cloud();
+  CHECK(global_cloud != nullptr);
 
   box_filter_->SetOrigin(Eigen::Vector3f(origin_pose_->translation().x(),
                                          origin_pose_->translation().y(),
                                          0.0));
   std::shared_ptr<sensor::PointCloud> sub_cloud(new sensor::PointCloud());
-  box_filter_->Filter(*(global_cloud_map_->cloud()), *sub_cloud);
+  box_filter_->Filter(*global_cloud, *sub_cloud);
   local_cloud_map_.reset(new CloudMap2D(*sub_cloud));
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr sub_cloud_pcl(new pcl::PointCloud<pcl::PointXYZ>());
@@ -195,7 +194,11 @@ void LocalMapUpdater2D::UpdateLocalCloudMap()
     sub_cloud_pcl->push_back(p);
   }
 
-  float resolution = global_grid_map_->limits().resolution();
+  // 从 global_static_submap_ 获取 grid 来获取 resolution
+  auto global_grid = global_static_submap_->grid();
+  const auto* global_probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_grid);
+  float resolution = global_probability_grid->limits().resolution();
+  
   local_cloud_ikdtree_ = std::make_shared<ikd_tree::iKdTree<pcl::PointXYZ>>();
 
   local_cloud_ikdtree_->set_downsample_param(resolution);
@@ -203,18 +206,6 @@ void LocalMapUpdater2D::UpdateLocalCloudMap()
 
   // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
   // pcl::io::savePCDFile(home_dir + "/.dexe/data/loc_map.pcd", *sub_cloud_pcl);
-}
-
-std::shared_ptr<GridMap2D> LocalMapUpdater2D::global_grid_map()
-{
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  return global_grid_map_;
-}
-
-std::shared_ptr<CloudMap2D> LocalMapUpdater2D::global_cloud_map()
-{
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  return global_cloud_map_;
 }
 
 std::shared_ptr<GridMap2D> LocalMapUpdater2D::local_grid_map()
