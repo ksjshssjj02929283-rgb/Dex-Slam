@@ -43,10 +43,7 @@
 #include "cartographer/laser_perception/data_type.h"
 #include "cartographer/laser_perception/laser_perception.h"
 #include "cartographer/localization/proto/pose_initializer_options_2d.pb.h"
-#include "cartographer/localization/2d/grid_map_2d.h"
-#include "cartographer/localization/2d/cloud_map_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
-#include "cartographer/ikd_tree/ikd_tree.h"
 
 namespace cartographer {
 namespace localization {
@@ -87,9 +84,7 @@ class PoseInitializer {
   void Initialize();
   void ResetStatus();
 
-  void InitGlobalGridMap(const std::shared_ptr<GridMap2D>& grid_map);
-  void InitGlobalCloudMap(const std::shared_ptr<CloudMap2D>& cloud_map);
-  void InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2DList>& line_map);
+  void InitGlobalSubmap(const std::shared_ptr<mapping::Submap2D>& global_submap);
 
   bool SetInitialPose(const transform::Rigid2d& initial_pose);
 
@@ -120,10 +115,7 @@ class PoseInitializer {
 private:
   const proto::PoseInitializerOptions2D options_;
 
-  std::shared_ptr<GridMap2D> global_grid_map_ = nullptr;
-  std::shared_ptr<CloudMap2D> global_cloud_map_ = nullptr;
-  std::shared_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> global_cloud_ikdtree_ = nullptr;
-  std::shared_ptr<mapping::LineMap2DList> global_line_map_ = nullptr;
+  std::shared_ptr<mapping::Submap2D> global_submap_ = nullptr;
 
   std::shared_ptr<transform::Rigid2d> initial_pose_;
   std::shared_ptr<transform::Rigid2d> global_pose_estimate_;

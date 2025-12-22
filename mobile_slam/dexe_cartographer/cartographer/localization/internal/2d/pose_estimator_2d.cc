@@ -145,12 +145,7 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
     LOG(WARNING) << "There is no need to update local map for initial pose setting!";
   }
 
-  pose_initializer_->InitGlobalGridMap(local_map_updater_->local_grid_map());
-  pose_initializer_->InitGlobalCloudMap(local_map_updater_->local_cloud_map());
-  pose_initializer_->InitGlobalLineMap(
-      std::shared_ptr<mapping::LineMap2DList>(
-          const_cast<mapping::LineMap2DList*>(global_static_submap_->line_map_2d_list()),
-          [](void*){}));  // 空删除器
+  pose_initializer_->InitGlobalSubmap(global_static_submap_);
 
   pose_initializer_->SetInitialPose(transform::Project2D(initial_pose));
   pose_initializer_->start();
@@ -175,20 +170,8 @@ void PoseEstimator2D::TriggerGlobalRelocalization()
                                   options_.pose_initializer_options());
   }
 
-  // 从global_static_submap_获取grid和cloud数据
-  auto grid = global_static_submap_->grid();
-  const auto* probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(grid);
-  auto global_grid_map = std::make_shared<GridMap2D>(*probability_grid);
-  pose_initializer_->InitGlobalGridMap(global_grid_map);
-
-  auto cloud = global_static_submap_->cloud();
-  auto global_cloud_map = std::make_shared<CloudMap2D>(*cloud);
-  pose_initializer_->InitGlobalCloudMap(global_cloud_map);
-
-  pose_initializer_->InitGlobalLineMap(
-      std::shared_ptr<mapping::LineMap2DList>(
-          const_cast<mapping::LineMap2DList*>(global_static_submap_->line_map_2d_list()),
-          [](void*){}));  // 空删除器
+  // 使用 global_static_submap_ 初始化 pose_initializer_
+  pose_initializer_->InitGlobalSubmap(global_static_submap_);
 
   // 触发全局重定位
   pose_initializer_->TriggerGlobalRelocalization();
@@ -666,14 +649,7 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
         LOG(INFO) << "Local relocalization failed, trying global relocalization...";
         pose_initializer_->stop();
         
-        auto grid = global_static_submap_->grid();
-        const auto* probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(grid);
-        auto global_grid_map = std::make_shared<GridMap2D>(*probability_grid);
-        pose_initializer_->InitGlobalGridMap(global_grid_map);
-
-        auto cloud = global_static_submap_->cloud();
-        auto global_cloud_map = std::make_shared<CloudMap2D>(*cloud);
-        pose_initializer_->InitGlobalCloudMap(global_cloud_map);
+        pose_initializer_->InitGlobalSubmap(global_static_submap_);
 
         pose_initializer_->TriggerGlobalRelocalization();
         pose_initializer_->start();

@@ -77,40 +77,12 @@ void PoseInitializer::ResetStatus()
   initializer_status_ = PoseInitializerStatus::Idle;
 }
 
-void PoseInitializer::InitGlobalGridMap(const std::shared_ptr<GridMap2D>& grid_map)
+void PoseInitializer::InitGlobalSubmap(const std::shared_ptr<mapping::Submap2D>& global_submap)
 {
   std::unique_lock<std::mutex> lock(data_mutex_);
-  global_grid_map_ = grid_map;
+  global_submap_ = global_submap;
   // 地图更新时重置快速匹配器，下次使用时重新创建
   fast_correlative_scan_matcher_.reset();
-}
-
-void PoseInitializer::InitGlobalCloudMap(const std::shared_ptr<CloudMap2D>& cloud_map)
-{
-  std::unique_lock<std::mutex> lock(data_mutex_);
-  global_cloud_map_ = cloud_map;
-
-  pcl::PointCloud<pcl::PointXYZ>::Ptr global_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  for (const auto& point : global_cloud_map_->cloud()->points()) {
-    pcl::PointXYZ p;
-    p.x = point.position.x();
-    p.y = point.position.y();
-    p.z = 0.0;
-    global_map_cloud->push_back(p);
-  }
-
-  global_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
-
-  float resolution = global_grid_map_->limits().resolution();
-  global_cloud_ikdtree_->set_downsample_param(resolution);
-  global_cloud_ikdtree_->Build(global_map_cloud->points);
-
-}
-
-void PoseInitializer::InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2DList>& line_map)
-{
-  std::unique_lock<std::mutex> lock(data_mutex_);
-  global_line_map_ = line_map;
 }
 
 bool PoseInitializer::SetInitialPose(const transform::Rigid2d &initial_pose)
@@ -209,8 +181,8 @@ void PoseInitializer::Run()
 
 void PoseInitializer::RelocalzationOnce()
 {
-  if (global_grid_map_ == nullptr) {
-    LOG(ERROR) << "Global grid map is not initialized, please set global grid map first.";
+  if (global_submap_ == nullptr) {
+    LOG(ERROR) << "Global submap is not initialized, please set global submap first.";
     initializer_status_ = PoseInitializerStatus::NotInitialized;
     return;
   }
@@ -224,10 +196,18 @@ void PoseInitializer::RelocalzationOnce()
     return;
   }
 
+  // 从 global_submap_ 获取 grid
+  auto global_grid = global_submap_->grid();
+  if (!global_grid) {
+    LOG(ERROR) << "Global grid is not available in submap.";
+    initializer_status_ = PoseInitializerStatus::NotInitialized;
+    return;
+  }
+
   if (fast_correlative_scan_matcher_ == nullptr) {
     fast_correlative_scan_matcher_ =
         std::make_unique<mapping::scan_matching::FastCorrelativeScanMatcher2D>(
-          *global_grid_map_, options_.fast_correlative_scan_matcher_options());
+          *global_grid, options_.fast_correlative_scan_matcher_options());
   }
 
   initializer_status_ = PoseInitializerStatus::LocalEstimating;
@@ -277,7 +257,7 @@ void PoseInitializer::RelocalzationOnce()
   if (options_.use_online_correlative_scan_matching()) {
     const double score = real_time_correlative_scan_matcher_->Match(
       *initial_pose_, *curr_cloud_,
-      *global_grid_map_, &online_correlative_pose);
+      *global_grid, &online_correlative_pose);
 
     if (score < options_.global_localization_min_score()) {
       LOG(WARNING) << "online correlative scan matcher score is too low.";
@@ -303,21 +283,30 @@ void PoseInitializer::RelocalzationOnce()
   if (curr_line_data_->empty()) {
     LOG(WARNING) << "no line data in scan matcher.";
   }
+  
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
-  if (curr_line_data_->size() != 0 && global_line_map_->size() != 0) {
+  auto global_line_map = global_submap_->line_map_2d_list();
+  if (curr_line_data_->size() != 0 && global_line_map && global_line_map->size() != 0) {
     line_matcher_->TrackLineFromMap(*initial_pose_,
                                     *curr_line_data_,
-                                    *global_line_map_,
+                                    *global_line_map,
                                     tracked_lane_data);
+  }
+
+  auto global_cloud_ikdtree = global_submap_->cloud_ikdtree();
+  if (!global_cloud_ikdtree) {
+    LOG(ERROR) << "Global cloud ikdtree is not available in submap.";
+    initializer_status_ = PoseInitializerStatus::Failed;
+    return;
   }
 
   ceres_scan_matcher_->Match(initial_pose_->translation(),
                             *initial_pose_,
                             *curr_cloud_,
                             tracked_lane_data,
-                            *global_grid_map_,
-                            *global_line_map_,
-                            *global_cloud_ikdtree_,
+                            *global_grid,
+                            *global_line_map,
+                            *global_cloud_ikdtree,
                             global_pose_estimate_.get(),
                             &summary);
 
@@ -340,8 +329,8 @@ void PoseInitializer::RelocalzationOnce()
 
 void PoseInitializer::GlobalRelocalzationOnce()
 {
-  if (global_grid_map_ == nullptr) {
-    LOG(ERROR) << "Global grid map is not initialized, please set global grid map first.";
+  if (global_submap_ == nullptr) {
+    LOG(ERROR) << "Global submap is not initialized, please set global submap first.";
     initializer_status_ = PoseInitializerStatus::NotInitialized;
     return;
   }
@@ -355,10 +344,18 @@ void PoseInitializer::GlobalRelocalzationOnce()
     return;
   }
 
+  // 从 global_submap_ 获取 grid
+  auto global_grid = global_submap_->grid();
+  if (!global_grid) {
+    LOG(ERROR) << "Global grid is not available in submap.";
+    initializer_status_ = PoseInitializerStatus::NotInitialized;
+    return;
+  }
+
   if (fast_correlative_scan_matcher_ == nullptr) {
     fast_correlative_scan_matcher_ =
         std::make_unique<mapping::scan_matching::FastCorrelativeScanMatcher2D>(
-          *global_grid_map_, options_.fast_correlative_scan_matcher_options());
+          *global_grid, options_.fast_correlative_scan_matcher_options());
   }
 
   initializer_status_ = PoseInitializerStatus::GlobalEstimating;
@@ -394,7 +391,7 @@ void PoseInitializer::GlobalRelocalzationOnce()
   if (options_.use_online_correlative_scan_matching()) {
     const double score = real_time_correlative_scan_matcher_->Match(
       *initial_pose_, *curr_cloud_,
-      *global_grid_map_, &online_correlative_pose);
+      *global_grid, &online_correlative_pose);
 
     if (score < options_.global_localization_min_score()) {
       LOG(WARNING) << "Online correlative scan matcher score is too low: " << score;
@@ -415,20 +412,28 @@ void PoseInitializer::GlobalRelocalzationOnce()
   }
   
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
-  if (curr_line_data_->size() != 0 && global_line_map_->size() != 0) {
+  auto global_line_map = global_submap_->line_map_2d_list();
+  if (curr_line_data_->size() != 0 && global_line_map && global_line_map->size() != 0) {
     line_matcher_->TrackLineFromMap(*initial_pose_,
                                     *curr_line_data_,
-                                    *global_line_map_,
+                                    *global_line_map,
                                     tracked_lane_data);
+  }
+
+  auto global_cloud_ikdtree = global_submap_->cloud_ikdtree();
+  if (!global_cloud_ikdtree) {
+    LOG(ERROR) << "Global cloud ikdtree is not available in submap.";
+    initializer_status_ = PoseInitializerStatus::Failed;
+    return;
   }
 
   ceres_scan_matcher_->Match(initial_pose_->translation(),
                             *initial_pose_,
                             *curr_cloud_,
                             tracked_lane_data,
-                            *global_grid_map_,
-                            *global_line_map_,
-                            *global_cloud_ikdtree_,
+                            *global_grid,
+                            *global_line_map,
+                            *global_cloud_ikdtree,
                             global_pose_estimate_.get(),
                             &summary);
 
@@ -475,9 +480,15 @@ bool PoseInitializer::IsRelocalizationSuccess()
 
   transform::Rigid2d online_correlative_pose;
   if (options_.use_online_correlative_scan_matching()) {
+    auto global_grid = global_submap_->grid();
+    if (!global_grid) {
+      LOG(ERROR) << "Global grid is not available in submap for validation.";
+      return false;
+    }
+    
     score = real_time_correlative_scan_matcher_->Match(
       *global_pose_estimate_, *curr_cloud_,
-      *global_grid_map_, best_pose.get());
+      *global_grid, best_pose.get());
 
     if (score < options_.global_localization_min_score()) {
       LOG(WARNING) << "online correlative scan matcher score is too low.";
