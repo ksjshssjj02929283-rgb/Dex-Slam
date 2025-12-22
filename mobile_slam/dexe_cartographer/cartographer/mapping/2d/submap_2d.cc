@@ -580,6 +580,12 @@ void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
 
 void Submap2D::CloudDataCulling()
 {
+  // // 检查 ikd-tree 是否已初始化
+  if (cloud_ikdtree_->Root_Node == nullptr && highlight_cloud_ikdtree_->Root_Node == nullptr) {
+    // 如果两个 ikd-tree 都为空，直接返回
+    return;
+  }
+
   const MapLimits& limits = grid_->limits();
   // 需要先调用flatten函数，更新PCL_Storage
   cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
@@ -665,7 +671,12 @@ void Submap2D::RebuildIkdTrees()
     if (!cloud_ikdtree_) {
       LOG(ERROR) << "Cloud ikd-tree not initialized";
     } else if (cloud_ikdtree_->Root_Node == nullptr) {
+      float resolution = grid_->limits().resolution();
+      cloud_ikdtree_->set_downsample_param(resolution);
       cloud_ikdtree_->Build(cloud_pcl->points);
+      cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
+                        cloud_ikdtree_->PCL_Storage,
+                        ikd_tree::NOT_RECORD);
       LOG(INFO) << "Rebuilt cloud ikd-tree with " << cloud_pcl->points.size() << " points";
     } else {
       LOG(INFO) << "Cloud ikd-tree already built, skipping";
@@ -689,6 +700,11 @@ void Submap2D::RebuildIkdTrees()
     if (!highlight_cloud_ikdtree_) {
       LOG(ERROR) << "Highlight cloud ikd-tree not initialized";
     } else if (highlight_cloud_ikdtree_->Root_Node == nullptr) {
+      float resolution = grid_->limits().resolution();
+      highlight_cloud_ikdtree_->set_downsample_param(resolution);
+      highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
+                  highlight_cloud_ikdtree_->PCL_Storage,
+                  ikd_tree::NOT_RECORD);
       highlight_cloud_ikdtree_->Build(highlight_cloud_pcl->points);
       LOG(INFO) << "Rebuilt highlight cloud ikd-tree with " << highlight_cloud_pcl->points.size() << " points";
     } else {

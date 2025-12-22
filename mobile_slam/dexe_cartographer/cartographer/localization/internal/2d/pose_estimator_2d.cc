@@ -25,6 +25,8 @@
 
 #include "absl/memory/memory.h"
 #include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
+#include "cartographer/mapping/internal/2d/tsdf_range_data_inserter_2d.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/sensor/sync_point_cloud.h"
@@ -87,18 +89,10 @@ PoseEstimator2D::~PoseEstimator2D() {
   // 2. 清空 active_submaps，确保不再有新的插入操作
   active_submaps_.clear();
   
-  // 3. 显式释放 ikd-tree（可能有后台线程或缓存）
-  if (global_highlight_cloud_ikdtree_) {
-    global_highlight_cloud_ikdtree_.reset();
-  }
+  // 3. 释放地图数据（shared_ptr 会处理引用计数）
+  global_static_submap_.reset();
   
-  // 4. 释放地图数据（shared_ptr 会处理引用计数）
-  global_grid_map_.reset();
-  global_cloud_map_.reset();
-  global_highlight_cloud_map_.reset();
-  global_line_map_.reset();
-  
-  // 5. 释放其他资源
+  // 4. 释放其他资源
   local_map_updater_.reset();
   data_preprocessor_.reset();
   laser_perception_.reset();
@@ -322,7 +316,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
   
   // ⚠️ 安全性检查：确保所有地图资源在使用前都已初始化且有效
-  if (!local_grid_map || !local_cloud_ikdtree || !global_highlight_cloud_ikdtree_) {
+  if (!local_grid_map || !local_cloud_ikdtree) {
     LOG(ERROR) << "Local map resources not initialized, cannot perform scan matching";
     return absl::make_unique<transform::Rigid2d>(initial_ceres_pose);
   }
@@ -375,6 +369,20 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 
   // std::cout << "cov: \n" << cov.matrix() << std::endl;
   // LOG(INFO) << "scan match: " << *pose_observation;
+
+  // 【新增】检查pose_observation是否包含NaN或Inf
+  if (pose_observation) {
+    const auto& trans = pose_observation->translation();
+    const double angle = pose_observation->rotation().angle();
+    
+    if (!std::isfinite(trans.x()) || !std::isfinite(trans.y()) || !std::isfinite(angle)) {
+      LOG(ERROR) << "ScanMatch produced invalid pose! "
+                 << "Translation: [" << trans.x() << ", " << trans.y() << "], "
+                 << "Rotation angle: " << angle;
+      // 返回nullptr表示匹配失败
+      return nullptr;
+    }
+  }
 
   // 5. 如果匹配成功，向Metric中增加观测信息
   if (pose_observation) {
@@ -1003,7 +1011,60 @@ PoseEstimator2D::InsertIntoSubmap(
                                   tracked_lines_in_local,
                                   merged_data.merged_reflector_data);
 
-  // 7. 返回插入结果
+  // 4. 同时将数据插入到global_static_submap_，实现全局地图的增量更新
+  if (global_static_submap_) {
+    // 确保global_static_submap_允许插入数据
+    // 从pbstream加载的submap默认是finished状态，需要重新开放插入
+    if (global_static_submap_->insertion_finished()) {
+      global_static_submap_->set_insertion_finished(false);
+      LOG(INFO) << "Reopened global_static_submap_ for data insertion";
+    }
+    
+    // 创建range_data_inserter（如果还没有创建）
+    if (!range_data_inserter_for_global_map_) {
+      const auto& inserter_options = options_.submaps_options().range_data_inserter_options();
+      switch (inserter_options.range_data_inserter_type()) {
+        case mapping::proto::RangeDataInserterOptions::PROBABILITY_GRID_INSERTER_2D:
+          range_data_inserter_for_global_map_ = 
+              std::make_unique<mapping::ProbabilityGridRangeDataInserter2D>(
+                  inserter_options.probability_grid_range_data_inserter_options_2d());
+          break;
+        case mapping::proto::RangeDataInserterOptions::TSDF_INSERTER_2D:
+          range_data_inserter_for_global_map_ = 
+              std::make_unique<mapping::TSDFRangeDataInserter2D>(
+                  inserter_options.tsdf_range_data_inserter_options_2d());
+          break;
+        default:
+          LOG(FATAL) << "Unknown RangeDataInserterType for global map.";
+      }
+      LOG(INFO) << "Created range_data_inserter for global static submap";
+    }
+    
+    // 插入range data到global_static_submap_（更新栅格地图）
+    for (const auto& range_data : all_range_data_to_insert) {
+      global_static_submap_->InsertRangeData(range_data, range_data_inserter_for_global_map_.get());
+    }
+    
+    // 插入点云数据到global_static_submap_
+    // InsertCloudData内部会自动增量更新ikd-tree，不需要手动rebuild
+    global_static_submap_->InsertCloudData(cloud_in_local, highlight_cloud_in_local);
+    
+    // 插入线数据到global_static_submap_
+    global_static_submap_->InsertLineData(tracked_lines_in_local);
+    
+    // 注意：ikd-tree会在InsertCloudData中自动增量更新，无需手动重建
+    // local_map_updater持有global_static_submap_的引用，会自动使用更新后的数据
+
+    static int submap_count = 0;
+    std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+    std::string folder = home_dir + "/.dexe/data/submaps/";
+    std::string pcd_filename = "submap_" + std::to_string(submap_count) + ".pcd";
+    std::string png_filename = "submap_" + std::to_string(submap_count++) + ".png";
+    global_static_submap_->SaveSubmapCloud(folder, pcd_filename);
+    global_static_submap_->grid()->DrawAsImage(folder, png_filename);
+  }
+
+  // 5. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{
       std::make_shared<const mapping::TrajectoryNode::Data>(mapping::TrajectoryNode::Data{
           time,

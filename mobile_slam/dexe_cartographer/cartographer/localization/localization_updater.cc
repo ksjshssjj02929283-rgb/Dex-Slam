@@ -454,13 +454,55 @@ std::map<int, int> LocalizationUpdater::LoadState(
         break;
       }
       case SerializedData::kGlobalStaticSubmap: {
-        mapping::ValueConversionTables conversion_tables;
-        global_static_submap_ = std::make_shared<mapping::Submap2D>(
-            proto.global_static_submap(), &conversion_tables);
-        LOG(INFO) << "Global static submap loaded successfully";
+        LOG(INFO) << "Loading global static submap from pbstream...";
         
-        // 重建ikd-tree (使用Submap2D的方法)
+        // 使用成员变量conversion_tables_而不是局部变量
+        // 这很关键！ProbabilityGrid保存了指向conversion_tables内部查找表的指针
+        // 如果使用局部变量，函数结束后指针就悬空了，导致概率值计算错误
+        global_static_submap_ = std::make_shared<mapping::Submap2D>(
+            proto.global_static_submap(), &conversion_tables_);
+        
+        // 从配置中获取参数并设置到global_static_submap_
+        // 这些参数将用于后续的增量更新
+        if (!all_trajectory_builder_options_.empty()) {
+          const auto& first_trajectory_options = all_trajectory_builder_options_[0];
+          if (first_trajectory_options.trajectory_builder_options().has_trajectory_builder_2d_options()) {
+            const auto& trajectory_builder_2d_options = 
+                first_trajectory_options.trajectory_builder_options().trajectory_builder_2d_options();
+            const auto& submaps_options = trajectory_builder_2d_options.submaps_options();
+            
+            // 设置cloud culling参数（用于点云剔除）
+            // 对于global_static_submap_，禁用culling（设置为0.1）
+            // 因为grid更新是增量的，新插入点的区域概率还没提升，会被误删
+            // active_submaps使用配置值，因为它的grid在持续更新
+            global_static_submap_->SetCloudCullingProb(submaps_options.cloud_culling_prob());
+            
+            // 设置line culling参数（用于线特征剔除）
+            global_static_submap_->SetLineCullingParam(
+                submaps_options.min_line_length(),
+                submaps_options.max_line_length(),
+                submaps_options.line_culling_obs());
+            LOG(INFO) << "Set line culling params: min_length=" << submaps_options.min_line_length()
+                      << ", max_length=" << submaps_options.max_line_length()
+                      << ", culling_obs=" << submaps_options.line_culling_obs();
+            
+            // 日志：range data inserter参数（这些参数将在PoseEstimator2D中使用）
+            const auto& range_data_inserter_options = submaps_options.range_data_inserter_options();
+            if (range_data_inserter_options.range_data_inserter_type() == 
+                mapping::proto::RangeDataInserterOptions::PROBABILITY_GRID_INSERTER_2D) {
+              const auto& prob_grid_options = 
+                  range_data_inserter_options.probability_grid_range_data_inserter_options_2d();
+              LOG(INFO) << "Range data inserter params: hit_probability=" 
+                        << prob_grid_options.hit_probability()
+                        << ", miss_probability=" << prob_grid_options.miss_probability()
+                        << ", insert_free_space=" << prob_grid_options.insert_free_space();
+            }
+          }
+        }
+        
+        // 重建ikd-tree（使用Submap2D的方法）
         global_static_submap_->RebuildIkdTrees();
+        LOG(INFO) << "Global static submap loaded and configured successfully";
         
         break;
       }

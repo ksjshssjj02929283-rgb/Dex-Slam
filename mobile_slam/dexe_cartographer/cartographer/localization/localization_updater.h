@@ -114,6 +114,10 @@ private:
 
   std::unique_ptr<mapping::PoseGraph> pose_graph_;
 
+  // ValueConversionTables用于global_static_submap_的概率值转换
+  // 必须是持久的成员变量，因为grid保存了指向它内部查找表的指针
+  mapping::ValueConversionTables conversion_tables_;
+  
   std::shared_ptr<mapping::Submap2D> global_static_submap_;
 
   std::shared_ptr<std::vector<Eigen::Vector2d>> global_reflector_map_;

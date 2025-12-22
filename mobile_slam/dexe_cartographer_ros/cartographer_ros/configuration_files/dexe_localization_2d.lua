@@ -84,7 +84,7 @@ POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.rotation_delta_cost_weight 
 POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.translation_delta_cost_weight = 1
 POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.linear_search_window = 0.2
 POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(15.)
-POSE_ESTIMATOR_2D.ceres_scan_matcher.occupied_space_weight = 30
+POSE_ESTIMATOR_2D.ceres_scan_matcher.occupied_space_weight = 100
 POSE_ESTIMATOR_2D.ceres_scan_matcher.translation_weight = 1
 POSE_ESTIMATOR_2D.ceres_scan_matcher.rotation_weight = 1
 POSE_ESTIMATOR_2D.ceres_scan_matcher.line_weight = 60
