@@ -649,9 +649,9 @@ std::map<int, int> MapBuilder::LoadState(
       case SerializedData::kGlobalStaticSubmap: {
         LOG(INFO) << "Loading global static submap from pbstream";
         if (options_.use_trajectory_builder_2d()) {
-          ValueConversionTables conversion_tables;
+          // Use member conversion_tables_ to avoid dangling pointer
           global_static_submap_ = std::make_shared<Submap2D>(
-              proto.global_static_submap(), &conversion_tables);
+              proto.global_static_submap(), &conversion_tables_);
           LOG(INFO) << "Global static submap loaded successfully";
         }
         break;

@@ -133,6 +133,10 @@ class MapBuilder : public MapBuilderInterface {
   
   // Global static submap generated from all trajectory nodes
   std::shared_ptr<Submap2D> global_static_submap_;
+  
+  // Conversion tables for probability grid - must be persistent for the lifetime
+  // of global_static_submap_
+  ValueConversionTables conversion_tables_;
 };
 
 std::unique_ptr<MapBuilderInterface> CreateMapBuilder(

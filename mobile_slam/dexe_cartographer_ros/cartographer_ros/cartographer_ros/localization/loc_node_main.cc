@@ -44,7 +44,7 @@ DEFINE_string(configuration_directory, "",
 DEFINE_string(configuration_basename, "",
               "Basename, i.e. not containing any directory prefix, of the "
               "configuration file.");
-DEFINE_bool(load_frozen_state, true,
+DEFINE_bool(load_frozen_state, false,
             "Load the saved state as frozen (non-optimized) trajectories.");
 DEFINE_bool(
     start_trajectory_with_default_topics, true,
@@ -389,6 +389,24 @@ private:
     
     try {
       if (localization_node_) {
+        // 在结束轨迹前保存 pbstream（包含增量更新后的 global static submap）
+        if (!FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
+          std::string save_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
+          
+          RCLCPP_INFO(get_logger(), "Saving updated map to: %s", save_filename.c_str());
+          
+          try {
+            localization_node_->SerializeState(save_filename, true /* include_unfinished_submaps */);
+            RCLCPP_INFO(get_logger(), "Successfully saved updated map with global static submap");
+          } catch (const std::exception& e) {
+            RCLCPP_ERROR(get_logger(), "Failed to save map: %s", e.what());
+            // 继续停止流程，即使保存失败
+          }
+        } else {
+          RCLCPP_WARN(get_logger(), "Map folder or name not specified, skipping map save");
+        }
+        
+        // 结束所有轨迹
         localization_node_->FinishAllTrajectories();
         localization_node_.reset();
       }

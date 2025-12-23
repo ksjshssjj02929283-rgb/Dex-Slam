@@ -299,16 +299,121 @@ std::string LocalizationUpdater::SubmapToProto(
 
 void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
                                 io::ProtoStreamWriterInterface* const writer) {
+  // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
-                    include_unfinished_submaps);
+                    include_unfinished_submaps, global_static_submap_);
+  
+  if (global_static_submap_) {
+    LOG(INFO) << "=== Global Static Submap Save Statistics ===";
+    
+    // 获取轨迹节点数量
+    const auto nodes = pose_graph_->GetTrajectoryNodes();
+    LOG(INFO) << "Total trajectory nodes: " << nodes.size();
+    
+    // 栅格地图信息
+    const auto* grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_static_submap_->grid());
+    if (grid) {
+      const auto& limits = grid->limits();
+      LOG(INFO) << "Grid Map:";
+      LOG(INFO) << "  - Resolution: " << limits.resolution() << " meters/cell";
+      LOG(INFO) << "  - Size: " << limits.cell_limits().num_x_cells << " x " 
+                << limits.cell_limits().num_y_cells << " cells";
+      const Eigen::Vector2f origin = global_static_submap_->local_pose().translation().head<2>().cast<float>();
+      LOG(INFO) << "  - Origin: [" << origin.x() << ", " << origin.y() << "]";
+    }
+    
+    // 点云信息
+    const auto* cloud = global_static_submap_->cloud();
+    if (cloud) {
+      LOG(INFO) << "Point Cloud: " << cloud->size() << " points";
+    } else {
+      LOG(INFO) << "Point Cloud: empty";
+    }
+    
+    const auto* highlight_cloud = global_static_submap_->highlight_cloud();
+    if (highlight_cloud) {
+      LOG(INFO) << "Highlight Point Cloud: " << highlight_cloud->size() << " points";
+    } else {
+      LOG(INFO) << "Highlight Point Cloud: empty";
+    }
+    
+    // 线特征信息
+    const auto* line_map_2d_list = global_static_submap_->line_map_2d_list();
+    if (line_map_2d_list) {
+      const auto& line_data_map = line_map_2d_list->GetLineMapData2DList();
+      LOG(INFO) << "Line Features: " << line_data_map.size() << " line segments";
+    } else {
+      LOG(INFO) << "Line Features: empty";
+    }
+    
+    // Range data信息
+    LOG(INFO) << "Range Data Entries: " << global_static_submap_->num_range_data();
+    
+    LOG(INFO) << "============================================";
+  }
 }
 
 bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
                                       const std::string& filename) {
   io::ProtoStreamWriter writer(filename);
+  
+  // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps);
-  return (writer.Close());
+                    include_unfinished_submaps, global_static_submap_);
+  
+  bool success = writer.Close();
+  
+  if (success && global_static_submap_) {
+    LOG(INFO) << "Successfully saved state to: " << filename;
+    LOG(INFO) << "=== Global Static Submap Save Statistics ===";
+    
+    // 获取轨迹节点数量
+    const auto nodes = pose_graph_->GetTrajectoryNodes();
+    LOG(INFO) << "Total trajectory nodes: " << nodes.size();
+    
+    // 栅格地图信息
+    const auto* grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_static_submap_->grid());
+    if (grid) {
+      const auto& limits = grid->limits();
+      LOG(INFO) << "Grid Map:";
+      LOG(INFO) << "  - Resolution: " << limits.resolution() << " meters/cell";
+      LOG(INFO) << "  - Size: " << limits.cell_limits().num_x_cells << " x " 
+                << limits.cell_limits().num_y_cells << " cells";
+      const Eigen::Vector2f origin = global_static_submap_->local_pose().translation().head<2>().cast<float>();
+      LOG(INFO) << "  - Origin: [" << origin.x() << ", " << origin.y() << "]";
+    }
+    
+    // 点云信息
+    const auto* cloud = global_static_submap_->cloud();
+    if (cloud) {
+      LOG(INFO) << "Point Cloud: " << cloud->size() << " points";
+    } else {
+      LOG(INFO) << "Point Cloud: empty";
+    }
+    
+    const auto* highlight_cloud = global_static_submap_->highlight_cloud();
+    if (highlight_cloud) {
+      LOG(INFO) << "Highlight Point Cloud: " << highlight_cloud->size() << " points";
+    } else {
+      LOG(INFO) << "Highlight Point Cloud: empty";
+    }
+    
+    // 线特征信息
+    const auto* line_map_2d_list = global_static_submap_->line_map_2d_list();
+    if (line_map_2d_list) {
+      const auto& line_data_map = line_map_2d_list->GetLineMapData2DList();
+      LOG(INFO) << "Line Features: " << line_data_map.size() << " line segments";
+    } else {
+      LOG(INFO) << "Line Features: empty";
+    }
+    
+    // Range data信息
+    LOG(INFO) << "Range Data Entries: " << global_static_submap_->num_range_data();
+    
+    LOG(INFO) << "============================================";
+  }
+  
+  return success;
 }
 
 /**
