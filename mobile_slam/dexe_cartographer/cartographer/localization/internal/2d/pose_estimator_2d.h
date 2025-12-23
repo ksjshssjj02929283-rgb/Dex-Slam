@@ -187,9 +187,6 @@ private:
   // 全局静态地图submap，包含所有全局地图数据(包括cloud和highlight_cloud的ikd-tree)
   std::shared_ptr<mapping::Submap2D> global_static_submap_ = nullptr;
   
-  // 用于向global_static_submap_插入range data的inserter
-  std::unique_ptr<mapping::RangeDataInserterInterface> range_data_inserter_for_global_map_;
-  
   // MotionFilter motion_filter_;
   mapping::MotionFilter keyframe_motion_filter_;
   mapping::MotionFilter map_insertion_motion_filter_;

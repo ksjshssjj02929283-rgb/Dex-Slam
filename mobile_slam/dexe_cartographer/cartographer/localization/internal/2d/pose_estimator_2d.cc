@@ -71,7 +71,8 @@ PoseEstimator2D::PoseEstimator2D(
             options_.line_matcher_options());
 
   local_map_updater_ =
-      std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options());
+      std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options(),
+                                          options_.submaps_options());
 
   loc_state_ = LocalizationState::NOT_INITIALIZED;
 
@@ -105,7 +106,6 @@ void PoseEstimator2D::InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D
     LOG(ERROR) << "Cannot initialize global maps from null submap";
     return;
   }
-
   global_static_submap_ = global_submap;
 
   // 初始化 local_map_updater_ 的全局地图引用
@@ -145,7 +145,13 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
     LOG(WARNING) << "There is no need to update local map for initial pose setting!";
   }
 
-  pose_initializer_->InitGlobalSubmap(global_static_submap_);
+  auto local_submap = local_map_updater_->local_submap();
+  if (!local_submap) {
+    LOG(ERROR) << "Local submap is not available!";
+    return false;
+  }
+
+  pose_initializer_->InitGlobalSubmap(local_submap);
 
   pose_initializer_->SetInitialPose(transform::Project2D(initial_pose));
   pose_initializer_->start();
@@ -295,15 +301,12 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   auto pose_observation = absl::make_unique<transform::Rigid2d>();
   ceres::Solver::Summary summary;
 
-  auto local_grid_map = local_map_updater_->local_grid_map();
-  auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
-  
-  // ⚠️ 安全性检查：确保所有地图资源在使用前都已初始化且有效
-  if (!local_grid_map || !local_cloud_ikdtree) {
-    LOG(ERROR) << "Local map resources not initialized, cannot perform scan matching";
-    return absl::make_unique<transform::Rigid2d>(initial_ceres_pose);
+  auto local_submap = local_map_updater_->local_submap();
+  if (!local_submap) {
+    LOG(ERROR) << "Local submap is not available!";
+    return nullptr;
   }
-  
+
   common::TicToc tic_toc;
 
   Eigen::Matrix3d cov;
@@ -312,12 +315,12 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                           highlight_point_cloud,
                           tracked_lane_data,
                           global_tracked_lane_data,
-                          *matching_submap->grid(), *local_grid_map,
+                          *matching_submap->grid(), *local_submap->grid(),
                           *matching_submap->line_map_2d_list(),
-                          *global_static_submap_->line_map_2d_list(),
+                          *local_submap->line_map_2d_list(),
                           *matching_submap->cloud_ikdtree(),
-                          *local_cloud_ikdtree,
-                          *global_static_submap_->highlight_cloud_ikdtree(),
+                          *local_submap->cloud_ikdtree(),
+                          *matching_submap->highlight_cloud_ikdtree(),
                           pose_observation.get(), cov,
                           &summary);
   double match_time = tic_toc.toc();
@@ -330,14 +333,14 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     transform::Rigid2d check_pose;
     real_time_correlative_scan_matcher_.Match(
       initial_ceres_pose, filtered_gravity_aligned_point_cloud,
-      *local_grid_map, &initial_ceres_pose);
+      *local_submap->grid(), &initial_ceres_pose);
 
     ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
                               filtered_gravity_aligned_point_cloud,
                               highlight_point_cloud,
-                              *local_grid_map,
-                              *local_cloud_ikdtree,
-                              *global_static_submap_->highlight_cloud_ikdtree(),
+                              *local_submap->grid(),
+                              *local_submap->cloud_ikdtree(),
+                              *local_submap->highlight_cloud_ikdtree(),
                               pose_observation.get(),
                               &summary);
 
@@ -408,6 +411,13 @@ PoseEstimator2D::PoseValidationResult PoseEstimator2D::ValidatePoseEstimate(
     return result;  // 验证功能未启用，直接通过
   }
 
+  // 获取局部地图
+  auto local_submap = local_map_updater_->local_submap();
+  if (local_submap == nullptr) {
+    LOG(WARNING) << "Local submap not available for pose validation";
+    return result;  // 如果局部地图不可用，暂不验证
+  }
+
   // 从配置文件读取参数
   const double kMinValidationScore = options_.pose_validation_min_score();
   const double kMaxTranslationError = options_.pose_validation_max_translation_error();
@@ -421,6 +431,13 @@ PoseEstimator2D::PoseValidationResult PoseEstimator2D::ValidatePoseEstimate(
   double dynamic_translation_error = 0.0;
   double dynamic_rotation_error = 0.0;
   std::shared_ptr<const mapping::Submap2D> dynamic_submap = nullptr;
+  // 使用real time correlative scan matcher在局部地图上进行验证匹配
+  transform::Rigid2d validation_pose = estimated_pose;
+  const double validation_score = real_time_correlative_scan_matcher_.Match(
+      estimated_pose, 
+      point_cloud, 
+      *local_submap->grid(),
+      &validation_pose);
 
   if (!active_submaps_.submaps().empty()) {
     dynamic_submap = active_submaps_.submaps().front();
@@ -465,7 +482,7 @@ PoseEstimator2D::PoseValidationResult PoseEstimator2D::ValidatePoseEstimate(
   double static_validation_score = 0.0;
   transform::Rigid2d static_validation_pose = estimated_pose;
 
-  auto local_static_map = local_map_updater_->local_grid_map();
+  auto local_static_map = local_map_updater_->local_submap()->grid();
   if (local_static_map != nullptr) {
     // 在静态地图上进行correlative scan matching
     static_validation_score = real_time_correlative_scan_matcher_.Match(
@@ -781,14 +798,23 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       auto recovery_pose_refined = absl::make_unique<transform::Rigid2d>();
       ceres::Solver::Summary recovery_summary;
       
+      auto local_submap = local_map_updater_->local_submap();
+      if (!local_submap) {
+        LOG(ERROR) << "Local submap is not available for recovery!";
+        loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+        active_submaps_.clear();
+        return nullptr;
+      }
+      
+      // 使用全局地图进行ceres优化
       ceres_scan_matcher_.Match(
           recovery_pose.translation(),
           recovery_pose,
           filtered_gravity_aligned_point_cloud,
           merged_data.merged_highlight_cloud,
-          *global_static_submap_->grid(),
-          *local_map_updater_->local_cloud_map_ikdtree(),
-          *global_static_submap_->highlight_cloud_ikdtree(),
+          *local_submap->grid(),
+          *local_submap->cloud_ikdtree(),
+          *local_submap->highlight_cloud_ikdtree(),
           recovery_pose_refined.get(),
           &recovery_summary);
       
@@ -987,57 +1013,12 @@ PoseEstimator2D::InsertIntoSubmap(
                                   tracked_lines_in_local,
                                   merged_data.merged_reflector_data);
 
-  // 4. 同时将数据插入到global_static_submap_，实现全局地图的增量更新
-  if (global_static_submap_) {
-    // 确保global_static_submap_允许插入数据
-    // 从pbstream加载的submap默认是finished状态，需要重新开放插入
-    if (global_static_submap_->insertion_finished()) {
-      global_static_submap_->set_insertion_finished(false);
-      LOG(INFO) << "Reopened global_static_submap_ for data insertion";
-    }
-    
-    // 创建range_data_inserter（如果还没有创建）
-    if (!range_data_inserter_for_global_map_) {
-      const auto& inserter_options = options_.submaps_options().range_data_inserter_options();
-      switch (inserter_options.range_data_inserter_type()) {
-        case mapping::proto::RangeDataInserterOptions::PROBABILITY_GRID_INSERTER_2D:
-          range_data_inserter_for_global_map_ = 
-              std::make_unique<mapping::ProbabilityGridRangeDataInserter2D>(
-                  inserter_options.probability_grid_range_data_inserter_options_2d());
-          break;
-        case mapping::proto::RangeDataInserterOptions::TSDF_INSERTER_2D:
-          range_data_inserter_for_global_map_ = 
-              std::make_unique<mapping::TSDFRangeDataInserter2D>(
-                  inserter_options.tsdf_range_data_inserter_options_2d());
-          break;
-        default:
-          LOG(FATAL) << "Unknown RangeDataInserterType for global map.";
-      }
-      LOG(INFO) << "Created range_data_inserter for global static submap";
-    }
-    
-    // 插入range data到global_static_submap_（更新栅格地图）
-    for (const auto& range_data : all_range_data_to_insert) {
-      global_static_submap_->InsertRangeData(range_data, range_data_inserter_for_global_map_.get());
-    }
-    
-    // 插入点云数据到global_static_submap_
-    // InsertCloudData内部会自动增量更新ikd-tree，不需要手动rebuild
-    global_static_submap_->InsertCloudData(cloud_in_local, highlight_cloud_in_local);
-    
-    // 插入线数据到global_static_submap_
-    global_static_submap_->InsertLineData(tracked_lines_in_local);
-    
-    // 注意：ikd-tree会在InsertCloudData中自动增量更新，无需手动重建
-    // local_map_updater持有global_static_submap_的引用，会自动使用更新后的数据
-
-    static int submap_count = 0;
-    std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
-    std::string folder = home_dir + "/.dexe/data/submaps/";
-    std::string pcd_filename = "submap_" + std::to_string(submap_count) + ".pcd";
-    std::string png_filename = "submap_" + std::to_string(submap_count++) + ".png";
-    global_static_submap_->SaveSubmapCloud(folder, pcd_filename);
-    global_static_submap_->grid()->DrawAsImage(folder, png_filename);
+  // 4. 将数据插入到global_dynamic_submap_，实现全局地图的增量更新
+  if (local_map_updater_) {
+    local_map_updater_->UpdateDynamicMap(all_range_data_to_insert,
+                                          cloud_in_local,
+                                          highlight_cloud_in_local,
+                                          tracked_lines_in_local);
   }
 
   // 5. 返回插入结果
