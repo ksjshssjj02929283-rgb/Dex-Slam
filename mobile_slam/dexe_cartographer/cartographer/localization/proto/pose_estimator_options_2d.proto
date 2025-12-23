@@ -27,6 +27,7 @@ import "cartographer/mapping/proto/submaps_options_2d.proto";
 import "cartographer/laser_perception/proto/laser_perception_options.proto";
 import "cartographer/localization/proto/pose_initializer_options_2d.proto";
 import "cartographer/localization/proto/local_map_updater_options_2d.proto";
+import "cartographer/localization/proto/consistency_checker_options.proto";
 // NEXT ID: 30
 message PoseEstimatorOptions2D {
   cartographer.preprocess.proto.DataPreprocessorOptions
@@ -91,10 +92,6 @@ message PoseEstimatorOptions2D {
   // Whether to automatically trigger global relocalization when no initial pose is provided
   bool auto_trigger_global_relocalization = 30;
   
-  // Pose validation options
-  // 位姿验证选项：用于检测定位质量并在必要时重置
-  bool enable_pose_validation = 31;              // 是否启用位姿验证
-  double pose_validation_min_score = 32;         // 验证的最小匹配分数阈值
-  double pose_validation_max_translation_error = 33;  // 最大允许的平移误差(米)
-  double pose_validation_max_rotation_error = 34;     // 最大允许的旋转误差(弧度)
+  // Consistency checker options
+  ConsistencyCheckerOptions consistency_checker_options = 31;
 }

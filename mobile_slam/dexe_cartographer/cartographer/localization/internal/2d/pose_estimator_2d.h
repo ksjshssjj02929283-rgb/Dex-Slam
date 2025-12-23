@@ -50,6 +50,7 @@
 #include "cartographer/localization/2d/cloud_map_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
+#include "cartographer/localization/internal/2d/consistency_checker.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -164,26 +165,8 @@ class PoseEstimator2D {
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data);
 
-  // 验证位姿估计质量的结果
-  struct PoseValidationResult {
-    bool is_valid;              // 验证是否通过
-    transform::Rigid2d validated_pose;  // 验证后的位姿（real time matcher的结果）
-    double validation_score;    // 验证评分
-  };
-
-  // 验证位姿估计质量，通过real time matcher在局部地图上匹配
-  // 比较scan match估计的位姿和real time matcher估计的位姿
-  PoseValidationResult ValidatePoseEstimate(
-    const transform::Rigid2d& estimated_pose,
-    const sensor::PointCloud& point_cloud);
-
-  // 使用局部地图进行位姿恢复
-  // 返回值：恢复成功返回恢复后的位姿，失败返回nullptr
-  std::unique_ptr<transform::Rigid2d> RecoveryFromLocalMap(
-    const transform::Rigid2d& validation_pose,
-    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
-    const sensor::PointCloud& highlight_point_cloud,
-    const transform::Rigid3d& gravity_alignment);
+  // 获取当前定位置信度
+  double GetLocalizationConfidence() const;
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
@@ -232,6 +215,9 @@ private:
   std::unique_ptr<laser_perception::LaserPerception> laser_perception_;
 
   std::unique_ptr<mapping::scan_matching::LineMatcher2D> line_matcher_;
+
+  // 一致性检查器，用于检测定位与地图的一致性
+  std::unique_ptr<ConsistencyChecker> consistency_checker_;
 
   std::mutex data_mutex_;
   

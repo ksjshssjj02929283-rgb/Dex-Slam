@@ -243,6 +243,7 @@ void LocalMapUpdater2D::UpdateLocalMap()
   local_submap_->RebuildIkdTrees();
 
   // 调试：将submap的grid map保存为图片
+  // save debug submap
   std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
   std::string data_dir = home_dir + "/.dexe/data/";
   global_static_submap_->grid()->DrawAsImage(data_dir, "global_static_map.png");
@@ -287,9 +288,9 @@ void LocalMapUpdater2D::UpdateDynamicMap(
   // 3. 插入线数据到global_dynamic_submap_
   global_dynamic_submap_->InsertLineData(line_data);
   
-  LOG(INFO) << "UpdateDynamicMap: inserted " << range_data_vector.size() 
-            << " range_datas, " << cloud.size() << " cloud points, "
-            << line_data.size() << " line groups";
+  // LOG(INFO) << "UpdateDynamicMap: inserted " << range_data_vector.size() 
+  //           << " range_datas, " << cloud.size() << " cloud points, "
+  //           << line_data.size() << " line groups";
 }
 
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::local_submap()
