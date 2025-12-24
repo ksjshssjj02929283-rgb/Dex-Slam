@@ -692,7 +692,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     LOG(INFO) << "Recovery matching score: " << recovery_score;
     
     // 如果恢复匹配成功，使用恢复的位姿进行ceres优化
-    if (recovery_score > 0.4) {
+    if (recovery_score > options_.pose_validation_min_score()) {
       LOG(INFO) << "Recovery correlative match successful, performing ceres refinement...";
       
       auto recovery_pose_refined = absl::make_unique<transform::Rigid2d>();
