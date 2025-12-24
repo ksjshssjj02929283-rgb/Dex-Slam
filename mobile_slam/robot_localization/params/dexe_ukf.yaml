@@ -52,7 +52,7 @@ robot_localization:
 # Whether to use lagged data smoothing
         smooth_lagged_data: true
         history_length: 2.
-        # predict_to_current_time: true
+        predict_to_current_time: true
 
 # REP-105 (http://www.ros.org/reps/rep-0105.html) specifies four principal coordinate frames: base_link, odom, map, and
 # earth. base_link is the coordinate frame that is affixed to the robot. Both odom and map are world-fixed frames.
