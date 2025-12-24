@@ -98,6 +98,9 @@ class PoseEstimator2D {
   void InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
   std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const { return global_static_submap_; }
+  
+  // 获取 LocalMapUpdater2D (用于访问动态地图策略和动态 submap)
+  LocalMapUpdater2D* GetLocalMapUpdater() const { return local_map_updater_.get(); }
 
   bool SetInitialPose(const transform::Rigid3d &initial_pose);
 

@@ -37,6 +37,16 @@ public:
 
   std::shared_ptr<mapping::Submap2D> local_submap();
 
+  // 根据策略获取 global submap
+  // - NONE: 返回 global_static_submap_
+  // - SHORT/LONG/PERSISTENT: 返回 global_dynamic_submap_
+  std::shared_ptr<mapping::Submap2D> GetGlobalSubmap() const;
+  
+  // 获取动态地图策略
+  proto::DynamicMapPolicy GetDynamicMapPolicy() const {
+    return options_.dynamic_map_policy();
+  }
+
   std::shared_ptr<transform::Rigid2d> origin_pose();
   std::shared_ptr<transform::Rigid2d> robot_pose();
 
@@ -68,7 +78,7 @@ private:
   // RangeDataInserter用于插入range data到global_dynamic_submap_
   std::unique_ptr<mapping::RangeDataInserterInterface> range_data_inserter_;
 
-  std::mutex data_mutex_;
+  mutable std::mutex data_mutex_;
 };
 
 }  // namespace localization

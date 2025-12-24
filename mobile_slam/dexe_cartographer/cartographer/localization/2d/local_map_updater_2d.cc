@@ -18,6 +18,24 @@ proto::LocalMapUpdaterOptions2D CreateLocalMapUpdaterOptions2D(
   options.set_max_y(parameter_dictionary->GetDouble("max_y"));
   options.set_max_z(parameter_dictionary->GetDouble("max_z"));
   options.set_update_threshold(parameter_dictionary->GetDouble("update_threshold"));
+  
+  // 读取动态地图策略参数
+  if (parameter_dictionary->HasKey("dynamic_map_policy")) {
+    int policy_value = parameter_dictionary->GetInt("dynamic_map_policy");
+    options.set_dynamic_map_policy(static_cast<proto::DynamicMapPolicy>(policy_value));
+  } else {
+    // 默认使用 LONG 策略
+    options.set_dynamic_map_policy(proto::DynamicMapPolicy::LONG);
+  }
+  
+  // 读取调试数据保存选项
+  if (parameter_dictionary->HasKey("save_debug_data")) {
+    options.set_save_debug_data(parameter_dictionary->GetBool("save_debug_data"));
+  } else {
+    // 默认不保存调试数据
+    options.set_save_debug_data(false);
+  }
+  
   return options;
 }
 
@@ -55,57 +73,74 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
   std::lock_guard<std::mutex> lock(data_mutex_);
   global_static_submap_ = global_submap;
   
-  // 使用 global_static_submap_ 初始化 global_dynamic_submap_
-  if (global_static_submap_) {
-    // 获取 global_static_submap_ 的数据
-    auto global_grid = global_static_submap_->grid();
-    auto global_cloud = global_static_submap_->cloud();
-    auto global_line_map = global_static_submap_->line_map_2d_list();
-    
-    // 深拷贝 grid
-    std::unique_ptr<mapping::Grid2D> grid_copy;
-    if (global_grid) {
-      const auto* prob_grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_grid);
-      if (prob_grid) {
-        grid_copy = std::make_unique<mapping::ProbabilityGrid>(*prob_grid);
-      }
-    }
-    
-    // 深拷贝 cloud
-    std::unique_ptr<sensor::PointCloud> cloud_copy;
-    if (global_cloud) {
-      cloud_copy = std::make_unique<sensor::PointCloud>(*global_cloud);
-    } else {
-      cloud_copy = std::make_unique<sensor::PointCloud>();
-    }
-    
-    // 创建空的 highlight_cloud
-    std::unique_ptr<sensor::PointCloud> highlight_cloud_copy = 
-        std::make_unique<sensor::PointCloud>();
-    
-    // 深拷贝 line_map
-    int latest_line_id = 0;
-    std::map<int, mapping::MapLine2D> active_line_data;
-    if (global_line_map) {
-      latest_line_id = global_line_map->latest_local_id();
-      active_line_data = global_line_map->GetLineMapData2DList();
-    }
-    
-    // 创建 global_dynamic_submap_
-    // 将 Eigen::Vector2d 转换为 Eigen::Vector2f
-    Eigen::Vector2f origin = global_static_submap_->local_pose().translation().head<2>().cast<float>();
-    global_dynamic_submap_ = std::make_shared<mapping::Submap2D>(
-        origin,
-        std::move(grid_copy),
-        &conversion_tables_,  // 使用 conversion_tables_
-        std::move(cloud_copy),
-        std::move(highlight_cloud_copy),
-        latest_line_id,
-        active_line_data);
-        
-    // 重建ikd-trees
-    global_dynamic_submap_->RebuildIkdTrees();
+  // 根据动态地图策略初始化 global_dynamic_submap_
+  if (!global_static_submap_) {
+    return;
   }
+  
+  // 策略1: NONE - 不使用dynamic，也不更新dynamic map
+  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
+    LOG(INFO) << "DynamicMapPolicy is NONE, not initializing dynamic submap";
+    global_dynamic_submap_ = nullptr;
+    return;
+  }
+  
+  // 策略2: SHORT - 暂未实现
+  // 策略3: LONG - 使用dynamic，但不保存到static map
+  // 策略4: PERSISTENT - 使用dynamic，并保存到static map
+  // 对于策略2/3/4，都需要从static map初始化dynamic map
+  
+  LOG(INFO) << "Initializing global_dynamic_submap from global_static_submap, policy: " 
+            << static_cast<int>(options_.dynamic_map_policy());
+  
+  // 获取 global_static_submap_ 的数据
+  auto global_grid = global_static_submap_->grid();
+  auto global_cloud = global_static_submap_->cloud();
+  auto global_line_map = global_static_submap_->line_map_2d_list();
+  
+  // 深拷贝 grid
+  std::unique_ptr<mapping::Grid2D> grid_copy;
+  if (global_grid) {
+    const auto* prob_grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_grid);
+    if (prob_grid) {
+      grid_copy = std::make_unique<mapping::ProbabilityGrid>(*prob_grid);
+    }
+  }
+  
+  // 深拷贝 cloud
+  std::unique_ptr<sensor::PointCloud> cloud_copy;
+  if (global_cloud) {
+    cloud_copy = std::make_unique<sensor::PointCloud>(*global_cloud);
+  } else {
+    cloud_copy = std::make_unique<sensor::PointCloud>();
+  }
+  
+  // 创建空的 highlight_cloud
+  std::unique_ptr<sensor::PointCloud> highlight_cloud_copy = 
+      std::make_unique<sensor::PointCloud>();
+  
+  // 深拷贝 line_map
+  int latest_line_id = 0;
+  std::map<int, mapping::MapLine2D> active_line_data;
+  if (global_line_map) {
+    latest_line_id = global_line_map->latest_local_id();
+    active_line_data = global_line_map->GetLineMapData2DList();
+  }
+  
+  // 创建 global_dynamic_submap_
+  // 将 Eigen::Vector2d 转换为 Eigen::Vector2f
+  Eigen::Vector2f origin = global_static_submap_->local_pose().translation().head<2>().cast<float>();
+  global_dynamic_submap_ = std::make_shared<mapping::Submap2D>(
+      origin,
+      std::move(grid_copy),
+      &conversion_tables_,  // 使用 conversion_tables_
+      std::move(cloud_copy),
+      std::move(highlight_cloud_copy),
+      latest_line_id,
+      active_line_data);
+      
+  // 重建ikd-trees
+  global_dynamic_submap_->RebuildIkdTrees();
 }
 
 void LocalMapUpdater2D::UpdateRobotPose(const transform::Rigid2d& robot_pose)
@@ -151,8 +186,21 @@ bool LocalMapUpdater2D::NeedUpdateLocalMap()
 void LocalMapUpdater2D::UpdateLocalMap()
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  if (!global_dynamic_submap_) {
-    LOG(ERROR) << "Global dynamic submap is not initialized, please set global submap first.";
+  
+  // 根据策略选择使用哪个submap作为源
+  std::shared_ptr<mapping::Submap2D> source_submap;
+  
+  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
+    // 策略1: 不使用dynamic，直接使用static map
+    source_submap = global_static_submap_;
+  } else {
+    // 策略2 SHORT: 暂未实现
+    // 策略3 LONG 或 策略4 PERSISTENT: 使用持续更新的dynamic map
+    source_submap = global_dynamic_submap_;
+  }
+  
+  if (!source_submap) {
+    LOG(ERROR) << "Source submap is not initialized, please set global submap first.";
     return;
   }
 
@@ -163,7 +211,7 @@ void LocalMapUpdater2D::UpdateLocalMap()
   origin_pose_ = robot_pose_;
 
   // ============ 1. 更新 Local Grid Map ============
-  auto global_grid = global_dynamic_submap_->grid();
+  auto global_grid = source_submap->grid();
   CHECK(global_grid != nullptr);
   const auto* global_probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_grid);
   CHECK(global_probability_grid != nullptr);
@@ -207,7 +255,7 @@ void LocalMapUpdater2D::UpdateLocalMap()
   }
 
   // ============ 2. 更新 Local Cloud Map ============
-  auto global_cloud = global_dynamic_submap_->cloud();
+  auto global_cloud = source_submap->cloud();
   CHECK(global_cloud != nullptr);
 
   box_filter_->SetOrigin(Eigen::Vector3f(origin_pose_->translation().x(),
@@ -217,7 +265,7 @@ void LocalMapUpdater2D::UpdateLocalMap()
   box_filter_->Filter(*global_cloud, *local_cloud);
 
   // ============ 3. 更新 Local Line Map ============
-  auto global_line_map = global_dynamic_submap_->line_map_2d_list();
+  auto global_line_map = source_submap->line_map_2d_list();
   int latest_line_id = 0;
   std::map<int, mapping::MapLine2D> active_line_data;
   if (global_line_map) {
@@ -242,16 +290,21 @@ void LocalMapUpdater2D::UpdateLocalMap()
   // 重建ikd-trees
   local_submap_->RebuildIkdTrees();
 
-  // 调试：将submap的grid map保存为图片
-  // save debug submap
-  std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
-  std::string data_dir = home_dir + "/.dexe/data/";
-  global_static_submap_->grid()->DrawAsImage(data_dir, "global_static_map.png");
-  global_dynamic_submap_->grid()->DrawAsImage(data_dir, "global_dynamic_map.png");
-  local_submap_->grid()->DrawAsImage(data_dir, "local_map.png");
-  global_static_submap_->SaveSubmapCloud(data_dir, "global_static_submap.pcd");
-  global_dynamic_submap_->SaveSubmapCloud(data_dir, "global_dynamic_submap.pcd");
-  local_submap_->SaveSubmapCloud(data_dir, "local_submap.pcd");
+  // 调试：如果启用，将submap的grid map保存为图片和点云文件
+  if (options_.save_debug_data()) {
+    std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+    std::string data_dir = home_dir + "/.dexe/data/";
+    if (global_static_submap_) {
+      global_static_submap_->grid()->DrawAsImage(data_dir, "global_static_map.png");
+    }
+    if (global_dynamic_submap_ && options_.dynamic_map_policy() != proto::DynamicMapPolicy::NONE) {
+      global_dynamic_submap_->grid()->DrawAsImage(data_dir, "global_dynamic_map.png");
+    }
+    local_submap_->grid()->DrawAsImage(data_dir, "local_map.png");
+    global_static_submap_->SaveSubmapCloud(data_dir, "global_static_submap.pcd");
+    global_dynamic_submap_->SaveSubmapCloud(data_dir, "global_dynamic_submap.pcd");
+    local_submap_->SaveSubmapCloud(data_dir, "local_submap.pcd");
+  }
 
   LOG(WARNING) << "Update local map at " << robot_pose_->translation().x() 
                << ", " << robot_pose_->translation().y();
@@ -264,11 +317,18 @@ void LocalMapUpdater2D::UpdateDynamicMap(
     const std::map<int, std::vector<sensor::LineData>>& line_data)
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
+  
+  // 策略1: NONE - 不更新dynamic map
+  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
+    return;
+  }
+  
   if (!global_dynamic_submap_) {
     LOG(ERROR) << "Global dynamic submap is not initialized, cannot update dynamic map.";
     return;
   }
   
+  // 策略2/3/4: 更新dynamic map
   // 确保global_dynamic_submap_允许插入数据
   if (global_dynamic_submap_->insertion_finished()) {
     global_dynamic_submap_->set_insertion_finished(false);
@@ -291,6 +351,20 @@ void LocalMapUpdater2D::UpdateDynamicMap(
   // LOG(INFO) << "UpdateDynamicMap: inserted " << range_data_vector.size() 
   //           << " range_datas, " << cloud.size() << " cloud points, "
   //           << line_data.size() << " line groups";
+}
+
+std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetGlobalSubmap() const
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  
+  // 根据策略返回相应的 submap
+  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
+    // 策略1: 不使用dynamic，返回static map
+    return global_static_submap_;
+  } else {
+    // 策略2/3/4: 返回dynamic map
+    return global_dynamic_submap_;
+  }
 }
 
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::local_submap()

@@ -226,6 +226,9 @@ int LocalizationUpdater::AddTrajectoryBuilder(
   CHECK(global_static_submap_ != nullptr)
       << "Global static submap not available. Please load state from pbstream first.";
   pose_estimator_2d->InitGlobalMapsFromSubmap(global_static_submap_);
+  
+  // 保存 PoseEstimator2D 指针
+  pose_estimator_2d_ = pose_estimator_2d.get();
 
   // 创建全局轨迹优化器
   DCHECK(dynamic_cast<mapping::PoseGraph2D*>(pose_graph_.get()));
@@ -357,9 +360,36 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
                                       const std::string& filename) {
   io::ProtoStreamWriter writer(filename);
   
-  // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存
+  // 根据动态地图策略获取要保存的 submap
+  // 策略判断逻辑在 LocalMapUpdater2D::GetGlobalSubmap() 中实现
+  std::shared_ptr<mapping::Submap2D> submap_to_save = global_static_submap_;
+  
+  if (pose_estimator_2d_) {
+    auto local_map_updater = pose_estimator_2d_->GetLocalMapUpdater();
+    if (local_map_updater) {
+      auto policy = local_map_updater->GetDynamicMapPolicy();
+      
+      if (policy == proto::DynamicMapPolicy::PERSISTENT) {
+        // 策略4: PERSISTENT - 保存 dynamic map
+        submap_to_save = local_map_updater->GetGlobalSubmap();
+        if (submap_to_save) {
+          LOG(INFO) << "Using PERSISTENT policy: saving global_dynamic_submap";
+        } else {
+          LOG(WARNING) << "PERSISTENT policy enabled but GetGlobalSubmap() returned null, using static submap";
+          submap_to_save = global_static_submap_;
+        }
+      } else {
+        // 策略1/2/3: 保存 static map
+        LOG(INFO) << "Using policy " << static_cast<int>(policy) 
+                  << ": saving global_static_submap";
+        submap_to_save = global_static_submap_;
+      }
+    }
+  }
+  
+  // 保存时传递选定的 submap
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, submap_to_save);
   
   bool success = writer.Close();
   

@@ -102,6 +102,13 @@ POSE_ESTIMATOR_2D = {
     min_z = -1.,
     max_z = 1.,
     update_threshold = 7.5,
+    -- 动态地图策略:
+    -- 0 (NONE): 不使用dynamic，也不更新dynamic map
+    -- 1 (SHORT): 短时间保留（暂未实现）
+    -- 2 (LONG): 长时间保留在内存，车辆移出区域后仍然保留，但不会存盘
+    -- 3 (PERSISTENT): 更长时间的保留，会存盘，下次运行也会读取
+    dynamic_map_policy = 3,  -- 默认使用 PERSISTENT 策略
+    save_debug_data = false,
   },
 
   use_online_correlative_scan_matching = true,

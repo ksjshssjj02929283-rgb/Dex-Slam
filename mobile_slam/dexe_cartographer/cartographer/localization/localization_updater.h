@@ -107,6 +107,11 @@ public:
       &GetAllTrajectoryBuilderOptions() const {
     return all_trajectory_builder_options_;
   }
+  
+  // 获取 PoseEstimator2D (用于获取动态地图)
+  localization::PoseEstimator2D* GetPoseEstimator2D() const {
+    return pose_estimator_2d_;
+  }
 
 private:
   const proto::LocalizationUpdaterOptions options_;
@@ -128,6 +133,9 @@ private:
       trajectory_builders_;
   std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>
       all_trajectory_builder_options_;
+      
+  // 保存 PoseEstimator2D 指针 (用于访问动态地图)
+  localization::PoseEstimator2D* pose_estimator_2d_ = nullptr;
 };
 
 std::unique_ptr<LocalizationUpdater> CreateLocalizationUpdater(
