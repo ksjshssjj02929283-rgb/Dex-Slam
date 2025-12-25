@@ -139,8 +139,6 @@ private:
   void StartMappingCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
                             std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
-    StartShowMap();
-
     if (is_mapping_) {
       LOG(ERROR) << "Mapping node is already running.";
       res->success = false;
@@ -199,6 +197,8 @@ private:
     }
 
     is_mapping_ = true;
+
+    StartShowMap();
 
     res->success = true;
     res->message = "OK";
