@@ -780,22 +780,41 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
           if (err_dist > pose_reset_threshold_) {
             RCLCPP_WARN(
               this->get_logger(),
-              "Large pose error detected (%.3f m). Resetting filter state.", err_dist);
+              "Large pose error detected (%.3f m). Performing complete filter reset.", err_dist);
             RCLCPP_INFO(
               this->get_logger(),
               "Filtered position: [%.3f, %.3f], Measured position: [%.3f, %.3f]",
               filtered_position.pose.pose.position.x, filtered_position.pose.pose.position.y,
               measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY));
 
+            // 彻底重置滤波器：清空所有历史数据和测量队列
+            clearMeasurementQueue();
+            filter_state_history_.clear();
+            measurement_history_.clear();
+            previous_measurements_.clear();
+            previous_measurement_covariances_.clear();
+            
+            // 重置滤波器内部状态
+            filter_.reset();
+            
+            // 设置新的初始状态
             filter_.setState(measurement->measurement_);
             filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
+            filter_.setLastMeasurementTime(measurement->time_);
+            
+            // 标记滤波器已重新初始化
+            is_initialized_ = true;
 
             RCLCPP_INFO(
               this->get_logger(),
-              "Reset filter pose to [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+              "Complete filter reset: state, covariance, and all history cleared. "
+              "New pose: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
               measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY),
               measurement->measurement_(StateMemberZ), measurement->measurement_(StateMemberRoll),
               measurement->measurement_(StateMemberPitch), measurement->measurement_(StateMemberYaw));
+            
+            // 重置后应该跳过当前测量的processMeasurement，因为已经设置了状态
+            continue;
           }
         }
       }

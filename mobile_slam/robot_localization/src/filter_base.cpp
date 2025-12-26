@@ -339,11 +339,11 @@ void FilterBase::validateDelta(rclcpp::Duration & delta)
   // rclcpp::Duration::from_seconds(100000.0) value is 0.00010000000000000000479
   // This handles issues with ROS time when use_sim_time is on and we're playing
   // from bags.
-  if (delta > rclcpp::Duration::from_seconds(10.0))
+  if (delta > rclcpp::Duration::from_seconds(0.1))
   {
     std::cout << "Large time delta detected (" <<
-      delta.seconds() << " seconds). Capping to 0.02 seconds." << std::endl;
-    delta = rclcpp::Duration::from_seconds(0.02);
+      delta.seconds() << " seconds). Capping to 0.05 seconds." << std::endl;
+    delta = rclcpp::Duration::from_seconds(0.05);
   }
 }
 
