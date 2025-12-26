@@ -680,25 +680,25 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
                  << validation_result.validation_score 
                  << ", attempting recovery with global map...";
     
+    bool recovery_successful = false;
+    
     // 尝试使用验证得到的位姿和全局地图进行恢复性匹配
-    // 使用验证的位姿作为初始位姿，在全局地图上用real time matcher搜索
     transform::Rigid2d recovery_pose = validation_result.validated_pose;
     const double recovery_score = real_time_correlative_scan_matcher_.Match(
-        validation_result.validated_pose,  // 使用验证位姿作为初始位姿
+        validation_result.validated_pose,
         filtered_gravity_aligned_point_cloud,
         *global_grid_map_,
         &recovery_pose);
     
-    LOG(INFO) << "Recovery matching score: " << recovery_score;
+    LOG(INFO) << "Recovery correlative matching score: " << recovery_score;
     
-    // 如果恢复匹配成功，使用恢复的位姿进行ceres优化
+    // 如果恢复匹配分数足够高，尝试ceres优化
     if (recovery_score > options_.pose_validation_min_score()) {
       LOG(INFO) << "Recovery correlative match successful, performing ceres refinement...";
       
       auto recovery_pose_refined = absl::make_unique<transform::Rigid2d>();
       ceres::Solver::Summary recovery_summary;
       
-      // 使用全局地图进行ceres优化
       ceres_scan_matcher_.Match(
           recovery_pose.translation(),
           recovery_pose,
@@ -724,28 +724,35 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
             transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
         local_pose_ = recovered_pose_estimate;
         
-        // 清空active_submaps，使用恢复后的位姿重新开始建图
+        // 清空active_submaps，使用恢复后的位姿重新开始
         active_submaps_.clear();
         
+        recovery_successful = true;
         LOG(INFO) << "Cleared active submaps, continuing with recovered pose";
       } else {
-        LOG(ERROR) << "Recovery matching with global map failed! Localization lost.";
-        
-        // 恢复失败，标记为定位丢失
-        loc_state_ = LocalizationState::LOCALIZATION_FAILED;
-        active_submaps_.clear();
-        
-        return nullptr;  // 返回空，表示定位失败
+        LOG(ERROR) << "Recovery ceres optimization failed (cost: " << recovery_summary.final_cost << ")";
       }
     } else {
-      LOG(ERROR) << "Recovery correlative match failed (score: " << recovery_score 
-                 << ")! Localization lost.";
+      LOG(ERROR) << "Recovery correlative match score too low: " << recovery_score;
+    }
+    
+    // 统一处理恢复失败的情况：触发重定位
+    if (!recovery_successful) {
+      LOG(WARNING) << "Recovery failed, triggering relocalization with validation pose...";
       
-      // 恢复失败，标记为定位丢失
-      loc_state_ = LocalizationState::LOCALIZATION_FAILED;
-      active_submaps_.clear();
+      const transform::Rigid3d relocalization_initial_pose = 
+          transform::Embed3D(validation_result.validated_pose);
       
-      return nullptr;  // 返回空，表示定位失败
+      if (SetInitialPose(relocalization_initial_pose)) {
+        LOG(WARNING) << "Triggered relocalization with validation pose: " 
+                     << validation_result.validated_pose;
+        return nullptr;  // 等待重定位完成
+      } else {
+        LOG(ERROR) << "Failed to trigger relocalization! Localization lost.";
+        loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+        active_submaps_.clear();
+        return nullptr;
+      }
     }
   }
 
