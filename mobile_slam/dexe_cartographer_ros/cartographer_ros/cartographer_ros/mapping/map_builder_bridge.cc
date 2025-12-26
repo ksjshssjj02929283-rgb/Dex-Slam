@@ -218,11 +218,26 @@ bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double res
   LOG(INFO) << "Generated final submap successfully";
   
   // 2. 使用同一个submap保存不同格式的地图，避免重复计算（resolution从submap中获取）
-  SaveGridMapFromRange(map_filename, final_submap);
-  SaveCloudMap(map_filename, final_submap);
-  SaveLineMap(map_filename, final_submap);
+  // 增加对每个单独模块保存文件的校验
+  bool grid_map_success = SaveGridMapFromRange(map_filename, final_submap);
+  if (!grid_map_success) {
+    LOG(ERROR) << "Failed to save grid map for " << map_filename;
+    return false;
+  }
+  
+  bool cloud_map_success = SaveCloudMap(map_filename, final_submap);
+  if (!cloud_map_success) {
+    LOG(ERROR) << "Failed to save cloud map for " << map_filename;
+    return false;
+  }
+  
+  bool line_map_success = SaveLineMap(map_filename, final_submap);
+  if (!line_map_success) {
+    LOG(ERROR) << "Failed to save line map for " << map_filename;
+    return false;
+  }
 
-  LOG(INFO) << "Optimized SaveMap process completed for " << map_filename;
+  LOG(INFO) << "Optimized SaveMap process completed successfully for " << map_filename;
   return true;
 }
 

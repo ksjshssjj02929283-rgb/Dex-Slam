@@ -96,6 +96,10 @@ public:
       "~/finish_mapping",
       std::bind(&MappingNode::FinishMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
 
+    cancel_mapping_srv_ = this->create_service<std_srvs::srv::Trigger>(
+      "~/cancel_mapping",
+      std::bind(&MappingNode::CancelMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
+
     save_map_srv_ = this->create_service<std_srvs::srv::Trigger>(
       "~/save_map",
       std::bind(&MappingNode::SaveMapCallback, this, std::placeholders::_1, std::placeholders::_2));
@@ -213,6 +217,8 @@ private:
       res->message = "Already idle";
       return;
     }
+    
+    // 完成所有轨迹并进行最终优化
     mapping_node_->FinishAllTrajectories();
     mapping_node_->RunFinalOptimization();
 
@@ -220,17 +226,53 @@ private:
       mapping_node_->SaveOptimizedPoses(int(0));
     }
 
+    // 保存 pbstream 文件
     const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/map.pbstream";
     if (!state_filename.empty()) {
       mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
       LOG(INFO) << "State saved to '" << state_filename << "'.";
     }
 
+    // 保存地图文件（带校验）
     const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/map";
-    mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
+    bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
+    
+    if (!save_success) {
+      LOG(ERROR) << "Failed to save map files for " << map_filestream;
+      res->success = false;
+      res->message = "Failed to save map files. Please check logs and try again.";
+      return;
+    }
+    
+    LOG(INFO) << "Map saved successfully. Resetting mapping node.";
+    
+    // 保存成功后重置建图节点
+    ResetMappingNode();
 
     res->success = true;
     res->message = "OK";
+  }
+
+  void CancelMappingCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
+                             std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    if (!is_mapping_) {
+      LOG(INFO) << "Mapping node is not running.";
+      res->success = false;
+      res->message = "Already idle";
+      return;
+    }
+    
+    LOG(INFO) << "Cancelling mapping without saving. Resetting mapping node.";
+    
+    // 停止显示地图
+    StopShowMap();
+    
+    // 直接重置建图节点，不保存任何数据
+    ResetMappingNode();
+
+    res->success = true;
+    res->message = "Mapping cancelled successfully";
   }
 
   void SaveMapCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
@@ -239,14 +281,25 @@ private:
     if (!is_mapping_) {
       LOG(INFO) << "Mapping node is not running.";
       res->success = false;
-      res->message = "Already idle";
+      res->message = "Mapping not running";
       return;
     }
-    FinishMapping();
+    
+    // 先停止显示地图
     StopShowMap();
-
-    res->success = true;
-    res->message = "OK";
+    
+    // 执行完整的结束流程
+    FinishMapping();
+    
+    // 检查是否成功（通过 is_mapping_ 状态判断）
+    if (is_mapping_) {
+      // 如果 is_mapping_ 仍为 true，说明 FinishMapping 中的保存失败了
+      res->success = false;
+      res->message = "Failed to save map files. Please check logs.";
+    } else {
+      res->success = true;
+      res->message = "OK";
+    }
   }
 
   // ---- Helpers ----
@@ -298,6 +351,22 @@ private:
     return CallTriggerSync(stop_show_map_client_);
   }
 
+  // 重置建图节点（清理所有资源）
+  void ResetMappingNode() {
+    LOG(INFO) << "Resetting mapping node...";
+    
+    mapping_node_.reset();
+    node_options_.reset();
+    trajectory_options_.reset();
+    tf_listener_.reset();
+    tf_buffer_.reset();
+
+    map_name_.clear();
+    is_mapping_ = false;
+    
+    LOG(INFO) << "Mapping node reset completed.";
+  }
+
   void FinishMapping() {
     // 结束优化与保存
     mapping_node_->FinishAllTrajectories();
@@ -314,16 +383,17 @@ private:
     }
 
     const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/map";
-    mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
-
-    mapping_node_.reset();
-    node_options_.reset();
-    trajectory_options_.reset();
-    tf_listener_.reset();
-    tf_buffer_.reset();
-
-    map_name_.clear();
-    is_mapping_ = false;
+    bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
+    
+    if (!save_success) {
+      LOG(ERROR) << "Failed to save map files in FinishMapping()";
+      return;
+    }
+    
+    LOG(INFO) << "Map saved successfully in FinishMapping(). Resetting mapping node.";
+    
+    // 保存成功后重置建图节点
+    ResetMappingNode();
   }
 
   void SetMapName(const std::shared_ptr<dcm_srvs::srv::SetMapName::Request> req,
@@ -372,6 +442,7 @@ private:
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
   rclcpp::Service<dcm_srvs::srv::SetMapName>::SharedPtr set_map_name_srv_;
   rclcpp::Service<dcm_srvs::srv::GetString>::SharedPtr get_mapping_status_srv_;
