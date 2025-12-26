@@ -666,16 +666,16 @@ bool MapBuilderBridge::SaveLineMap(const std::string& map_filename,
 
   std::string line_map_filename = map_filename + "_line_map.json";
 
+  // 如果没有线数据，不创建文件，但返回成功（这不是错误情况）
+  if (line_map_2d_list.size() == 0) {
+    LOG(INFO) << "No line data to save, skipping line map file creation.";
+    return true;  // 返回成功，因为这不是错误
+  }
+
   std::ofstream line_map_file;
   line_map_file.open(line_map_filename, std::ios::out | std::ios::trunc);
   if (!line_map_file.is_open()) {
     LOG(ERROR) << "Failed to open file: " << line_map_filename;
-    return false;
-  }
-
-  if (line_map_2d_list.size() == 0) {
-    LOG(WARNING) << "No line data to save.";
-    line_map_file.close();
     return false;
   }
 

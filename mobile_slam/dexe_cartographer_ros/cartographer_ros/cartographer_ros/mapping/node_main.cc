@@ -17,6 +17,9 @@
 #include <iostream>
 #include <memory>
 #include <filesystem>
+#include <thread>
+#include <chrono>
+#include <fstream>
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -201,6 +204,7 @@ private:
     }
 
     is_mapping_ = true;
+    trajectories_finished_ = false;  // 重置标志
 
     StartShowMap();
 
@@ -212,15 +216,30 @@ private:
                              std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
     if (!is_mapping_) {
-      LOG(INFO) << "Mapping node is not running.";
-      res->success = false;
-      res->message = "Already idle";
+      // 即使没有在建图，也清除map_name，相当于重置
+      if (!map_name_.empty()) {
+        LOG(INFO) << "Mapping node is not running, but clearing map name: " << map_name_;
+        map_name_.clear();
+        res->success = true;
+        res->message = "Map name cleared, ready for new mapping";
+      } else {
+        LOG(INFO) << "Mapping node is not running and no map name set.";
+        res->success = true;
+        res->message = "Already idle";
+      }
       return;
     }
     
-    // 完成所有轨迹并进行最终优化
-    mapping_node_->FinishAllTrajectories();
-    mapping_node_->RunFinalOptimization();
+    // 完成所有轨迹并进行最终优化（只执行一次）
+    if (!trajectories_finished_) {
+      LOG(INFO) << "Finishing all trajectories and running final optimization...";
+      mapping_node_->FinishAllTrajectories();
+      mapping_node_->RunFinalOptimization();
+      trajectories_finished_ = true;
+      LOG(INFO) << "Trajectories finished and optimized.";
+    } else {
+      LOG(INFO) << "Trajectories already finished, skipping optimization.";
+    }
 
     if (node_options_->save_tracked_pose) {
       mapping_node_->SaveOptimizedPoses(int(0));
@@ -238,15 +257,16 @@ private:
     bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
     
     if (!save_success) {
-      LOG(ERROR) << "Failed to save map files for " << map_filestream;
+      LOG(ERROR) << "Failed to save map files for " << map_filestream 
+                 << ". You can call finish_mapping again to retry.";
       res->success = false;
-      res->message = "Failed to save map files. Please check logs and try again.";
-      return;
+      res->message = "Failed to save map files. Please check logs and call finish_mapping again to retry.";
+      return;  // 保存失败，不重置节点，保持 is_mapping_ = true 和 trajectories_finished_ = true
     }
     
     LOG(INFO) << "Map saved successfully. Resetting mapping node.";
     
-    // 保存成功后重置建图节点
+    // 保存成功后重置建图节点和标志
     ResetMappingNode();
 
     res->success = true;
@@ -257,9 +277,17 @@ private:
                              std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
     if (!is_mapping_) {
-      LOG(INFO) << "Mapping node is not running.";
-      res->success = false;
-      res->message = "Already idle";
+      // 即使没有在建图，也清除map_name，相当于重置
+      if (!map_name_.empty()) {
+        LOG(INFO) << "Mapping node is not running, but clearing map name: " << map_name_;
+        map_name_.clear();
+        res->success = true;
+        res->message = "Map name cleared, ready for new mapping";
+      } else {
+        LOG(INFO) << "Mapping node is not running and no map name set.";
+        res->success = true;
+        res->message = "Already idle";
+      }
       return;
     }
     
@@ -363,6 +391,7 @@ private:
 
     map_name_.clear();
     is_mapping_ = false;
+    trajectories_finished_ = false;  // 重置标志
     
     LOG(INFO) << "Mapping node reset completed.";
   }
@@ -430,6 +459,7 @@ private:
   // 状态
   std::string map_name_;
   bool is_mapping_{false};
+  bool trajectories_finished_{false};  // 标记轨迹是否已完成和优化
 
   // Cartographer 持有
   std::unique_ptr<cartographer_ros::Node> mapping_node_;
