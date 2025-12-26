@@ -117,9 +117,9 @@ public:
 
     // Clients for show map control (使用全路径，等价于 ROS1 版本)
     start_show_map_client_ = this->create_client<std_srvs::srv::Trigger>(
-      "/cartographer_occupancy_grid_node/start_mapping");
+      "/cartographer_occupancy_grid_node/start_showing_map");
     stop_show_map_client_ = this->create_client<std_srvs::srv::Trigger>(
-      "/cartographer_occupancy_grid_node/stop_mapping");
+      "/cartographer_occupancy_grid_node/stop_showing_map");
 
     // Timer: 5Hz -> 0.2s
     publish_timer_ = this->create_wall_timer(

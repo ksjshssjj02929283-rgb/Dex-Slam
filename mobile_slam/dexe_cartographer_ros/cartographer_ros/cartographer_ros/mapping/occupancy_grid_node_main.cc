@@ -68,11 +68,11 @@ class Node : public rclcpp::Node
   void HandleSubmapList(const cartographer_ros_msgs::msg::SubmapList::ConstSharedPtr& msg);
   void DrawAndPublish();
 
-  void StartMappingCallback(
+  void StartShowingMapCallback(
       const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
-  void FinishMappingCallback(
+  void StopShowingMapCallback(
       const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
@@ -91,8 +91,8 @@ class Node : public rclcpp::Node
   std::string last_frame_id_;
   rclcpp::Time last_timestamp_;
 
-  ::rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_mapping_service_;
-  ::rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_service_;
+  ::rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_showing_map_service_;
+  ::rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_showing_map_service_;
   bool is_active_ = false;
 };
 
@@ -125,44 +125,44 @@ Node::Node(const double resolution, const double publish_period_sec)
 
   occupancy_grid_publisher_timer_->cancel();
 
-  start_mapping_service_ = this->create_service<std_srvs::srv::Trigger>(
-    "~/start_mapping",
-    std::bind(&Node::StartMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
+  start_showing_map_service_ = this->create_service<std_srvs::srv::Trigger>(
+    "~/start_showing_map",
+    std::bind(&Node::StartShowingMapCallback, this, std::placeholders::_1, std::placeholders::_2));
 
-  finish_mapping_service_ = this->create_service<std_srvs::srv::Trigger>(
-    "~/finish_mapping",
-    std::bind(&Node::FinishMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
+  stop_showing_map_service_ = this->create_service<std_srvs::srv::Trigger>(
+    "~/stop_showing_map",
+    std::bind(&Node::StopShowingMapCallback, this, std::placeholders::_1, std::placeholders::_2));
 }
 
-void Node::StartMappingCallback(
+void Node::StartShowingMapCallback(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   if (!is_active_) {
     occupancy_grid_publisher_timer_->reset();
     is_active_ = true;
-    RCLCPP_INFO(this->get_logger(), "Mapping started: timer activated.");
+    RCLCPP_INFO(this->get_logger(), "Started showing map: timer activated.");
     response->success = true;
-    response->message = "Started mapping";
+    response->message = "Started showing map";
   } else {
     response->success = true;
-    response->message = "Mapping already active";
+    response->message = "Map showing already active";
   }
 }
 
-void Node::FinishMappingCallback(
+void Node::StopShowingMapCallback(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   if (is_active_) {
     occupancy_grid_publisher_timer_->cancel();
     is_active_ = false;
-    RCLCPP_INFO(this->get_logger(), "Mapping finished: timer deactivated.");
+    RCLCPP_INFO(this->get_logger(), "Stopped showing map: timer deactivated.");
     response->success = true;
-    response->message = "Finished mapping";
+    response->message = "Stopped showing map";
   } else {
     response->success = true;
-    response->message = "Mapping already inactive";
+    response->message = "Map showing already inactive";
   }
 }
 

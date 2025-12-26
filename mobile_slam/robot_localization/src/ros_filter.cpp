@@ -190,46 +190,46 @@ void RosFilter<T>::toggleFilterProcessingCallback(
 }
 
 template<typename T>
-void RosFilter<T>::startLocalizationCallback(
+void RosFilter<T>::startFilterCallback(
   const std::shared_ptr<rmw_request_id_t>/*request_header*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
 {
   if (toggled_on_) {
     resp->success = false;
-    resp->message = "Localization is already running.";
+    resp->message = "Filter is already running.";
     RCLCPP_WARN(
       this->get_logger(),
-      "Start localization service called but localization is already running.");
+      "Start filter service called but filter is already running.");
   } else {
     RCLCPP_INFO(
       this->get_logger(),
-      "Starting localization filter processing.");
+      "Starting filter processing.");
     toggled_on_ = true;
     resp->success = true;
-    resp->message = "Localization started successfully.";
+    resp->message = "Filter started successfully.";
   }
 }
 
 template<typename T>
-void RosFilter<T>::stopLocalizationCallback(
+void RosFilter<T>::stopFilterCallback(
   const std::shared_ptr<rmw_request_id_t>/*request_header*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
 {
   if (!toggled_on_) {
     resp->success = false;
-    resp->message = "Localization is already stopped.";
+    resp->message = "Filter is already stopped.";
     RCLCPP_WARN(
       this->get_logger(),
-      "Stop localization service called but localization is already stopped.");
+      "Stop filter service called but filter is already stopped.");
   } else {
     RCLCPP_INFO(
       this->get_logger(),
-      "Stopping localization filter processing.");
+      "Stopping filter processing.");
     toggled_on_ = false;
     resp->success = true;
-    resp->message = "Localization stopped successfully.";
+    resp->message = "Filter stopped successfully.";
   }
 }
 
@@ -1229,18 +1229,18 @@ void RosFilter<T>::loadParams()
       &RosFilter<T>::toggleFilterProcessingCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-  // Create a service for starting localization (convenience wrapper)
-  start_localization_srv_ =
+  // Create a service for starting filter (convenience wrapper)
+  start_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "start_localization", std::bind(
-      &RosFilter<T>::startLocalizationCallback, this,
+    "start_filter", std::bind(
+      &RosFilter<T>::startFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-  // Create a service for stopping localization (convenience wrapper)
-  stop_localization_srv_ =
+  // Create a service for stopping filter (convenience wrapper)
+  stop_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "stop_localization", std::bind(
-      &RosFilter<T>::stopLocalizationCallback, this,
+    "stop_filter", std::bind(
+      &RosFilter<T>::stopFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Init the last measurement time so we don't get a huge initial delta
