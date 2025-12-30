@@ -77,7 +77,33 @@ PoseEstimator2D::PoseEstimator2D(
   // time_file_.open(home_dir + "/.dexe/data/time.txt", std::ios::out);
 }
 
-PoseEstimator2D::~PoseEstimator2D() {}
+PoseEstimator2D::~PoseEstimator2D() {
+  // 1. 停止 pose_initializer（如果有后台线程）
+  if (pose_initializer_) {
+    pose_initializer_->stop();
+    pose_initializer_.reset();
+  }
+  
+  // 2. 清空 active_submaps，确保不再有新的插入操作
+  active_submaps_.clear();
+  
+  // 3. 显式释放 ikd-tree（可能有后台线程或缓存）
+  if (global_highlight_cloud_ikdtree_) {
+    global_highlight_cloud_ikdtree_.reset();
+  }
+  
+  // 4. 释放地图数据（shared_ptr 会处理引用计数）
+  global_grid_map_.reset();
+  global_cloud_map_.reset();
+  global_highlight_cloud_map_.reset();
+  global_line_map_.reset();
+  
+  // 5. 释放其他资源
+  local_map_updater_.reset();
+  data_preprocessor_.reset();
+  laser_perception_.reset();
+  line_matcher_.reset();
+}
 
 void PoseEstimator2D::InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map)
 {
@@ -247,6 +273,14 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   // 2. 读取active_submaps_中的第一个submap，作为匹配的地图
   std::shared_ptr<const mapping::Submap2D> matching_submap =
       active_submaps_.submaps().front();
+  
+  // 3. 安全性检查：确保 submap 的关键成员已初始化
+  if (!matching_submap || !matching_submap->grid() || 
+      !matching_submap->cloud_ikdtree() ||
+      !matching_submap->line_map_2d_list()) {
+    LOG(WARNING) << "Matching submap has null components, using prediction";
+    return absl::make_unique<transform::Rigid2d>(pose_prediction);
+  }
   // The online correlative scan matcher will refine the initial estimate for
   // the Ceres scan matcher.
 
@@ -305,6 +339,13 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 
   auto local_grid_map = local_map_updater_->local_grid_map();
   auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
+  
+  // ⚠️ 安全性检查：确保所有地图资源在使用前都已初始化且有效
+  if (!local_grid_map || !local_cloud_ikdtree || !global_highlight_cloud_ikdtree_) {
+    LOG(ERROR) << "Local map resources not initialized, cannot perform scan matching";
+    return absl::make_unique<transform::Rigid2d>(initial_ceres_pose);
+  }
+  
   common::TicToc tic_toc;
 
   Eigen::Matrix3d cov;
@@ -890,16 +931,29 @@ PoseEstimator2D::InsertIntoSubmap(
         original_range_data, pose_estimate.cast<float>());
     all_range_data_to_insert.push_back(sensor_range_data_in_local);
   }
+
   
-  // 一次性批量插入所有range data
-  std::vector<std::shared_ptr<const mapping::Submap2D>> insertion_submaps =
-      active_submaps_.InsertRangeData(all_range_data_to_insert);
-  // 插入合并后的云数据、线数据和反射器数据
+  // 5. 一次性批量插入所有range data
+  active_submaps_.InsertRangeData(all_range_data_to_insert);
+  
+  // 6. 插入合并后的云数据、线数据和反射器数据
   active_submaps_.InsertCloudData(cloud_in_local, highlight_cloud_in_local);
   active_submaps_.InsertLineData(tracked_lines_in_local);
   active_submaps_.InsertReflectorData(merged_data.merged_reflector_data);
 
-  // 4. 返回插入结果
+  // 4. 获取用于插入的submaps（处理创建和完成逻辑）
+  // 使用第一个range data的原点来决定新submap的位置
+  Eigen::Vector2f origin;
+  if (all_range_data_to_insert.empty()) {
+    origin = pose_estimate_2d.translation().cast<float>();
+  } else {
+    origin = all_range_data_to_insert.front().origin.head<2>();
+  }
+  
+  std::vector<std::shared_ptr<const mapping::Submap2D>> insertion_submaps =
+      active_submaps_.GetInsertionSubmaps(origin);
+
+  // 7. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{
       std::make_shared<const mapping::TrajectoryNode::Data>(mapping::TrajectoryNode::Data{
           time,

@@ -458,9 +458,20 @@ LocalTrajectoryBuilder2D::InsertIntoSubmap(
     all_range_data_to_insert.push_back(sensor_range_data_in_local);
   }
   
-  // 一次性批量插入所有range data
+  // 获取用于插入的submaps（处理创建和完成逻辑）
+  Eigen::Vector2f origin;
+  if (all_range_data_to_insert.empty()) {
+    origin = pose_estimate_2d.translation().cast<float>();
+  } else {
+    origin = all_range_data_to_insert.front().origin.head<2>();
+  }
+  
   std::vector<std::shared_ptr<const Submap2D>> insertion_submaps =
-      active_submaps_.InsertRangeData(all_range_data_to_insert);
+      active_submaps_.GetInsertionSubmaps(origin);
+  
+  // 一次性批量插入所有range data
+  active_submaps_.InsertRangeData(all_range_data_to_insert);
+  
   // 插入合并后的云数据、线数据和反射器数据
   active_submaps_.InsertCloudData(cloud_in_local, highlight_cloud_in_local);
   active_submaps_.InsertLineData(tracked_lines_in_local);

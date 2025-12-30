@@ -61,6 +61,8 @@ class Submap2D : public Submap {
   explicit Submap2D(const proto::Submap2D& proto,
                     ValueConversionTables* conversion_tables);
 
+  ~Submap2D() override;
+
   proto::Submap ToProto(bool include_grid_data) const override;
   void UpdateFromProto(const proto::Submap& proto) override;
 
@@ -151,12 +153,18 @@ class ActiveSubmaps2D {
  public:
   explicit ActiveSubmaps2D(const proto::SubmapsOptions2D& options);
 
+  ~ActiveSubmaps2D() = default;
+
   ActiveSubmaps2D(const ActiveSubmaps2D&) = delete;
   ActiveSubmaps2D& operator=(const ActiveSubmaps2D&) = delete;
 
   // Inserts 'range_data' into the Submap collection.
-  std::vector<std::shared_ptr<const Submap2D>> InsertRangeData(
-      const std::vector<sensor::RangeData>& range_data_vector);
+  // Only responsible for inserting range data, does not handle submap creation/finishing.
+  void InsertRangeData(const std::vector<sensor::RangeData>& range_data_vector);
+
+  // Gets the insertion submaps and handles submap creation/finishing logic.
+  std::vector<std::shared_ptr<const Submap2D>> GetInsertionSubmaps(
+      const Eigen::Vector2f& origin);
 
   // void InsertNormalData(const sensor::NormalPointCloud & normals);
 

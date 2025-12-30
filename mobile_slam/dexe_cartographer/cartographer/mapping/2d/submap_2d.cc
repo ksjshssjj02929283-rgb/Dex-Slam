@@ -219,6 +219,33 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
   set_insertion_finished(proto.finished());
 }
 
+Submap2D::~Submap2D() {
+  if (cloud_ikdtree_) {
+    cloud_ikdtree_.reset();
+  }
+  if (highlight_cloud_ikdtree_) {
+    highlight_cloud_ikdtree_.reset();
+  }
+  
+  // 释放线段地图
+  if (line_map_2d_list_) {
+    line_map_2d_list_.reset();
+  }
+  
+  // 释放点云数据
+  if (cloud_) {
+    cloud_.reset();
+  }
+  if (highlight_cloud_) {
+    highlight_cloud_.reset();
+  }
+  
+  // 释放栅格地图
+  if (grid_) {
+    grid_.reset();
+  }
+}
+
 proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
   proto::Submap proto;
   auto* const submap_2d = proto.mutable_submap_2d();
@@ -671,19 +698,15 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::submaps() const {
                                                       submaps_.end());
 }
 
-std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
+/**
+ * @brief 向ActiveSubmaps2D中插入雷达数据（仅负责插入数据）
+ * 
+ * @param range_data_vector 激光数据向量（local坐标系）
+ */
+void ActiveSubmaps2D::InsertRangeData(
     const std::vector<sensor::RangeData>& range_data_vector) {
-  if (range_data_vector.empty()) {
-    return submaps();
-  }
-  
-  // 使用第一个range data的原点来决定是否需要创建新的submap
-  const sensor::RangeData& first_range_data = range_data_vector.front();
-  
-  // TODO: 增加角速度过大时候，不增加submap的操作(旋转中增加submap会增大建图的误差)
-  if (submaps_.empty() ||
-      submaps_.back()->num_range_data() >= options_.num_range_data()) {
-    AddSubmap(first_range_data.origin.head<2>());
+  if (range_data_vector.empty() || submaps_.empty()) {
+    return;
   }
   
   // 批量插入所有range data
@@ -693,8 +716,19 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
     }
     submap->set_num_range_data(submap->num_range_data() + 1);
   }
+}
 
-  if (!submaps_.empty() && submaps_.front()->num_range_data() >= 2 * options_.num_range_data()) {
+/**
+ * @brief 获取用于插入的submaps，并处理submap的创建和完成逻辑
+ * 
+ * @param origin 新submap的原点（如果需要创建）
+ * @return std::vector<std::shared_ptr<const Submap2D>> 返回用于插入数据的submaps
+ */
+std::vector<std::shared_ptr<const Submap2D>>
+ActiveSubmaps2D::GetInsertionSubmaps(const Eigen::Vector2f& origin) {
+  // 1. 先检查是否需要完成第一个submap（必须在AddSubmap之前）
+  if (!submaps_.empty() && 
+      submaps_.front()->num_range_data() >= 2 * options_.num_range_data()) {
     submaps_.front()->Finish();
 
     // static int submap_count = 0;
@@ -704,6 +738,13 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertRangeData(
     // submaps_.front()->SaveSubmapCloud(folder, filename);
     // submaps_.front()->grid()->DrawAsImage(folder, filename);
   }
+  
+  // 2. 判断是否需要创建新submap
+  if (submaps_.empty() ||
+      submaps_.back()->num_range_data() >= options_.num_range_data()) {
+    AddSubmap(origin);
+  }
+  
   return submaps();
 }
 
