@@ -191,7 +191,11 @@ install(DIRECTORY launch urdf configuration_files rviz
 )
 
 # 安装脚本
-install(PROGRAMS scripts/tf_remove_frames.py
+install(PROGRAMS
+  scripts/tf_remove_frames.py
+  scripts/collect_trajectory_data.py
+  scripts/evaluate_static_localization.py
+  scripts/evaluate_trajectory.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
