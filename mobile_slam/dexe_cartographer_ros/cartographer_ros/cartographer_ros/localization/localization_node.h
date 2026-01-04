@@ -22,11 +22,11 @@
 #include "nav_msgs/msg/path.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
-#include "dcm_msgs/msg/localization_state.hpp"
+#include "nav_interfaces/msg/localization_state.hpp"
 
 // ROS2 services
 #include "std_srvs/srv/trigger.hpp"
-#include "dcm_srvs/srv/set_pose.hpp"
+#include "nav_interfaces/srv/set_pose.hpp"
 #include "cartographer_ros_msgs/srv/finish_trajectory.hpp"
 #include "cartographer_ros_msgs/srv/get_trajectory_states.hpp"
 #include "cartographer_ros_msgs/srv/read_metrics.hpp"
@@ -143,8 +143,8 @@ private:
       std::shared_ptr<cartographer_ros_msgs::srv::GetTrajectoryStates::Response> response);
 
   void HandleRelocalization(
-      const std::shared_ptr<dcm_srvs::srv::SetPose::Request> request,
-      std::shared_ptr<dcm_srvs::srv::SetPose::Response> response);
+      const std::shared_ptr<nav_interfaces::srv::SetPose::Request> request,
+      std::shared_ptr<nav_interfaces::srv::SetPose::Response> response);
 
   void HandleSetMapChanged(
       const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
@@ -214,7 +214,7 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr local_feature_map_publisher_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr matched_feature_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_matched_point_cloud_publisher_;
-  rclcpp::Publisher<dcm_msgs::msg::LocalizationState>::SharedPtr localization_state_publisher_;
+  rclcpp::Publisher<nav_interfaces::msg::LocalizationState>::SharedPtr localization_state_publisher_;
 
   // Services (kept alive as members)
   rclcpp::Service<cartographer_ros_msgs::srv::SubmapQuery>::SharedPtr submap_query_service_;
@@ -223,7 +223,7 @@ private:
   rclcpp::Service<cartographer_ros_msgs::srv::FinishTrajectory>::SharedPtr finish_trajectory_service_;
   rclcpp::Service<cartographer_ros_msgs::srv::WriteState>::SharedPtr write_state_service_;
   rclcpp::Service<cartographer_ros_msgs::srv::GetTrajectoryStates>::SharedPtr get_trajectory_states_service_;
-  rclcpp::Service<dcm_srvs::srv::SetPose>::SharedPtr relocalization_service_;
+  rclcpp::Service<nav_interfaces::srv::SetPose>::SharedPtr relocalization_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr set_map_changed_service_;
 
   // Subscribers per trajectory

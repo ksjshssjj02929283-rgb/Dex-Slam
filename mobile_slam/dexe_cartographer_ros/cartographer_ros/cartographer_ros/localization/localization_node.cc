@@ -40,8 +40,8 @@
 
 // 自定义消息/服务
 #include "std_srvs/srv/trigger.hpp"
-#include "dcm_srvs/srv/set_pose.hpp"
-#include "dcm_msgs/msg/localization_state.hpp"
+#include "nav_interfaces/srv/set_pose.hpp"
+#include "nav_interfaces/msg/localization_state.hpp"
 
 // Cartographer  
 #include "cartographer/common/configuration_file_resolver.h"
@@ -161,7 +161,7 @@ LocalizationNode::LocalizationNode(
       kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
   scan_matched_point_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
       kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
-  localization_state_publisher_ = node_->create_publisher<dcm_msgs::msg::LocalizationState>(
+  localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
       kLocalizationStateTopic, kLatestOnlyPublisherQueueSize);
 
   // 服务  
@@ -195,7 +195,7 @@ LocalizationNode::LocalizationNode(
       std::bind(&LocalizationNode::HandleGetTrajectoryStates, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  relocalization_service_ = node_->create_service<dcm_srvs::srv::SetPose>(
+  relocalization_service_ = node_->create_service<nav_interfaces::srv::SetPose>(
       kHandleRelocalizationServiceName,
       std::bind(&LocalizationNode::HandleRelocalization, this,
                 std::placeholders::_1, std::placeholders::_2));
@@ -302,42 +302,42 @@ void LocalizationNode::AddSensorSamplers(const int trajectory_id,
 void LocalizationNode::PublishLocalizationState()
 {
   const auto loc_state = localization_updater_bridge_.GetLocalizationState();
-  dcm_msgs::msg::LocalizationState loc_state_msg;
+  nav_interfaces::msg::LocalizationState loc_state_msg;
 
   if (!loc_state.has_value()) {
     // 未初始化或不可用时可选择填充一个默认状态
-    loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_NOT_INIT;
+    loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_NOT_INIT;
   } else {
     using S = carto::localization::LocalizationState;
     // 90%的可能性是定位成功的
     if (*loc_state == S::LOCALIZED) {
-      loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_SUCCESS;
+      loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_SUCCESS;
     } else {
       switch (*loc_state) {
         case S::LOCALIZATION_FAILED:
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_FAILED;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_FAILED;
           break;
         case S::INITIALIZATION_FAILED:
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_INIT_FAILED;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_INIT_FAILED;
           break;
         case S::NOT_INITIALIZED:
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_NOT_INIT;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_NOT_INIT;
           break;
         case S::INITIALIZING:
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_INITIALIZING;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_INITIALIZING;
           break;
         case S::INITIALIZED:
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_INITIALIZED;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_INITIALIZED;
           break;
         case S::RELOCALIZING:
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_RELOCALIZING;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_RELOCALIZING;
           break;
         case S::LOCALIZED:
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_SUCCESS;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_SUCCESS;
           break;
         default:
           // 兜底处理，防止未来新增状态导致未设置
-          loc_state_msg.status = dcm_msgs::msg::LocalizationState::LOC_FAILED;
+          loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_FAILED;
           RCLCPP_WARN(node_->get_logger(),
                       "Unknown localization state value: %d",
                       static_cast<int>(*loc_state));
@@ -996,8 +996,8 @@ void LocalizationNode::HandleWriteState(
 }
 
 void LocalizationNode::HandleRelocalization(
-    const std::shared_ptr<dcm_srvs::srv::SetPose::Request> request,
-    std::shared_ptr<dcm_srvs::srv::SetPose::Response> response)
+    const std::shared_ptr<nav_interfaces::srv::SetPose::Request> request,
+    std::shared_ptr<nav_interfaces::srv::SetPose::Response> response)
 {
   if (request->pose.header.frame_id == "") {
     // This should be removed at some point
@@ -1039,7 +1039,7 @@ bool LocalizationNode::SetInitialPoseInFilter(
 {
   RCLCPP_INFO(node_->get_logger(), "Setting initial pose in filter");
   // Create service client (should be created in constructor for better practice)
-  auto set_pose_client = node_->create_client<dcm_srvs::srv::SetPose>("/robot_localization/set_pose");
+  auto set_pose_client = node_->create_client<nav_interfaces::srv::SetPose>("/robot_localization/set_pose");
   if (!set_pose_client) {
     RCLCPP_ERROR(node_->get_logger(), "SetPose client not initialized");
     return false;
@@ -1051,7 +1051,7 @@ bool LocalizationNode::SetInitialPoseInFilter(
     return false;
   }
 
-  auto pose_cmd = std::make_shared<dcm_srvs::srv::SetPose::Request>();
+  auto pose_cmd = std::make_shared<nav_interfaces::srv::SetPose::Request>();
   pose_cmd->pose = pose_cov_msg;
 
   // Call service asynchronously with timeout

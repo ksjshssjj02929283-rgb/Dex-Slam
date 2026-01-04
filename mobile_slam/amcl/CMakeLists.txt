@@ -48,7 +48,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
-find_package(dcm_srvs REQUIRED)
+find_package(nav_interfaces REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(nav2_util REQUIRED)
 find_package(pcl_conversions REQUIRED)
@@ -77,7 +77,7 @@ set(dependencies
   tf2_geometry_msgs
   tf2_msgs
   tf2_ros
-  dcm_srvs
+  nav_interfaces
   pluginlib
   nav2_util
   pcl_conversions

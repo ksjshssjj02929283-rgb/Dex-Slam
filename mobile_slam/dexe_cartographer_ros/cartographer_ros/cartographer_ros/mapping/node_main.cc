@@ -24,8 +24,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "std_msgs/msg/int16.hpp"
-#include "dcm_srvs/srv/set_map_name.hpp"
-#include "dcm_srvs/srv/get_string.hpp"
+#include "nav_interfaces/srv/set_map_name.hpp"
+#include "nav_interfaces/srv/get_string.hpp"
 
 #include "cartographer/mapping/map_builder.h"
 #include "cartographer_ros/mapping/node.h"
@@ -107,11 +107,11 @@ public:
       "~/save_map",
       std::bind(&MappingNode::SaveMapCallback, this, std::placeholders::_1, std::placeholders::_2));
 
-    set_map_name_srv_ = this->create_service<dcm_srvs::srv::SetMapName>(
+    set_map_name_srv_ = this->create_service<nav_interfaces::srv::SetMapName>(
       "~/set_map_name",
       std::bind(&MappingNode::SetMapName, this, std::placeholders::_1, std::placeholders::_2));
 
-    get_mapping_status_srv_ = this->create_service<dcm_srvs::srv::GetString>(
+    get_mapping_status_srv_ = this->create_service<nav_interfaces::srv::GetString>(
       "~/get_mapping_status",
       std::bind(&MappingNode::GetMappingStatus, this, std::placeholders::_1, std::placeholders::_2));
 
@@ -136,8 +136,8 @@ public:
 
 private:
   // ---- Service Callbacks (ROS2 签名) ----
-  void GetMappingStatus(const std::shared_ptr<dcm_srvs::srv::GetString::Request> /*req*/,
-                        std::shared_ptr<dcm_srvs::srv::GetString::Response> res)
+  void GetMappingStatus(const std::shared_ptr<nav_interfaces::srv::GetString::Request> /*req*/,
+                        std::shared_ptr<nav_interfaces::srv::GetString::Response> res)
   {
     res->data = is_mapping_ ? "mapping" : "idle";
     res->success = true;
@@ -425,8 +425,8 @@ private:
     ResetMappingNode();
   }
 
-  void SetMapName(const std::shared_ptr<dcm_srvs::srv::SetMapName::Request> req,
-                  std::shared_ptr<dcm_srvs::srv::SetMapName::Response> res)
+  void SetMapName(const std::shared_ptr<nav_interfaces::srv::SetMapName::Request> req,
+                  std::shared_ptr<nav_interfaces::srv::SetMapName::Response> res)
   {
     map_name_ = req->map_name;
 
@@ -474,8 +474,8 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
-  rclcpp::Service<dcm_srvs::srv::SetMapName>::SharedPtr set_map_name_srv_;
-  rclcpp::Service<dcm_srvs::srv::GetString>::SharedPtr get_mapping_status_srv_;
+  rclcpp::Service<nav_interfaces::srv::SetMapName>::SharedPtr set_map_name_srv_;
+  rclcpp::Service<nav_interfaces::srv::GetString>::SharedPtr get_mapping_status_srv_;
 
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_show_map_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stop_show_map_client_;

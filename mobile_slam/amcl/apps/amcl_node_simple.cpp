@@ -93,36 +93,36 @@ bool AmclNode::SetInitialPoseInFilter() { return false; }
 
 // Service callbacks - simplified versions
 void AmclNode::GlobalLocalizationCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> request,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
 }
 
 void AmclNode::NoMotionUpdateCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> request,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
 }
 
 void AmclNode::SetMapChangedCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> request,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
 }
 
 void AmclNode::RelocaliztoinCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> request,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
 }
 
 void AmclNode::CancelRelocaliztoinCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> request,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
 }

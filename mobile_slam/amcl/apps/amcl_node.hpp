@@ -24,7 +24,6 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "std_srvs/srv/empty.hpp"
 #include "std_srvs/srv/trigger.hpp"
-#include "dcm_srvs/srv/get_map_info.hpp"
 
 #include "tf2/LinearMath/Transform.h"
 #include "tf2/convert.h"
@@ -52,8 +51,8 @@
 // #include "amcl/AMCLConfig.h"  // Dynamic reconfigure not used in ROS2
 #include "file_manager.hpp"
 #include "pose_save_tool.hpp"
-#include "dcm_msgs/msg/localization_state.hpp"
-#include "dcm_srvs/srv/set_pose.hpp"
+#include "nav_interfaces/msg/localization_state.hpp"
+#include "nav_interfaces/srv/set_pose.hpp"
 
 namespace amcl
 {
@@ -99,18 +98,18 @@ private:
   void PublishThread();
   void PublishParticleCloud();
 
-  void GlobalLocalizationCallback(const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> req,
-                                  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> res);
-  void NoMotionUpdateCallback(const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> req,
-                              std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> res);
+  void GlobalLocalizationCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+                                  std::shared_ptr<std_srvs::srv::Trigger::Response> res);
+  void NoMotionUpdateCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+                              std::shared_ptr<std_srvs::srv::Trigger::Response> res);
   void SetMapCallback(const std::shared_ptr<nav_msgs::srv::SetMap::Request> req,
                       std::shared_ptr<nav_msgs::srv::SetMap::Response> res);
-  void RelocaliztoinCallback(const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> req,
-                             std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> res);
-  void CancelRelocaliztoinCallback(const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> req,
-                                   std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> res);
-  void SetMapChangedCallback(const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request> req,
-                             std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> res);
+  void RelocaliztoinCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+                             std::shared_ptr<std_srvs::srv::Trigger::Response> res);
+  void CancelRelocaliztoinCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+                                   std::shared_ptr<std_srvs::srv::Trigger::Response> res);
+  void SetMapChangedCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+                             std::shared_ptr<std_srvs::srv::Trigger::Response> res);
 
   void InitialPoseReceived(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
   void HandleInitialPoseMessage(const geometry_msgs::msg::PoseWithCovarianceStamped& msg);
@@ -135,13 +134,13 @@ private:
   // 设置 robot localization 中的初始位姿
   bool SetInitialPoseInFilter();
 
-  dcm_msgs::msg::LocalizationState ToMsg(LocalizationState state);
+  nav_interfaces::msg::LocalizationState ToMsg(LocalizationState state);
 private:
-  rclcpp::Service<dcm_srvs::srv::GetMapInfo>::SharedPtr global_loc_srv_;
-  rclcpp::Service<dcm_srvs::srv::GetMapInfo>::SharedPtr nomotion_update_srv_;
-  rclcpp::Service<dcm_srvs::srv::GetMapInfo>::SharedPtr relocalization_srv_;
-  rclcpp::Service<dcm_srvs::srv::GetMapInfo>::SharedPtr cancel_relocalization_srv_;
-  rclcpp::Service<dcm_srvs::srv::GetMapInfo>::SharedPtr set_map_changed_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr global_loc_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr nomotion_update_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr relocalization_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_relocalization_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr set_map_changed_srv_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_sub_old_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
@@ -209,7 +208,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr particlecloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr amcl_odom_pub_;
-  rclcpp::Publisher<dcm_msgs::msg::LocalizationState>::SharedPtr loc_state_pub_;
+  rclcpp::Publisher<nav_interfaces::msg::LocalizationState>::SharedPtr loc_state_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr matched_cloud_pub_;
 

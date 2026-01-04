@@ -37,8 +37,7 @@ set(PACKAGE_DEPENDENCIES
   tf2_geometry_msgs
   urdf
   visualization_msgs
-  dcm_msgs
-  dcm_srvs
+  nav_interfaces
   rosbag2_cpp
   rosbag2_storage
 )

@@ -1,4 +1,0 @@
-string name
----
-bool success
-dcm_msgs/NavPoint nav_point

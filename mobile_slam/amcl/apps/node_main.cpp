@@ -1,7 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
-#include "dcm_srvs/srv/get_string.hpp"
+#include "nav_interfaces/srv/get_string.hpp"
 
 #include "amcl_node.hpp"
 
@@ -133,8 +133,8 @@ bool ResetLocalizationCallback(const std::shared_ptr<std_srvs::srv::Trigger::Req
   return res->success;
 }
 
-bool GetActivationStatusCallback(const std::shared_ptr<dcm_srvs::srv::GetString::Request> req,
-                                 std::shared_ptr<dcm_srvs::srv::GetString::Response> res)
+bool GetActivationStatusCallback(const std::shared_ptr<nav_interfaces::srv::GetString::Request> req,
+                                 std::shared_ptr<nav_interfaces::srv::GetString::Response> res)
 {
   (void)req;  // unused parameter
   res->data = is_activating ? "activated" : "deactivated";
@@ -153,7 +153,7 @@ int main(int argc, char** argv)
     "~/stop_localization", StopLocalizationCallback);
   auto reset_localization_srv = node->create_service<std_srvs::srv::Trigger>(
     "~/reset_localization", ResetLocalizationCallback);
-  auto get_activation_status_srv = node->create_service<dcm_srvs::srv::GetString>(
+  auto get_activation_status_srv = node->create_service<nav_interfaces::srv::GetString>(
     "~/get_activation_status", GetActivationStatusCallback);
 
   amcl_node_ptr.reset(new amcl::AmclNode());

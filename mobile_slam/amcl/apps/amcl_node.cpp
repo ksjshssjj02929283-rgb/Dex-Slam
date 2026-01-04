@@ -91,47 +91,47 @@ void AmclNode::CheckLaserReceived() {}
 
 // Service callbacks with correct signatures
 void AmclNode::GlobalLocalizationCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request>,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
   RCLCPP_INFO(this->get_logger(), "GlobalLocalizationCallback executed");
 }
 
 void AmclNode::NoMotionUpdateCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request>,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
   RCLCPP_INFO(this->get_logger(), "NoMotionUpdateCallback executed");
 }
 
 void AmclNode::SetMapChangedCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request>,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
   RCLCPP_INFO(this->get_logger(), "SetMapChangedCallback executed");
 }
 
 void AmclNode::RelocaliztoinCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request>,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
   RCLCPP_INFO(this->get_logger(), "RelocaliztoinCallback executed");
 }
 
 void AmclNode::CancelRelocaliztoinCallback(
-  const std::shared_ptr<dcm_srvs::srv::GetMapInfo::Request>,
-  std::shared_ptr<dcm_srvs::srv::GetMapInfo::Response> response)
+  const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
   response->success = true;
   RCLCPP_INFO(this->get_logger(), "CancelRelocaliztoinCallback executed");
 }
 
-dcm_msgs::msg::LocalizationState AmclNode::ToMsg(LocalizationState state) {
-  dcm_msgs::msg::LocalizationState msg;
+nav_interfaces::msg::LocalizationState AmclNode::ToMsg(LocalizationState state) {
+  nav_interfaces::msg::LocalizationState msg;
   return msg;
 }
 
