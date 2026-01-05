@@ -181,7 +181,6 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
   local_map_updater_->UpdateRobotPose(transform::Project2D(initial_pose));
   if (!local_map_updater_->IsLocalMapUpdated()) {
     LOG(WARNING) << "There is no need to update local map for initial pose setting!";
-    return false;
   }
 
   pose_initializer_->InitGlobalGridMap(local_map_updater_->local_grid_map());

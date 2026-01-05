@@ -266,7 +266,7 @@ void CeresScanMatcher2D::Match(
       if (local_cloud_ikdtree.Root_Node == nullptr ||
           local_cloud_ikdtree.validnum() < 10)
       {
-        LOG(WARNING) << "No local points in the submap.";
+        // LOG(WARNING) << "No local points in the submap.";
       } else {
         const auto pose_estimate_temp = transform::Rigid2d(
           {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);
@@ -353,7 +353,7 @@ void CeresScanMatcher2D::Match(
     if (global_cloud_ikdtree.Root_Node == nullptr ||
         global_cloud_ikdtree.validnum() < 10)
     {
-      LOG(WARNING) << "No global points in the submap.";
+      // LOG(WARNING) << "No global points in the submap.";
     } else {
       const auto pose_estimate_temp = transform::Rigid2d(
         {ceres_pose_estimate[0], ceres_pose_estimate[1]}, ceres_pose_estimate[2]);

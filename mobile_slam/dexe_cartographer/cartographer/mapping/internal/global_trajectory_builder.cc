@@ -129,8 +129,9 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
                             std::vector<std::shared_ptr<const Submap>>(
                                 matching_result->insertion_result->insertion_submaps.begin(),
                                 matching_result->insertion_result->insertion_submaps.end()),
-                            std::make_shared<sensor::PointCloud>(
-                                *(matching_result->insertion_result->insertion_submaps.front()->cloud())),
+                            std::make_shared<sensor::PointCloud>(),
+                            // std::make_shared<sensor::PointCloud>(
+                            //     *(matching_result->insertion_result->insertion_submaps.front()->cloud())),
                             std::make_shared<LineMap2DList>(
                                 *(matching_result->insertion_result->insertion_submaps.front()->line_map_2d_list()))
                           });

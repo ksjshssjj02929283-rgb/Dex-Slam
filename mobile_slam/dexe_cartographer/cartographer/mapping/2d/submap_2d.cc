@@ -682,11 +682,11 @@ void Submap2D::Finish() {
   // LOG(WARNING) << "Finishing submap...";
   CloudDataCulling();
 
-  auto start_time = std::chrono::high_resolution_clock::now();
-  FreshCloudData();
-  auto end_time = std::chrono::high_resolution_clock::now();
-  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-  LOG(INFO) << "FreshCloudData execution time: " << duration.count() << " microseconds";
+  // auto start_time = std::chrono::high_resolution_clock::now();
+  // FreshCloudData();
+  // auto end_time = std::chrono::high_resolution_clock::now();
+  // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+  // LOG(INFO) << "FreshCloudData execution time: " << duration.count() << " microseconds";
   set_insertion_finished(true);
 }
 
