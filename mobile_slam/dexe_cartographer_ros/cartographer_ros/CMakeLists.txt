@@ -195,6 +195,8 @@ install(PROGRAMS
   scripts/collect_trajectory_data.py
   scripts/evaluate_static_localization.py
   scripts/evaluate_trajectory.py
+  scripts/monitor_cartographer_resources.sh
+  scripts/visualize_cartographer_resources.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
