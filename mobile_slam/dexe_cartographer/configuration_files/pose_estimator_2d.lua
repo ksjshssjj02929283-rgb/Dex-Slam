@@ -28,7 +28,7 @@ POSE_ESTIMATOR_2D = {
 
   -- 位姿验证参数：用于检测定位质量并在必要时重置
   enable_pose_validation = true,                -- 是否启用位姿验证
-  pose_validation_min_score = 0.3,              -- 验证的最小匹配分数阈值
+  pose_validation_min_score = 0.25,              -- 验证的最小匹配分数阈值
   pose_validation_max_translation_error = 0.05, -- 最大允许的平移误差(米) 5cm
   pose_validation_max_rotation_error = 0.035,   -- 最大允许的旋转误差(弧度) ~2度
 
@@ -103,8 +103,8 @@ POSE_ESTIMATOR_2D = {
 
   use_online_correlative_scan_matching = true,
   real_time_correlative_scan_matcher = {
-    linear_search_window = 0.3,
-    angular_search_window = math.rad(10.),
+    linear_search_window = 0.2,
+    angular_search_window = math.rad(5.),
     translation_delta_cost_weight = 1e-1,
     rotation_delta_cost_weight = 1e-1,
   },

@@ -412,8 +412,9 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 /**
  * @brief 验证位姿估计质量
  * 
- * 使用real time correlative scan matcher在局部地图上进行匹配，
- * 比较scan match估计的位姿和real time matcher估计的位姿。
+ * 分两步验证：
+ * 1. 在动态地图(active_submaps_.front())上验证位姿和得分
+ * 2. 在静态地图(local_map_updater的局部地图)上验证得分
  * 
  * @param estimated_pose scan match估计得到的位姿
  * @param point_cloud 用于验证的点云
@@ -433,54 +434,126 @@ PoseEstimator2D::PoseValidationResult PoseEstimator2D::ValidatePoseEstimate(
     return result;  // 验证功能未启用，直接通过
   }
 
-  // 获取局部地图
-  auto local_grid_map = local_map_updater_->local_grid_map();
-  if (local_grid_map == nullptr) {
-    LOG(WARNING) << "Local grid map not available for pose validation";
-    return result;  // 如果局部地图不可用，暂不验证
-  }
-
   // 从配置文件读取参数
   const double kMinValidationScore = options_.pose_validation_min_score();
   const double kMaxTranslationError = options_.pose_validation_max_translation_error();
   const double kMaxRotationError = options_.pose_validation_max_rotation_error();
 
-  // 使用real time correlative scan matcher在局部地图上进行验证匹配
-  transform::Rigid2d validation_pose = estimated_pose;
-  const double validation_score = real_time_correlative_scan_matcher_.Match(
-      estimated_pose, 
-      point_cloud, 
-      *local_grid_map,
-      &validation_pose);
+  // ========== 第一步：在动态地图上验证位姿和得分 ==========
+  bool dynamic_map_valid = false;
+  bool has_dynamic_map = false;  // 标记动态地图是否可用
+  double dynamic_validation_score = 0.0;
+  transform::Rigid2d dynamic_validation_pose = estimated_pose;
+  double dynamic_translation_error = 0.0;
+  double dynamic_rotation_error = 0.0;
+  std::shared_ptr<const mapping::Submap2D> dynamic_submap = nullptr;
 
-  // 保存验证结果
-  result.validated_pose = validation_pose;
-  result.validation_score = validation_score;
+  if (!active_submaps_.submaps().empty()) {
+    dynamic_submap = active_submaps_.submaps().front();
+    
+    if (dynamic_submap &&
+        dynamic_submap->grid() &&
+        dynamic_submap->num_range_data() > 0)
+    {
+      has_dynamic_map = true;
+      
+      // 在动态地图上进行correlative scan matching
+      dynamic_validation_score = real_time_correlative_scan_matcher_.Match(
+          estimated_pose, 
+          point_cloud, 
+          *dynamic_submap->grid(),
+          &dynamic_validation_pose);
 
-  // 计算scan match位姿和real time matcher位姿之间的误差
-  const double translation_error = 
-      (validation_pose.translation() - estimated_pose.translation()).norm();
-  const double rotation_error = 
-      std::abs(validation_pose.rotation().angle() - estimated_pose.rotation().angle());
+      // 计算位姿误差
+      dynamic_translation_error = 
+          (dynamic_validation_pose.translation() - estimated_pose.translation()).norm();
+      dynamic_rotation_error = 
+          std::abs(dynamic_validation_pose.rotation().angle() - estimated_pose.rotation().angle());
 
-  // 综合判断：评分和位姿误差
-  const bool score_valid = validation_score >= kMinValidationScore;
-  const bool translation_valid = translation_error <= kMaxTranslationError;
-  const bool rotation_valid = rotation_error <= kMaxRotationError;
+      // 动态地图验证：同时检查得分和位姿误差
+      const bool dynamic_score_valid = dynamic_validation_score >= kMinValidationScore;
+      const bool dynamic_translation_valid = dynamic_translation_error <= kMaxTranslationError;
+      const bool dynamic_rotation_valid = dynamic_rotation_error <= kMaxRotationError;
 
-  result.is_valid = score_valid && translation_valid && rotation_valid;
+      dynamic_map_valid = dynamic_score_valid && dynamic_translation_valid && dynamic_rotation_valid;
+
+      // LOG(INFO) << "Dynamic map validation - Score: " << dynamic_validation_score
+      //           << ", Translation error: " << dynamic_translation_error << " m"
+      //           << ", Rotation error: " << dynamic_rotation_error << " rad"
+      //           << ", Valid: " << (dynamic_map_valid ? "YES" : "NO");
+    }
+  } else {
+    LOG(INFO) << "No active submaps available, will use static map only";
+  }
+
+  // ========== 第二步：在静态地图上验证得分 ==========
+  bool static_map_valid = false;
+  double static_validation_score = 0.0;
+  transform::Rigid2d static_validation_pose = estimated_pose;
+
+  auto local_static_map = local_map_updater_->local_grid_map();
+  if (local_static_map != nullptr) {
+    // 在静态地图上进行correlative scan matching
+    static_validation_score = real_time_correlative_scan_matcher_.Match(
+        estimated_pose, 
+        point_cloud, 
+        *local_static_map,
+        &static_validation_pose);
+
+    // 静态地图验证：仅检查得分
+    static_map_valid = static_validation_score >= kMinValidationScore;
+
+    // LOG(INFO) << "Static map validation - Score: " << static_validation_score
+    //           << ", Valid: " << (static_map_valid ? "YES" : "NO");
+  } else {
+    LOG(WARNING) << "Local static grid map not available for validation";
+  }
+
+  // ========== 综合判断 ==========
+  // 如果动态地图可用，需要同时通过动态地图和静态地图验证
+  // 如果动态地图不可用，只需要通过静态地图验证
+  if (has_dynamic_map) {
+    result.is_valid = dynamic_map_valid && static_map_valid;
+  } else {
+    result.is_valid = static_map_valid;
+  }
+  
+  // 优先使用动态地图的验证位姿和得分（因为动态地图更实时）
+  if (has_dynamic_map) {
+    result.validated_pose = dynamic_validation_pose;
+    result.validation_score = dynamic_validation_score;
+  } else {
+    result.validated_pose = static_validation_pose;
+    result.validation_score = static_validation_score;
+  }
 
   // 记录验证信息
   if (!result.is_valid) {
-    LOG(WARNING) << "Pose validation failed!"
-                 << "\n  Validation score: " << validation_score 
+    LOG(WARNING) << "Pose validation failed!";
+    
+    if (has_dynamic_map) {
+      LOG(WARNING) << "\n  === Dynamic Map Validation ==="
+                   << "\n    Score: " << dynamic_validation_score 
+                   << " (threshold: " << kMinValidationScore << ")"
+                   << "\n    Translation error: " << dynamic_translation_error << " m"
+                   << " (threshold: " << kMaxTranslationError << " m)"
+                   << "\n    Rotation error: " << dynamic_rotation_error << " rad"
+                   << " (threshold: " << kMaxRotationError << " rad)"
+                   << "\n    Valid: " << (dynamic_map_valid ? "YES" : "NO");
+    }
+    
+    LOG(WARNING) << "\n  === Static Map Validation ==="
+                 << "\n    Score: " << static_validation_score
                  << " (threshold: " << kMinValidationScore << ")"
-                 << "\n  Translation error: " << translation_error << " m"
-                 << " (threshold: " << kMaxTranslationError << " m)"
-                 << "\n  Rotation error: " << rotation_error << " rad"
-                 << " (threshold: " << kMaxRotationError << " rad)"
-                 << "\n  Scan match pose: " << estimated_pose
-                 << "\n  Real time matcher pose: " << validation_pose;
+                 << "\n    Valid: " << (static_map_valid ? "YES" : "NO")
+                 << "\n  === Poses ==="
+                 << "\n    Scan match pose: " << estimated_pose;
+    
+    if (has_dynamic_map) {
+      LOG(WARNING) << "    Dynamic validation pose: " << dynamic_validation_pose;
+    }
+    
+    LOG(WARNING) << "    Static validation pose: " << static_validation_pose;
   }
   
   return result;
@@ -704,10 +777,6 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   
   const transform::Rigid3d pose_estimate =
       transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
-  local_pose_ = pose_estimate;
-
-  // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
-  UpdateLastOdomForDelta(time);
 
   // 验证位姿估计质量，通过real time matcher在局部地图上匹配
   PoseValidationResult validation_result = ValidatePoseEstimate(
@@ -795,6 +864,11 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       }
     }
   }
+
+  local_pose_ = pose_estimate;
+
+  // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
+  UpdateLastOdomForDelta(time);
 
   local_map_updater_->UpdateRobotPose(*pose_estimate_2d);
 

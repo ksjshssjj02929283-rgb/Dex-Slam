@@ -98,6 +98,7 @@ Submap2D::Submap2D(const Eigen::Vector2f& origin,
   grid_ = std::move(grid);
   cloud_ = std::move(cloud);
   highlight_cloud_ = std::move(highlight_cloud);
+  // note: IKD tree会导致内存占用增加，只在active submap中使用,，后续尽量避免使用（首先要避免highlight_cloud_ikdtree_的使用）
   cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
   highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
   line_map_2d_list_ = std::make_unique<LineMap2DList>(
@@ -122,8 +123,10 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
   }
   cloud_ = std::make_unique<sensor::PointCloud>();
   highlight_cloud_ = std::make_unique<sensor::PointCloud>();
-  cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
-  highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+
+  // note: IKD tree会导致内存占用增加，从protobuf中创建不再使用
+  // cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  // highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
   
   // Task 4: 从 proto 反序列化 line_map_2d_list
   if (proto.has_line_map_2d_list()) {
@@ -176,6 +179,9 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     std::vector<sensor::RangefinderPoint> points;
     std::vector<float> intensities;
     
+    // 预分配内存以减少重新分配
+    points.reserve(proto.cloud().points_size());
+    
     for (const auto& point_proto : proto.cloud().points()) {
       points.push_back(sensor::RangefinderPoint{
         Eigen::Vector3f(point_proto.x(), point_proto.y(), point_proto.z())
@@ -184,6 +190,7 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     
     // 反序列化强度信息（如果有）
     if (proto.cloud().intensities_size() > 0) {
+      intensities.reserve(proto.cloud().intensities_size());
       for (float intensity : proto.cloud().intensities()) {
         intensities.push_back(intensity);
       }
@@ -198,6 +205,9 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     std::vector<sensor::RangefinderPoint> points;
     std::vector<float> intensities;
     
+    // 预分配内存以减少重新分配
+    points.reserve(proto.highlight_cloud().points_size());
+    
     for (const auto& point_proto : proto.highlight_cloud().points()) {
       points.push_back(sensor::RangefinderPoint{
         Eigen::Vector3f(point_proto.x(), point_proto.y(), point_proto.z())
@@ -206,6 +216,7 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     
     // 反序列化强度信息（如果有）
     if (proto.highlight_cloud().intensities_size() > 0) {
+      intensities.reserve(proto.highlight_cloud().intensities_size());
       for (float intensity : proto.highlight_cloud().intensities()) {
         intensities.push_back(intensity);
       }
@@ -687,6 +698,12 @@ void Submap2D::Finish() {
   // auto end_time = std::chrono::high_resolution_clock::now();
   // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
   // LOG(INFO) << "FreshCloudData execution time: " << duration.count() << " microseconds";
+  static int submap_count = 0;
+  std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  std::string folder = home_dir + "/.dexe/localization/active_submaps/";
+  std::string filename = "submap_" + std::to_string(submap_count++) + ".png";
+  grid_->DrawAsImage(folder, filename);
+
   set_insertion_finished(true);
 }
 
@@ -726,7 +743,7 @@ void ActiveSubmaps2D::InsertRangeData(
  */
 std::vector<std::shared_ptr<const Submap2D>>
 ActiveSubmaps2D::GetInsertionSubmaps(const Eigen::Vector2f& origin) {
-  // 1. 先检查是否需要完成第一个submap（必须在AddSubmap之前）
+  // 1. 先检查是否需要完成第一个submap
   if (!submaps_.empty() && 
       submaps_.front()->num_range_data() >= 2 * options_.num_range_data()) {
     submaps_.front()->Finish();

@@ -40,7 +40,7 @@ SearchParameters::SearchParameters(const double linear_search_window,
   // angular_perturbation_step_size =
   //     kSafetyMargin * std::acos(1. - common::Pow2(resolution * 2) /
   //                                        (2. * common::Pow2(max_scan_range)));
-  angular_perturbation_step_size = 0.017;
+  angular_perturbation_step_size = 0.5 * M_PI / 180.0;  // 0.5 degree
   num_angular_perturbations =
       std::ceil(angular_search_window / angular_perturbation_step_size);
   num_scans = 2 * num_angular_perturbations + 1;
