@@ -212,6 +212,12 @@ void FilterBase::processMeasurement(const Measurement & measurement)
         std::setprecision(20) << measurement.time_.nanoseconds() <<
         ", last measurement time is " << last_measurement_time_.nanoseconds() <<
         ", delta is " << delta.nanoseconds() << "\n");
+    if (delta > rclcpp::Duration::from_seconds(0.1)) {
+      std::cout << std::fixed << std::setprecision(20)
+                << "Processing measurement from topic: " << measurement.topic_name_
+                << " at time: " << measurement.time_.seconds()
+                << " with delta: " << delta.seconds() << " seconds." << std::endl;
+    }
     // Only want to carry out a prediction if it's
     // forward in time. Otherwise, just correct.
     if (delta > rclcpp::Duration(0, 0u)) {

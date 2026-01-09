@@ -2413,9 +2413,12 @@ void RosFilter<T>::periodicUpdate()
 
   rclcpp::Time cur_time = this->now();
 
+  double integrate_measurements_elapsed = 0.0;
   if (toggled_on_) {
     // Now we'll integrate any measurements we've received
+    rclcpp::Time integrate_start = this->now();
     integrateMeasurements(cur_time);
+    integrate_measurements_elapsed = (this->now() - integrate_start).seconds();
   } else {
     // Clear out measurements since we're not currently processing new entries
     clearMeasurementQueue();
@@ -2581,8 +2584,9 @@ void RosFilter<T>::periodicUpdate()
   if (loop_elapsed > 1. / frequency_) {
     std::cerr <<
       "Failed to meet update rate! Took " << std::setprecision(20) <<
-      loop_elapsed << "seconds. Try decreasing the rate, limiting "
-      "sensor output frequency, or limiting the number of sensors.\n";
+      loop_elapsed << " seconds. Try decreasing the rate, limiting "
+      "sensor output frequency, or limiting the number of sensors.\n" <<
+      "  integrateMeasurements took: " << integrate_measurements_elapsed << " seconds\n";
   }
 }
 
