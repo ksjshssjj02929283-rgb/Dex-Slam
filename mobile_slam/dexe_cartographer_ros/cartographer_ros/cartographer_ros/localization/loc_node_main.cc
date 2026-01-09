@@ -116,6 +116,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_localization_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
 
   // === Service Clients ===
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_filter_client_;
@@ -140,6 +141,11 @@ private:
     reset_localization_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/reset_localization",
         std::bind(&LocalizationManagerNode::HandleResetLocalization, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    change_map_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/set_map_changed",
+        std::bind(&LocalizationManagerNode::HandleChangeMap, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // 创建服务客户端
@@ -209,6 +215,103 @@ private:
     response->success = StartLocalization();
     response->message = response->success ? 
         "Localization reset successfully" : "Failed to reset localization";
+  }
+
+  void HandleChangeMap(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+    
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    
+    RCLCPP_INFO(get_logger(), "Changing map - getting new map info from map_manager");
+    
+    // 从map_manager获取新的地图信息
+    std::string new_map_folder;
+    std::string new_map_name;
+    
+    if (!GetMapInfoFromMapManager(new_map_folder, new_map_name)) {
+      response->success = false;
+      response->message = "Failed to get map info from map_manager";
+      return;
+    }
+    
+    RCLCPP_INFO(get_logger(), "New map - folder: %s, name: %s", 
+                new_map_folder.c_str(), new_map_name.c_str());
+    
+    // 停止当前定位
+    RCLCPP_INFO(get_logger(), "Stopping current localization...");
+    StopLocalization();
+    
+    // 更新地图路径（更新全局FLAGS）
+    FLAGS_map_folder = new_map_folder;
+    FLAGS_map_name = new_map_name;
+    
+    // 使用新地图启动定位
+    RCLCPP_INFO(get_logger(), "Starting localization with new map...");
+    response->success = StartLocalization();
+    response->message = response->success ? 
+        "Map changed successfully" : "Failed to start localization with new map";
+  }
+
+  bool GetMapInfoFromMapManager(std::string& map_folder, std::string& map_name) {
+    // 创建临时节点用于参数获取
+    try {
+      RCLCPP_INFO(get_logger(), "Creating temporary node to fetch map_manager parameters...");
+      
+      // 创建临时节点
+      auto temp_node = std::make_shared<rclcpp::Node>(
+          "temp_param_client_node",
+          rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
+      
+      // 创建参数客户端
+      auto param_client = std::make_shared<rclcpp::SyncParametersClient>(
+          temp_node, "map_manager");
+      
+      if (!param_client->wait_for_service(std::chrono::seconds(5))) {
+        RCLCPP_ERROR(get_logger(), "map_manager parameter service not available");
+        return false;
+      }
+      
+      RCLCPP_INFO(get_logger(), "Connected to map_manager parameter service");
+      
+      // 获取 map_folder 和 map_name 参数
+      auto params = param_client->get_parameters({"map_folder", "map_name"});
+      
+      if (params.size() != 2) {
+        RCLCPP_ERROR(get_logger(), "Failed to get both map_folder and map_name parameters");
+        return false;
+      }
+      
+      // 检查并获取 map_folder
+      if (params[0].get_type() == rclcpp::ParameterType::PARAMETER_STRING) {
+        map_folder = params[0].as_string();
+      } else {
+        RCLCPP_ERROR(get_logger(), "map_folder parameter is not a string");
+        return false;
+      }
+      
+      // 检查并获取 map_name
+      if (params[1].get_type() == rclcpp::ParameterType::PARAMETER_STRING) {
+        map_name = params[1].as_string();
+      } else {
+        RCLCPP_ERROR(get_logger(), "map_name parameter is not a string");
+        return false;
+      }
+      
+      if (map_folder.empty() || map_name.empty()) {
+        RCLCPP_ERROR(get_logger(), "Got empty map_folder or map_name from map_manager");
+        return false;
+      }
+      
+      RCLCPP_INFO(get_logger(), "Successfully got map info from map_manager - folder: %s, name: %s",
+                  map_folder.c_str(), map_name.c_str());
+      
+      return true;
+      
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(get_logger(), "Exception while getting parameters from map_manager: %s", e.what());
+      return false;
+    }
   }
 
   bool StartLocalization() {
