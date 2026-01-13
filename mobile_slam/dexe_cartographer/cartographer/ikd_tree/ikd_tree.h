@@ -129,6 +129,34 @@ public:
         {
             delete[] heap;
         }
+        
+        // 禁止拷贝构造和拷贝赋值，防止 double-free
+        MANUAL_HEAP(const MANUAL_HEAP&) = delete;
+        MANUAL_HEAP& operator=(const MANUAL_HEAP&) = delete;
+        
+        // 允许移动语义（如果需要）
+        MANUAL_HEAP(MANUAL_HEAP&& other) noexcept 
+            : heap(other.heap), heap_size(other.heap_size), cap(other.cap)
+        {
+            other.heap = nullptr;
+            other.heap_size = 0;
+            other.cap = 0;
+        }
+        
+        MANUAL_HEAP& operator=(MANUAL_HEAP&& other) noexcept
+        {
+            if (this != &other) {
+                delete[] heap;
+                heap = other.heap;
+                heap_size = other.heap_size;
+                cap = other.cap;
+                other.heap = nullptr;
+                other.heap_size = 0;
+                other.cap = 0;
+            }
+            return *this;
+        }
+        
         void pop()
         {
             if (heap_size == 0)

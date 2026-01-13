@@ -394,7 +394,9 @@ std::map<int, int> LocalizationUpdater::LoadState(
         const mapping::SubmapId submap_id(proto.submap().submap_id().trajectory_id(),
                                  proto.submap().submap_id().submap_index());
         pose_graph_->AddSubmapFromProto(submap_poses.at(submap_id),
-                                        proto.submap());
+                                        *proto.mutable_submap());
+        // 清空 proto 以释放内存
+        proto.clear_submap();
         break;
       }
       case SerializedData::kNode: {
@@ -403,7 +405,9 @@ std::map<int, int> LocalizationUpdater::LoadState(
         const mapping::NodeId node_id(proto.node().node_id().trajectory_id(),
                              proto.node().node_id().node_index());
         const transform::Rigid3d& node_pose = node_poses.at(node_id);
-        pose_graph_->AddNodeFromProto(node_pose, proto.node());
+        pose_graph_->AddNodeFromProto(node_pose, *proto.mutable_node());
+        // 清空 proto 以释放内存
+        proto.clear_node();
         break;
       }
       case SerializedData::kTrajectoryData: {

@@ -25,7 +25,21 @@ iKdTree<PointType>::~iKdTree()
     stop_thread();
     Delete_Storage_Disabled = true;
     delete_tree_nodes(&Root_Node);
+    
+    // Fix: 释放 STATIC_ROOT_NODE，这是一个严重的内存泄漏
+    if (STATIC_ROOT_NODE != nullptr) {
+        pthread_mutex_destroy(&(STATIC_ROOT_NODE->push_down_mutex_lock));
+        delete STATIC_ROOT_NODE;
+        STATIC_ROOT_NODE = nullptr;
+    }
+    
+    // Fix: 显式清理所有 PointVector 成员变量
     PointVector().swap(PCL_Storage);
+    PointVector().swap(Points_deleted);
+    PointVector().swap(Downsample_Storage);
+    PointVector().swap(Multithread_Points_deleted);
+    PointVector().swap(Rebuild_PCL_Storage);
+    
     Rebuild_Logger.clear();
 }
 
