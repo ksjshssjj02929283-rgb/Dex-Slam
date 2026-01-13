@@ -46,14 +46,6 @@ def generate_launch_description():
         'dexe_localization.launch.py'
     )
 
-    # Include robot_localization launch file
-    robot_localization_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(robot_localization_launch_file),
-        launch_arguments={
-            'filter_type': 'ukf',
-        }.items()
-    )
-
     # Include dexe_localization.launch.py
     include_cartographer = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -101,9 +93,6 @@ def generate_launch_description():
         declare_use_rosbag,
         declare_bag_filename,
         declare_start_time,
-        
-        # Robot localization
-        robot_localization_launch,
         
         # Include localization
         include_cartographer,

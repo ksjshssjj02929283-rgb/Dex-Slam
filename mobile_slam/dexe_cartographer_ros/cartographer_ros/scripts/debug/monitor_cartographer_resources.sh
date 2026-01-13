@@ -3,7 +3,7 @@
 # Records data every 30 seconds and saves to CSV file
 
 # Parse command line arguments
-PATTERN="${1:-/locaization_node}"  # Use first argument or default to /locaization_node
+PATTERN="${1:-/localization_node}"  # Use first argument or default to /localization_node
 INTERVAL="${2:-30}"  # Use second argument or default to 30 seconds
 
 # Configuration

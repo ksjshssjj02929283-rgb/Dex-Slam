@@ -192,11 +192,20 @@ install(DIRECTORY launch urdf configuration_files rviz
 # 安装脚本
 install(PROGRAMS
   scripts/tf_remove_frames.py
-  scripts/collect_trajectory_data.py
-  scripts/evaluate_static_localization.py
-  scripts/evaluate_trajectory.py
-  scripts/monitor_cartographer_resources.sh
-  scripts/visualize_cartographer_resources.py
+  scripts/evaluate/collect_trajectory_data.py
+  scripts/evaluate/evaluate_static_localization.py
+  scripts/evaluate/evaluate_trajectory.py
+  scripts/debug/monitor_cartographer_resources.sh
+  scripts/debug/visualize_cartographer_resources.py
+  scripts/debug/analyze_localization_memory.sh
+  scripts/debug/debug_localization.sh
+  scripts/debug/debug_localization_memcheck.sh
+  scripts/debug/debug_localization_memory.sh
+  scripts/debug/analyze_mapping_memory.sh
+  scripts/debug/debug_mapping_memory.sh
+  scripts/debug/debug_mapping_memcheck.sh
+  scripts/debug/monitor_cartographer_resources.sh
+  scripts/debug/visualize_cartographer_resources.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
