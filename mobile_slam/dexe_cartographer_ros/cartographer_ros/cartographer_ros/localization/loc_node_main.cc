@@ -240,6 +240,7 @@ private:
     
     // 停止当前定位
     RCLCPP_INFO(get_logger(), "Stopping current localization...");
+    StopFilter();
     StopLocalization();
     
     // 更新地图路径（更新全局FLAGS）
@@ -248,7 +249,7 @@ private:
     
     // 使用新地图启动定位
     RCLCPP_INFO(get_logger(), "Starting localization with new map...");
-    response->success = StartLocalization();
+    response->success = StartLocalization() && StartFilter();
     response->message = response->success ? 
         "Map changed successfully" : "Failed to start localization with new map";
   }
