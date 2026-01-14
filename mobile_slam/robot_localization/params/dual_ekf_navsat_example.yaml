@@ -71,6 +71,11 @@ ekf_filter_node_odom:
                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     1.0,   0.0,    0.0,
                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    1.0,  0.0,
                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    1.0]
+
+    # Filter reset thresholds
+    pose_reset_threshold: 0.1  # meters
+    angle_reset_threshold: 3.0  # degrees
+
 ekf_filter_node_map:
   ros__parameters:
     frequency: 30.0
@@ -153,6 +158,10 @@ ekf_filter_node_map:
                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     1.0,    0.0,    0.0,
                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    1.0,    0.0,
                                   0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    1.0]
+
+    # Filter reset thresholds
+    pose_reset_threshold: 0.1  # meters
+    angle_reset_threshold: 3.0  # degrees
 
 navsat_transform:
   ros__parameters:

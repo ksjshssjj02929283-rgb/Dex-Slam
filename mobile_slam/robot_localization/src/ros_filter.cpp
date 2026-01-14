@@ -84,12 +84,13 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   last_diag_time_(0, 0, RCL_ROS_TIME),
   last_published_stamp_(0, 0, RCL_ROS_TIME),
   predict_to_current_time_(false),
+  is_initialized_(false),
+  pose_reset_threshold_(0.1), // 0.1 meters
+  angle_reset_threshold_(3.0 * M_PI / 180.0),  // 3 degrees in radians
   last_set_pose_time_(0, 0, RCL_ROS_TIME),
   latest_control_time_(0, 0, RCL_ROS_TIME),
   tf_timeout_(0ns),
-  tf_time_offset_(0ns),
-  is_initialized_(false),
-  pose_reset_threshold_(0.2)
+  tf_time_offset_(0ns)
 {
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
@@ -777,15 +778,32 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
           double err_y = filtered_position.pose.pose.position.y - measurement->measurement_(StateMemberY);
           double err_dist = std::sqrt(err_x * err_x + err_y * err_y);
 
-          if (err_dist > pose_reset_threshold_) {
+          // Calculate angle error (yaw)
+          tf2::Quaternion filtered_quat(
+            filtered_position.pose.pose.orientation.x,
+            filtered_position.pose.pose.orientation.y,
+            filtered_position.pose.pose.orientation.z,
+            filtered_position.pose.pose.orientation.w);
+          double filtered_yaw = robot_localization::ros_filter_utilities::getYaw(filtered_quat);
+          double measured_yaw = measurement->measurement_(StateMemberYaw);
+          double err_yaw = std::abs(filtered_yaw - measured_yaw);
+          // Normalize angle error to [-pi, pi]
+          while (err_yaw > M_PI) err_yaw -= 2.0 * M_PI;
+          while (err_yaw < -M_PI) err_yaw += 2.0 * M_PI;
+          err_yaw = std::abs(err_yaw);
+
+          bool need_reset = (err_dist > pose_reset_threshold_) || (err_yaw > angle_reset_threshold_);
+
+          if (need_reset) {
             RCLCPP_WARN(
               this->get_logger(),
-              "Large pose error detected (%.3f m). Performing complete filter reset.", err_dist);
+              "Large pose error detected (dist: %.3f m, yaw: %.3f deg). Performing complete filter reset.", 
+              err_dist, err_yaw * 180.0 / M_PI);
             RCLCPP_INFO(
               this->get_logger(),
-              "Filtered position: [%.3f, %.3f], Measured position: [%.3f, %.3f]",
-              filtered_position.pose.pose.position.x, filtered_position.pose.pose.position.y,
-              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY));
+              "Filtered position: [%.3f, %.3f, %.3f deg], Measured position: [%.3f, %.3f, %.3f deg]",
+              filtered_position.pose.pose.position.x, filtered_position.pose.pose.position.y, filtered_yaw * 180.0 / M_PI,
+              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY), measured_yaw * 180.0 / M_PI);
 
             // 彻底重置滤波器：清空所有历史数据和测量队列
             clearMeasurementQueue();
@@ -2183,6 +2201,10 @@ void RosFilter<T>::loadParams()
 
   // Load pose reset threshold parameter
   pose_reset_threshold_ = this->declare_parameter<double>("pose_reset_threshold", 0.2);
+  
+  // Load angle reset threshold parameter (in degrees, convert to radians)
+  double angle_reset_threshold_deg = this->declare_parameter<double>("angle_reset_threshold", 3.0);
+  angle_reset_threshold_ = angle_reset_threshold_deg * M_PI / 180.0;
 }
 
 template<typename T>
@@ -2413,12 +2435,9 @@ void RosFilter<T>::periodicUpdate()
 
   rclcpp::Time cur_time = this->now();
 
-  double integrate_measurements_elapsed = 0.0;
   if (toggled_on_) {
     // Now we'll integrate any measurements we've received
-    rclcpp::Time integrate_start = this->now();
     integrateMeasurements(cur_time);
-    integrate_measurements_elapsed = (this->now() - integrate_start).seconds();
   } else {
     // Clear out measurements since we're not currently processing new entries
     clearMeasurementQueue();
@@ -2584,9 +2603,8 @@ void RosFilter<T>::periodicUpdate()
   if (loop_elapsed > 1. / frequency_) {
     std::cerr <<
       "Failed to meet update rate! Took " << std::setprecision(20) <<
-      loop_elapsed << " seconds. Try decreasing the rate, limiting "
-      "sensor output frequency, or limiting the number of sensors.\n" <<
-      "  integrateMeasurements took: " << integrate_measurements_elapsed << " seconds\n";
+      loop_elapsed << "seconds. Try decreasing the rate, limiting "
+      "sensor output frequency, or limiting the number of sensors.\n";
   }
 }
 

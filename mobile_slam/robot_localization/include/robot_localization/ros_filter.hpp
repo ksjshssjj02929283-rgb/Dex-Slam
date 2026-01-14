@@ -722,6 +722,10 @@ protected:
   //!
   double pose_reset_threshold_;
 
+  //! @brief Threshold angle for pose reset (in radians)
+  //!
+  double angle_reset_threshold_;
+
   //! @brief An implicitly time ordered queue of past filter states used for
   //! smoothing.
   //
