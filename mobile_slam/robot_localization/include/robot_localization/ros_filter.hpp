@@ -42,6 +42,7 @@
 #include <deque>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <queue>
 #include <string>
@@ -725,6 +726,11 @@ protected:
   //! @brief Threshold angle for pose reset (in radians)
   //!
   double angle_reset_threshold_;
+
+  //! @brief Recursive mutex to protect measurement_queue_ from concurrent access
+  //! Recursive mutex allows re-locking from the same thread (e.g., clearMeasurementQueue called from integrateMeasurements)
+  //!
+  std::recursive_mutex measurement_queue_mutex_;
 
   //! @brief An implicitly time ordered queue of past filter states used for
   //! smoothing.

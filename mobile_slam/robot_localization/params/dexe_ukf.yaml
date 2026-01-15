@@ -311,9 +311,11 @@ robot_localization:
 # Threshold for pose distance error (in meters) to trigger filter reset
 # When the distance error between filtered position and pose0 measurement exceeds this value,
 # the filter will be completely reset. Defaults to 0.2 if unspecified.
-        pose_reset_threshold: 0.1
+# 提高到 0.5m 以减少频繁重置，0.15m 的误差在定位中是可接受的
+        pose_reset_threshold: 0.2
 
 # Threshold for angle error (in degrees) to trigger filter reset
 # When the yaw angle error between filtered orientation and pose0 measurement exceeds this value,
 # the filter will be completely reset. Defaults to 3.0 if unspecified.
-        angle_reset_threshold: 3.0
+# 提高到 5° 以减少频繁重置，1° 的误差对大多数应用来说不是问题
+        angle_reset_threshold: 30.0

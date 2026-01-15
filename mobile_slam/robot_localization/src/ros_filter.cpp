@@ -389,6 +389,8 @@ void RosFilter<T>::enqueueMeasurement(
   meas->mahalanobis_thresh_ = mahalanobis_thresh;
   meas->latest_control_ = latest_control_;
   meas->latest_control_time_ = latest_control_time_;
+  
+  std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
   measurement_queue_.push(meas);
 }
 
@@ -663,6 +665,9 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
       measurement_queue_.size() << " measurements in queue.\n");
 
   bool predict_to_current_time = predict_to_current_time_;
+
+  // Lock the measurement queue for the entire integration process
+  std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
 
   // If we have any measurements in the queue, process them
   if (!measurement_queue_.empty()) {
@@ -3922,6 +3927,7 @@ void RosFilter<T>::clearMeasurementQueue()
 {
   // Clear the measurement queue.
   // This prevents us from immediately undoing our reset.
+  std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
   while (!measurement_queue_.empty() && rclcpp::ok()) {
     measurement_queue_.pop();
   }
