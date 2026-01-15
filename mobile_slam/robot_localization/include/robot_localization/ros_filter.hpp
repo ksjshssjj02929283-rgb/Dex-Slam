@@ -354,7 +354,7 @@ protected:
   //! @param[in] time - The time to which the filter state should revert
   //! @return True if restoring the filter succeeded. False if not.
   //!
-  bool revertTo(const rclcpp::Time & time);
+  bool revertTo(const rclcpp::Time & time, MeasurementQueue & measurement_queue);
 
   //! @brief Saves the current filter state in the queue of previous filter
   //! states

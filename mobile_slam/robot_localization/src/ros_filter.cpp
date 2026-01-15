@@ -666,17 +666,24 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
 
   bool predict_to_current_time = predict_to_current_time_;
 
-  // Lock the measurement queue for the entire integration process
-  std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
+  // Create a local copy of the measurement queue to minimize lock holding time
+  // This allows new measurements to be enqueued while we process the current batch
+  std::priority_queue<MeasurementPtr, std::vector<MeasurementPtr>, Measurement> measurement_queue_copy;
+  
+  // Only hold the lock during the swap operation (minimal lock time)
+  {
+    std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
+    measurement_queue_copy.swap(measurement_queue_);
+  }
 
   // If we have any measurements in the queue, process them
-  if (!measurement_queue_.empty()) {
+  if (!measurement_queue_copy.empty()) {
     // Check if the first measurement we're going to process is older than the
     // filter's last measurement. This means we have received an out-of-sequence
     // message (one with an old timestamp), and we need to revert both the
     // filter state and measurement queue to the first state that preceded the
     // time stamp of our first measurement.
-    const MeasurementPtr & first_measurement = measurement_queue_.top();
+    const MeasurementPtr & first_measurement = measurement_queue_copy.top();
     int restored_measurement_count = 0;
     if (smooth_lagged_data_ &&
       first_measurement->time_ < filter_.getLastMeasurementTime())
@@ -689,12 +696,13 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
           " seconds in the past. Reverting filter state and "
           "measurement queue...");
 
-      int original_count = static_cast<int>(measurement_queue_.size());
+      int original_count = static_cast<int>(measurement_queue_copy.size());
       const rclcpp::Time first_measurement_time = first_measurement->time_;
       const std::string first_measurement_topic =
         first_measurement->topic_name_;
       // revertTo may invalidate first_measurement
-      if (!revertTo(first_measurement_time - rclcpp::Duration(1ns))) {
+      // Pass measurement_queue_copy so restored measurements go to the copy queue
+      if (!revertTo(first_measurement_time - rclcpp::Duration(1ns), measurement_queue_copy)) {
         RF_DEBUG(
           "ERROR: history interval is too small to revert to time " <<
             filter_utilities::toSec(first_measurement_time) << "\n");
@@ -709,20 +717,27 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
       }
 
       restored_measurement_count =
-        static_cast<int>(measurement_queue_.size()) - original_count;
+        static_cast<int>(measurement_queue_copy.size()) - original_count;
     }
 
-    while (!measurement_queue_.empty() && rclcpp::ok()) {
-      MeasurementPtr measurement = measurement_queue_.top();
+    while (!measurement_queue_copy.empty() && rclcpp::ok()) {
+      MeasurementPtr measurement = measurement_queue_copy.top();
 
       // If we've reached a measurement that has a time later than now, it
       // should wait until a future iteration. Since measurements are stored in
       // a priority queue, all remaining measurements will be in the future.
       if (current_time < measurement->time_) {
+        // Put unprocessed future measurements back into the original queue
+        // Need to lock to safely move remaining measurements back
+        std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
+        while (!measurement_queue_copy.empty()) {
+          measurement_queue_.push(measurement_queue_copy.top());
+          measurement_queue_copy.pop();
+        }
         break;
       }
 
-      measurement_queue_.pop();
+      measurement_queue_copy.pop();
 
       // When we receive control messages, we call this directly in the control
       // callback. However, we also associate a control with each sensor message
@@ -811,6 +826,10 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
               measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY), measured_yaw * 180.0 / M_PI);
 
             // 彻底重置滤波器：清空所有历史数据和测量队列
+            // Clear both the copy queue and the original queue
+            while (!measurement_queue_copy.empty()) {
+              measurement_queue_copy.pop();
+            }
             clearMeasurementQueue();
             filter_state_history_.clear();
             measurement_history_.clear();
@@ -848,12 +867,12 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
       // Store old states and measurements if we're smoothing
       if (smooth_lagged_data_) {
         // Invariant still holds: measurementHistoryDeque_.back().time_ <
-        // measurement_queue_.top().time_
+        // measurement_queue_copy.top().time_
         measurement_history_.push_back(measurement);
 
         // We should only save the filter state once per unique timstamp
-        if (measurement_queue_.empty() ||
-          measurement_queue_.top()->time_ !=
+        if (measurement_queue_copy.empty() ||
+          measurement_queue_copy.top()->time_ !=
           filter_.getLastMeasurementTime())
         {
           saveFilterState(filter_);
@@ -3775,7 +3794,7 @@ void RosFilter<T>::saveFilterState(T & filter)
 }
 
 template<typename T>
-bool RosFilter<T>::revertTo(const rclcpp::Time & time)
+bool RosFilter<T>::revertTo(const rclcpp::Time & time, MeasurementQueue & measurement_queue)
 {
   RF_DEBUG("\n----- RosFilter<T>::revertTo -----\n");
   RF_DEBUG(
@@ -3842,7 +3861,7 @@ bool RosFilter<T>::revertTo(const rclcpp::Time & time)
     {
       // Don't need to restore measurements that predate our earliest state time
       if (state->last_measurement_time_ <= measurement_history_.back()->time_) {
-        measurement_queue_.push(measurement_history_.back());
+        measurement_queue.push(measurement_history_.back());
         restored_measurements++;
       }
 
