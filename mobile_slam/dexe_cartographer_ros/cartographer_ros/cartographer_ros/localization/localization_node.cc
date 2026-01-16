@@ -144,7 +144,7 @@ LocalizationNode::LocalizationNode(
   // 发布跟踪的位姿
   if (node_options_.publish_tracked_pose) {
     loc_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        kLocaliztionPoseTopic, kLatestOnlyPublisherQueueSize);
+        kLocaliztionPoseTopic, rclcpp::SystemDefaultsQoS());
     tracked_path_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
         kTrackedPathTopic, kLatestOnlyPublisherQueueSize);
   }

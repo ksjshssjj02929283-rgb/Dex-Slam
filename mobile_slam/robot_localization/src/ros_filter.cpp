@@ -678,46 +678,76 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
 
   // If we have any measurements in the queue, process them
   if (!measurement_queue_copy.empty()) {
+    // ========== 智能测量丢弃策略（精准版）==========
+    // 策略：只丢弃那些会触发 revertTo 的过旧测量（时间 < 滤波器当前时间）
+    // 保留时间 >= 滤波器当前时间的测量，因为它们可以正常处理
+    // 这样可以避免频繁的 revertTo 操作，同时保留有效数据
+    const MeasurementPtr & first_measurement = measurement_queue_copy.top();
+    const rclcpp::Time first_measurement_time = first_measurement->time_;
+    
+    // 计算第一个测量与滤波器当前时间的差异
+    rclcpp::Duration time_lag = filter_.getLastMeasurementTime() - first_measurement_time;
+    
+    // 最大可接受延迟：如果设置了 history_length，使用它；否则使用 2 * sensor_timeout
+    const rclcpp::Duration max_acceptable_lag = 
+      (history_length_ > rclcpp::Duration(0ns)) ? 
+      history_length_ : 
+      (filter_.getSensorTimeout() * 2);
+    
+    // 只有当 smooth_lagged_data_ 启用且延迟超过阈值时，才丢弃过旧测量
+    if (smooth_lagged_data_ && time_lag > max_acceptable_lag) {
+      // 关键修改：只丢弃时间早于滤波器当前时间的测量（这些会触发 revertTo）
+      // 不丢弃时间晚于或等于滤波器当前时间的测量（这些可以正常处理）
+      rclcpp::Time filter_current_time = filter_.getLastMeasurementTime();
+      
+      while (!measurement_queue_copy.empty() && 
+             measurement_queue_copy.top()->time_ < filter_current_time) {
+        measurement_queue_copy.pop();
+      }
+    }
+    
     // Check if the first measurement we're going to process is older than the
     // filter's last measurement. This means we have received an out-of-sequence
     // message (one with an old timestamp), and we need to revert both the
     // filter state and measurement queue to the first state that preceded the
     // time stamp of our first measurement.
-    const MeasurementPtr & first_measurement = measurement_queue_copy.top();
     int restored_measurement_count = 0;
-    if (smooth_lagged_data_ &&
-      first_measurement->time_ < filter_.getLastMeasurementTime())
-    {
-      RF_DEBUG(
-        "Received a measurement that was " <<
-          filter_utilities::toSec(
-          filter_.getLastMeasurementTime() -
-          first_measurement->time_) <<
-          " seconds in the past. Reverting filter state and "
-          "measurement queue...");
-
-      int original_count = static_cast<int>(measurement_queue_copy.size());
-      const rclcpp::Time first_measurement_time = first_measurement->time_;
-      const std::string first_measurement_topic =
-        first_measurement->topic_name_;
-      // revertTo may invalidate first_measurement
-      // Pass measurement_queue_copy so restored measurements go to the copy queue
-      if (!revertTo(first_measurement_time - rclcpp::Duration(1ns), measurement_queue_copy)) {
+    if (!measurement_queue_copy.empty() && smooth_lagged_data_) {
+      const MeasurementPtr & remaining_first = measurement_queue_copy.top();
+      if (remaining_first->time_ < filter_.getLastMeasurementTime()) {
         RF_DEBUG(
-          "ERROR: history interval is too small to revert to time " <<
-            filter_utilities::toSec(first_measurement_time) << "\n");
-        // ROS_WARN_STREAM_DELAYED_THROTTLE(history_length_,
-        //   "Received old measurement for topic " << first_measurement_topic <<
-        //   ", but history interval is insufficiently sized. "
-        //   "Measurement time is " << std::setprecision(20) <<
-        //   first_measurement_time <<
-        //   ", current time is " << current_time <<
-        //   ", history length is " << history_length_ << ".");
-        restored_measurement_count = 0;
-      }
+          "Received a measurement that was " <<
+            filter_utilities::toSec(
+            filter_.getLastMeasurementTime() -
+            remaining_first->time_) <<
+            " seconds in the past. Reverting filter state and "
+            "measurement queue...");
 
-      restored_measurement_count =
-        static_cast<int>(measurement_queue_copy.size()) - original_count;
+        int original_count = static_cast<int>(measurement_queue_copy.size());
+        const rclcpp::Time remaining_first_time = remaining_first->time_;
+        const std::string remaining_first_topic = remaining_first->topic_name_;
+        
+        // revertTo may invalidate first_measurement
+        // Pass measurement_queue_copy so restored measurements go to the copy queue
+        if (!revertTo(remaining_first_time - rclcpp::Duration(1ns), measurement_queue_copy)) {
+          RF_DEBUG(
+            "ERROR: history interval is too small to revert to time " <<
+              filter_utilities::toSec(remaining_first_time) << "\n");
+          RCLCPP_WARN(
+            this->get_logger(),
+            "Received old measurement for topic %s, but history interval is "
+            "insufficiently sized. Measurement time is %.20f, current time is "
+            "%.20f, history length is %.20f.",
+            remaining_first_topic.c_str(),
+            filter_utilities::toSec(remaining_first_time),
+            filter_utilities::toSec(current_time),
+            filter_utilities::toSec(history_length_));
+          restored_measurement_count = 0;
+        }
+
+        restored_measurement_count =
+          static_cast<int>(measurement_queue_copy.size()) - original_count;
+      }
     }
 
     while (!measurement_queue_copy.empty() && rclcpp::ok()) {
@@ -774,11 +804,11 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
         filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
         is_initialized_ = true;
 
-        RCLCPP_INFO(
-          this->get_logger(),
-          "Initialized filter with pose0 at [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-          initial_state_(StateMemberX), initial_state_(StateMemberY), initial_state_(StateMemberZ),
-          initial_state_(StateMemberRoll), initial_state_(StateMemberPitch), initial_state_(StateMemberYaw));
+        RF_DEBUG(
+          "Initialized filter with pose0 at [" <<
+          initial_state_(StateMemberX) << ", " << initial_state_(StateMemberY) << ", " << 
+          initial_state_(StateMemberZ) << ", " << initial_state_(StateMemberRoll) << ", " << 
+          initial_state_(StateMemberPitch) << ", " << initial_state_(StateMemberYaw) << "]\n");
       }
 
       // Check if we need to reset the filter (pose0 with large error)
@@ -905,13 +935,44 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
     rclcpp::Duration last_update_delta =
       current_time - filter_.getLastMeasurementTime();
 
-    filter_.validateDelta(last_update_delta);
-    filter_.predict(current_time, last_update_delta);
+    // ========== 预测步长限制策略 ==========
+    // 当时间差过大时（例如 loc_pose 延迟），限制单次预测步长
+    // 避免大步长预测导致的误差积累和定位剧烈变化
+    const double max_predict_step = 0.1;  // 最大单次预测步长：200ms
+    const double delta_sec = filter_utilities::toSec(last_update_delta);
+    
+    if (delta_sec > max_predict_step) {
+      // 分步预测：将大步长分解为多个小步长
+      int num_steps = static_cast<int>(std::ceil(delta_sec / max_predict_step));
+      rclcpp::Duration step_delta = rclcpp::Duration::from_seconds(delta_sec / num_steps);
+      
+      RF_DEBUG(
+        "Large prediction delta: " << delta_sec << " s. Splitting into " << 
+        num_steps << " steps.\n");
+      
+      for (int i = 0; i < num_steps; ++i) {
+        rclcpp::Time step_time = filter_.getLastMeasurementTime() + step_delta;
+        
+        // 最后一步直接预测到当前时间，避免累积误差
+        if (i == num_steps - 1) {
+          step_time = current_time;
+          step_delta = current_time - filter_.getLastMeasurementTime();
+        }
+        
+        filter_.validateDelta(step_delta);
+        filter_.predict(step_time, step_delta);
+        filter_.setLastMeasurementTime(step_time);
+      }
+    } else {
+      // 正常情况：单步预测
+      filter_.validateDelta(last_update_delta);
+      filter_.predict(current_time, last_update_delta);
 
-    // Update the last measurement time and last update time
-    filter_.setLastMeasurementTime(
-      filter_.getLastMeasurementTime() +
-      last_update_delta);
+      // Update the last measurement time and last update time
+      filter_.setLastMeasurementTime(
+        filter_.getLastMeasurementTime() +
+        last_update_delta);
+    }
   }
 
   RF_DEBUG("\n----- /RosFilter<T>::integrateMeasurements ------\n");
@@ -1451,10 +1512,9 @@ void RosFilter<T>::loadParams()
           std::placeholders::_1, odom_topic_name,
           pose_callback_data, twist_callback_data);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
         topic_subs_.push_back(
           this->create_subscription<nav_msgs::msg::Odometry>(
-            odom_topic, custom_qos,
+            odom_topic, rclcpp::SystemDefaultsQoS(),
             odom_callback));
       } else {
         std::stringstream stream;
@@ -1620,12 +1680,10 @@ void RosFilter<T>::loadParams()
           &RosFilter<T>::poseCallback, this, std::placeholders::_1,
           callback_data, world_frame_id_, false);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
-
         topic_subs_.push_back(
           this->create_subscription<
             geometry_msgs::msg::PoseWithCovarianceStamped>(
-            pose_topic, custom_qos, pose_callback));
+            pose_topic, rclcpp::SystemDefaultsQoS(), pose_callback));
         std::cout << "Subscribed to pose topic " << pose_topic << "\n";
 
         if (differential) {
@@ -1717,11 +1775,10 @@ void RosFilter<T>::loadParams()
           std::placeholders::_1, callback_data,
           base_link_frame_id_);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
         topic_subs_.push_back(
           this->create_subscription<
             geometry_msgs::msg::TwistWithCovarianceStamped>(
-            twist_topic, custom_qos, twist_callback));
+            twist_topic, rclcpp::SystemDefaultsQoS(), twist_callback));
 
         twist_var_counts[StateMemberVx] += twist_update_vec[StateMemberVx];
         twist_var_counts[StateMemberVy] += twist_update_vec[StateMemberVy];
@@ -2027,10 +2084,9 @@ void RosFilter<T>::loadParams()
           imu_topic_name, pose_callback_data,
           twist_callback_data, accel_callback_data);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
         topic_subs_.push_back(
           this->create_subscription<sensor_msgs::msg::Imu>(
-            imu_topic, custom_qos, imu_callback));
+            imu_topic, rclcpp::SystemDefaultsQoS(), imu_callback));
       } else {
         std::cerr << "Warning: " << imu_topic <<
           " is listed as an input topic, "

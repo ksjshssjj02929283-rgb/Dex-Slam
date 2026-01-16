@@ -89,12 +89,12 @@ POSE_ESTIMATOR_2D.ceres_scan_matcher.translation_weight = 1
 POSE_ESTIMATOR_2D.ceres_scan_matcher.rotation_weight = 1
 POSE_ESTIMATOR_2D.ceres_scan_matcher.line_weight = 60
 POSE_ESTIMATOR_2D.ceres_scan_matcher.point_weight = 60
-POSE_ESTIMATOR_2D.keyframe_motion_filter.max_distance_meters = 0.1
+POSE_ESTIMATOR_2D.keyframe_motion_filter.max_distance_meters = 0.2
 POSE_ESTIMATOR_2D.keyframe_motion_filter.max_time_seconds = 0.5
-POSE_ESTIMATOR_2D.keyframe_motion_filter.max_angle_radians = math.rad(15.)
-POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_distance_meters = 0.2
+POSE_ESTIMATOR_2D.keyframe_motion_filter.max_angle_radians = math.rad(45.)
+POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_distance_meters = 0.4
 POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_time_seconds = 30
-POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_angle_radians = math.rad(45.)
+POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_angle_radians = math.rad(90.)
 
 -- 需要测试num_range_data对定位的影响
 POSE_ESTIMATOR_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.hit_probability = 0.61
