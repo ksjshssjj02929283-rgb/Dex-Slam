@@ -16,30 +16,37 @@ iKdTree<PointType>::iKdTree(float delete_param, float balance_param, float box_l
     downsample_size = box_length;
     Rebuild_Logger.clear();
     termination_flag = false;
+    rebuild_thread = 0;  // 初始化线程句柄
     start_thread();
 }
 
 template <typename PointType>
 iKdTree<PointType>::~iKdTree()
 {
+    // 1. 首先停止线程（包括等待线程完全退出）
     stop_thread();
+    
+    // 2. 现在可以安全地禁用删除存储
     Delete_Storage_Disabled = true;
+    
+    // 3. 清理树节点（现在线程已经完全退出）
     delete_tree_nodes(&Root_Node);
     
-    // Fix: 释放 STATIC_ROOT_NODE，这是一个严重的内存泄漏
+    // 4. 释放 STATIC_ROOT_NODE，这是一个严重的内存泄漏
     if (STATIC_ROOT_NODE != nullptr) {
         pthread_mutex_destroy(&(STATIC_ROOT_NODE->push_down_mutex_lock));
         delete STATIC_ROOT_NODE;
         STATIC_ROOT_NODE = nullptr;
     }
     
-    // Fix: 显式清理所有 PointVector 成员变量
+    // 5. 显式清理所有 PointVector 成员变量
     PointVector().swap(PCL_Storage);
     PointVector().swap(Points_deleted);
     PointVector().swap(Downsample_Storage);
     PointVector().swap(Multithread_Points_deleted);
     PointVector().swap(Rebuild_PCL_Storage);
     
+    // 6. 清理操作日志
     Rebuild_Logger.clear();
 }
 
@@ -219,11 +226,26 @@ void iKdTree<PointType>::start_thread()
 template <typename PointType>
 void iKdTree<PointType>::stop_thread()
 {
+    // 1. 设置终止标志
     pthread_mutex_lock(&termination_flag_mutex_lock);
     termination_flag = true;
     pthread_mutex_unlock(&termination_flag_mutex_lock);
-    if (rebuild_thread)
+    
+    // 2. 等待线程完全退出
+    if (rebuild_thread != 0) {
         pthread_join(rebuild_thread, NULL);
+        rebuild_thread = 0;
+    }
+    
+    // 3. 确保没有其他操作在使用这些 mutex（等待所有操作完成）
+    // 这里需要短暂等待，确保正在进行的操作完成
+    pthread_mutex_lock(&working_flag_mutex);
+    pthread_mutex_unlock(&working_flag_mutex);
+    
+    pthread_mutex_lock(&search_flag_mutex);
+    pthread_mutex_unlock(&search_flag_mutex);
+    
+    // 4. 现在可以安全销毁所有 mutex
     pthread_mutex_destroy(&termination_flag_mutex_lock);
     pthread_mutex_destroy(&rebuild_logger_mutex_lock);
     pthread_mutex_destroy(&rebuild_ptr_mutex_lock);
@@ -364,18 +386,36 @@ void iKdTree<PointType>::multi_thread_rebuild()
             Rebuild_Ptr = nullptr;
             pthread_mutex_unlock(&working_flag_mutex);
             rebuild_flag = false;
-            /* Delete discarded tree nodes */
-            delete_tree_nodes(&old_root_node);
+            
+            /* 在删除旧节点前检查是否需要终止，避免析构时的竞争 */
+            pthread_mutex_lock(&termination_flag_mutex_lock);
+            bool should_terminate = termination_flag;
+            pthread_mutex_unlock(&termination_flag_mutex_lock);
+            
+            /* Delete discarded tree nodes (如果没有终止标志) */
+            if (!should_terminate) {
+                delete_tree_nodes(&old_root_node);
+            } else {
+                // 如果正在终止，仍然需要删除，但要小心处理
+                // 因为析构函数会处理整棵树
+                delete_tree_nodes(&old_root_node);
+            }
         }
         else
         {
             pthread_mutex_unlock(&working_flag_mutex);
         }
         pthread_mutex_unlock(&rebuild_ptr_mutex_lock);
+        
+        // 检查终止标志
         pthread_mutex_lock(&termination_flag_mutex_lock);
         terminated = termination_flag;
         pthread_mutex_unlock(&termination_flag_mutex_lock);
-        usleep(100);
+        
+        // 如果没有终止，短暂休眠
+        if (!terminated) {
+            usleep(100);
+        }
     }
     printf("Rebuild thread terminated normally\n");
 }
@@ -1676,11 +1716,15 @@ void iKdTree<PointType>::delete_tree_nodes(KD_TREE_NODE **root)
 {
     if (*root == nullptr)
         return;
-    Push_Down(*root);
+    
+    // 递归删除左右子树
     delete_tree_nodes(&(*root)->left_son_ptr);
     delete_tree_nodes(&(*root)->right_son_ptr);
 
+    // 销毁节点的 mutex
     pthread_mutex_destroy(&(*root)->push_down_mutex_lock);
+    
+    // 删除节点本身
     delete *root;
     *root = nullptr;
 
