@@ -698,11 +698,11 @@ void Submap2D::Finish() {
   // auto end_time = std::chrono::high_resolution_clock::now();
   // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
   // LOG(INFO) << "FreshCloudData execution time: " << duration.count() << " microseconds";
-  static int submap_count = 0;
-  std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
-  std::string folder = home_dir + "/.dexe/localization/active_submaps/";
-  std::string filename = "submap_" + std::to_string(submap_count++) + ".png";
-  grid_->DrawAsImage(folder, filename);
+  // static int submap_count = 0;
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // std::string folder = home_dir + "/.dexe/localization/active_submaps/";
+  // std::string filename = "submap_" + std::to_string(submap_count++) + ".png";
+  // grid_->DrawAsImage(folder, filename);
 
   set_insertion_finished(true);
 }
