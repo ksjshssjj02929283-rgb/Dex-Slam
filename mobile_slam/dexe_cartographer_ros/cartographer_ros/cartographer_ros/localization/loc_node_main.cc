@@ -77,13 +77,26 @@ public:
     InitializeTfComponents();
     InitializeServices();
 
-
     // 启动健康检查定时器
     health_check_timer_ = create_wall_timer(
         std::chrono::seconds(10),
         std::bind(&LocalizationManagerNode::PerformHealthCheck, this));
     
     RCLCPP_INFO(get_logger(), "LocalizationManager Node initialized successfully");
+    
+    // 自动启动定位（延迟一小段时间以确保所有组件就绪）
+    auto_start_timer_ = create_wall_timer(
+        std::chrono::milliseconds(500),
+        [this]() {
+          auto_start_timer_->cancel();  // 只执行一次
+          RCLCPP_INFO(get_logger(), "Auto-starting localization...");
+          std::lock_guard<std::mutex> lock(state_mutex_);
+          if (StartLocalization()) {
+            RCLCPP_INFO(get_logger(), "Localization auto-started successfully");
+          } else {
+            RCLCPP_ERROR(get_logger(), "Failed to auto-start localization");
+          }
+        });
   }
 
   ~LocalizationManagerNode() {
@@ -125,6 +138,7 @@ private:
 
   // === Monitoring ===
   rclcpp::TimerBase::SharedPtr health_check_timer_;
+  rclcpp::TimerBase::SharedPtr auto_start_timer_;
 
   void InitializeServices() {
     // 创建服务
@@ -442,7 +456,7 @@ private:
       return false;
     }
 
-    if (!client->wait_for_service(std::chrono::seconds(3))) {
+    if (!client->wait_for_service(std::chrono::seconds(5))) {
       RCLCPP_ERROR(get_logger(), "Service %s not available", service_name.c_str());
       return false;
     }

@@ -347,16 +347,16 @@ private:
     using namespace std::chrono_literals;
     if (!client) return false;
 
-    // 等 1s 服务可用
-    if (!client->wait_for_service(1s)) {
+    // 等 5s 服务可用
+    if (!client->wait_for_service(5s)) {
       RCLCPP_ERROR(this->get_logger(), "%s not exists", client->get_service_name());
       return false;
     }
 
     auto req = std::make_shared<std_srvs::srv::Trigger::Request>();
     auto future = client->async_send_request(req);
-    // 简单同步等待（可根据需要改为异步）
-    auto status = future.wait_for(2s);
+    // 简单同步等待（增加超时时间到 5s）
+    auto status = future.wait_for(5s);
     if (status != std::future_status::ready) {
       RCLCPP_ERROR(this->get_logger(), "%s call timeout", client->get_service_name());
       return false;
