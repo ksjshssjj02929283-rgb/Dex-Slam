@@ -158,13 +158,20 @@ class ActiveSubmaps2D {
   ActiveSubmaps2D(const ActiveSubmaps2D&) = delete;
   ActiveSubmaps2D& operator=(const ActiveSubmaps2D&) = delete;
 
-  // Inserts 'range_data' into the Submap collection.
-  // Only responsible for inserting range data, does not handle submap creation/finishing.
-  void InsertRangeData(const std::vector<sensor::RangeData>& range_data_vector);
+  // Inserts all data types into the Submap collection.
+  // This method handles submap creation and returns the current submaps.
+  // Empty data will be skipped automatically.
+  std::vector<std::shared_ptr<const Submap2D>> InsertData(
+      const std::vector<sensor::RangeData>& range_data_vector,
+      const sensor::PointCloud& cloud_data,
+      const sensor::PointCloud& highlight_cloud_data,
+      const std::map<int, std::vector<sensor::LineData>>& line_data,
+      const std::vector<sensor::LandmarkPointData>& reflector_data);
 
-  // Gets the insertion submaps and handles submap creation/finishing logic.
-  std::vector<std::shared_ptr<const Submap2D>> GetInsertionSubmaps(
-      const Eigen::Vector2f& origin);
+  // Inserts 'range_data' into the Submap collection.
+  // This method now only inserts data without returning submaps.
+  void InsertRangeData(
+      const std::vector<sensor::RangeData>& range_data_vector);
 
   // void InsertNormalData(const sensor::NormalPointCloud & normals);
 

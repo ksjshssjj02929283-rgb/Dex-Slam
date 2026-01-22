@@ -715,18 +715,54 @@ std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::submaps() const {
                                                       submaps_.end());
 }
 
-/**
- * @brief 向ActiveSubmaps2D中插入雷达数据（仅负责插入数据）
- * 
- * @param range_data_vector 激光数据向量（local坐标系）
- */
+
+std::vector<std::shared_ptr<const Submap2D>> ActiveSubmaps2D::InsertData(
+    const std::vector<sensor::RangeData>& range_data_vector,
+    const sensor::PointCloud& cloud_data,
+    const sensor::PointCloud& highlight_cloud_data,
+    const std::map<int, std::vector<sensor::LineData>>& line_data,
+    const std::vector<sensor::LandmarkPointData>& reflector_data) {
+  
+  // 如果所有数据都为空，直接返回当前submaps
+  if (range_data_vector.empty() && cloud_data.empty() && 
+      highlight_cloud_data.empty() && line_data.empty() && reflector_data.empty()) {
+    return submaps();
+  }
+  CHECK(!range_data_vector.empty());
+
+  // TODO: 增加角速度过大时候，不增加submap的操作(旋转中增加submap会增大建图的误差)
+  if (submaps_.empty() ||
+      submaps_.back()->num_range_data() >= options_.num_range_data()) {
+    const sensor::RangeData& first_range_data = range_data_vector.front();
+    AddSubmap(first_range_data.origin.head<2>());
+  }
+
+  // 1. 插入range data
+  InsertRangeData(range_data_vector);
+
+  // 2. 插入cloud data（如果非空）
+  InsertCloudData(cloud_data, highlight_cloud_data);
+  
+  // 3. 插入line data（如果非空）
+  InsertLineData(line_data);
+  
+  // 4. 插入reflector data（如果非空）
+  InsertReflectorData(reflector_data);
+  // 检查是否需要完成前面的submap
+  if (!submaps_.empty() && submaps_.front()->num_range_data() >= 2 * options_.num_range_data()) {
+    submaps_.front()->Finish();
+  }
+
+  return submaps();
+}
+
 void ActiveSubmaps2D::InsertRangeData(
     const std::vector<sensor::RangeData>& range_data_vector) {
-  if (range_data_vector.empty() || submaps_.empty()) {
+  if (range_data_vector.empty()) {
     return;
   }
   
-  // 批量插入所有range data
+  // 批量插入所有range data到现有submaps
   for (auto& submap : submaps_) {
     for (const auto& range_data : range_data_vector) {
       submap->InsertRangeData(range_data, range_data_inserter_.get());
@@ -735,44 +771,15 @@ void ActiveSubmaps2D::InsertRangeData(
   }
 }
 
-/**
- * @brief 获取用于插入的submaps，并处理submap的创建和完成逻辑
- * 
- * @param origin 新submap的原点（如果需要创建）
- * @return std::vector<std::shared_ptr<const Submap2D>> 返回用于插入数据的submaps
- */
-std::vector<std::shared_ptr<const Submap2D>>
-ActiveSubmaps2D::GetInsertionSubmaps(const Eigen::Vector2f& origin) {
-  // 1. 先检查是否需要完成第一个submap
-  if (!submaps_.empty() && 
-      submaps_.front()->num_range_data() >= 2 * options_.num_range_data()) {
-    submaps_.front()->Finish();
-
-    // static int submap_count = 0;
-    // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
-    // std::string folder = home_dir + "/.dexe/data/submaps/";
-    // std::string filename = "submap_" + std::to_string(submap_count++) + ".pcd";
-    // submaps_.front()->SaveSubmapCloud(folder, filename);
-    // submaps_.front()->grid()->DrawAsImage(folder, filename);
-  }
-  
-  // 2. 判断是否需要创建新submap
-  if (submaps_.empty() ||
-      submaps_.back()->num_range_data() >= options_.num_range_data()) {
-    AddSubmap(origin);
-  }
-  
-  return submaps();
-}
-
 void ActiveSubmaps2D::InsertReflectorData(
   const std::vector<sensor::LandmarkPointData> & reflector_data)
 {
   if (submaps_.empty() || reflector_data.empty()) {
     return;
   }
-  // 反光柱只与前一个子图绑定
-  submaps_.front()->InsertReflectorData(reflector_data);
+  for (auto& submap : submaps_) {
+    submap->InsertReflectorData(reflector_data);
+  }
 }
 
 void ActiveSubmaps2D::InsertLineData(

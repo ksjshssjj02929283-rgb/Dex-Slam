@@ -1006,25 +1006,13 @@ PoseEstimator2D::InsertIntoSubmap(
   }
 
   
-  // 5. 一次性批量插入所有range data
-  active_submaps_.InsertRangeData(all_range_data_to_insert);
-  
-  // 6. 插入合并后的云数据、线数据和反射器数据
-  active_submaps_.InsertCloudData(cloud_in_local, highlight_cloud_in_local);
-  active_submaps_.InsertLineData(tracked_lines_in_local);
-  active_submaps_.InsertReflectorData(merged_data.merged_reflector_data);
-
-  // 4. 获取用于插入的submaps（处理创建和完成逻辑）
-  // 使用第一个range data的原点来决定新submap的位置
-  Eigen::Vector2f origin;
-  if (all_range_data_to_insert.empty()) {
-    origin = pose_estimate_2d.translation().cast<float>();
-  } else {
-    origin = all_range_data_to_insert.front().origin.head<2>();
-  }
-  
+  // 一次性插入所有数据（range data、cloud data、line data和reflector data）
   std::vector<std::shared_ptr<const mapping::Submap2D>> insertion_submaps =
-      active_submaps_.GetInsertionSubmaps(origin);
+      active_submaps_.InsertData(all_range_data_to_insert,
+                                  cloud_in_local,
+                                  highlight_cloud_in_local,
+                                  tracked_lines_in_local,
+                                  merged_data.merged_reflector_data);
 
   // 7. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{

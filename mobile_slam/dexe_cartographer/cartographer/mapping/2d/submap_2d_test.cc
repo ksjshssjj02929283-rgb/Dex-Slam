@@ -70,9 +70,11 @@ TEST(Submap2DTest, TheRightNumberOfRangeDataAreInserted) {
   for (int i = 0; i != 1000; ++i) {
     // 获取插入的submaps
     auto insertion_submaps =
-        submaps.GetInsertionSubmaps(Eigen::Vector3f::Zero().head<2>());
-    // 插入range data
-    submaps.InsertRangeData({{Eigen::Vector3f::Zero(), {}, {}}});
+        submaps.InsertData({{Eigen::Vector3f::Zero(), {}, {}}}, 
+                          {},  // empty cloud_data
+                          {},  // empty highlight_cloud_data
+                          {},  // empty line_data
+                          {}); // empty reflector_data
     // Except for the first, maps should only be returned after enough range
     // data.
     for (const auto& submap : insertion_submaps) {
