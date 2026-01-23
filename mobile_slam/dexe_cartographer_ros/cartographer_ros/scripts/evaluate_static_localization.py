@@ -38,8 +38,7 @@ class StaticLocalizationEvaluator(Node):
         super().__init__('static_localization_evaluator')
 
         # Create output directory
-        self.output_dir = Path.home(
-        ) / '.dexe' / 'localization' / 'localization_assessment' / 'static_data'
+        self.output_dir = Path.home() / '.dexe' / 'localization' / 'localization_assessment' / 'static_data'
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.get_logger().info(f'Output directory: {self.output_dir}')
 
@@ -53,8 +52,7 @@ class StaticLocalizationEvaluator(Node):
 
         # Get parameters
         self.loc_pose_topic = self.get_parameter('loc_pose_topic').value
-        self.filtered_odom_topic = self.get_parameter(
-            'filtered_odom_topic').value
+        self.filtered_odom_topic = self.get_parameter('filtered_odom_topic').value
         self.buffer_size = self.get_parameter('buffer_size').value
 
         # Data storage
@@ -73,36 +71,27 @@ class StaticLocalizationEvaluator(Node):
             Odometry, self.filtered_odom_topic, self.filtered_odom_callback, 10)
 
         # Subscribe to loc_pose (triggers data recording)
-        self.loc_pose_sub = self.create_subscription(PoseWithCovarianceStamped,
-                                                     self.loc_pose_topic,
-                                                     self.loc_pose_callback, 10)
+        self.loc_pose_sub = self.create_subscription(
+            PoseWithCovarianceStamped, self.loc_pose_topic, self.loc_pose_callback, 10)
 
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self.signal_handler)
 
         self.get_logger().info(f'Subscribing to:')
         self.get_logger().info(f'  - Raw pose: {self.loc_pose_topic} (trigger)')
-        self.get_logger().info(
-            f'  - Filtered pose: {self.filtered_odom_topic} (cache)')
+        self.get_logger().info(f'  - Filtered pose: {self.filtered_odom_topic} (cache)')
         self.get_logger().info(f'Collecting up to {self.buffer_size} samples')
-        self.get_logger().info(
-            f'Data recording triggered by each loc_pose message')
+        self.get_logger().info(f'Data recording triggered by each loc_pose message')
         self.get_logger().info(f'Collection rate = loc_pose publish rate')
-        self.get_logger().info(
-            f'Will automatically evaluate and exit after {self.buffer_size} samples'
-        )
-        self.get_logger().info(
-            f'Or press Ctrl+C to stop early and evaluate with current data')
+        self.get_logger().info(f'Will automatically evaluate and exit after {self.buffer_size} samples')
+        self.get_logger().info(f'Or press Ctrl+C to stop early and evaluate with current data')
         self.get_logger().info(f'Saving to: {self.csv_filename}')
 
     def initialize_csv(self):
         """Initialize CSV file with headers"""
         self.csv_file = open(self.csv_filename, 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow([
-            'timestamp', 'loc_x', 'loc_y', 'loc_yaw', 'filtered_x',
-            'filtered_y', 'filtered_yaw'
-        ])
+        self.csv_writer.writerow(['timestamp', 'loc_x', 'loc_y', 'loc_yaw', 'filtered_x', 'filtered_y', 'filtered_yaw'])
         self.get_logger().info('CSV file initialized')
 
     def quaternion_to_yaw(self, q):
@@ -119,9 +108,7 @@ class StaticLocalizationEvaluator(Node):
         """Record data when loc_pose is received"""
         # Only record if we have filtered odometry data
         if self.latest_filtered_odom is None:
-            self.get_logger().warn(
-                'No filtered odometry received yet, skipping...',
-                throttle_duration_sec=5.0)
+            self.get_logger().warn('No filtered odometry received yet, skipping...', throttle_duration_sec=5.0)
             return
 
         # Extract raw cartographer pose
@@ -136,23 +123,22 @@ class StaticLocalizationEvaluator(Node):
         timestamp = loc_pose_msg.header.stamp.sec + loc_pose_msg.header.stamp.nanosec * 1e-9
 
         # Write to CSV
-        self.csv_writer.writerow([
-            timestamp, loc_pose.position.x, loc_pose.position.y, loc_yaw,
-            filtered_pose.position.x, filtered_pose.position.y, filtered_yaw
-        ])
+        self.csv_writer.writerow(
+            [
+                timestamp, loc_pose.position.x, loc_pose.position.y, loc_yaw, filtered_pose.position.x,
+                filtered_pose.position.y, filtered_yaw
+            ])
 
         # Increment count after successful recording
         self.data_count += 1
 
         # Log progress every 10 samples
         if self.data_count % 10 == 0:
-            self.get_logger().info(
-                f'Collected {self.data_count}/{self.buffer_size} samples')
+            self.get_logger().info(f'Collected {self.data_count}/{self.buffer_size} samples')
 
         # Check if we've collected enough samples (after recording)
         if self.data_count >= self.buffer_size:
-            self.get_logger().info(
-                f'Collected {self.buffer_size} samples. Starting evaluation...')
+            self.get_logger().info(f'Collected {self.buffer_size} samples. Starting evaluation...')
             # Unsubscribe to stop receiving more messages
             self.destroy_subscription(self.loc_pose_sub)
             self.destroy_subscription(self.filtered_odom_sub)
@@ -172,8 +158,7 @@ class StaticLocalizationEvaluator(Node):
         if self.csv_file and not self.csv_file.closed:
             self.csv_file.close()
             self.get_logger().info(f'Data saved to: {self.csv_filename}')
-            self.get_logger().info(
-                f'Total samples collected: {self.data_count}')
+            self.get_logger().info(f'Total samples collected: {self.data_count}')
 
         # Run evaluation
         self.run_evaluation()
@@ -206,14 +191,11 @@ class StaticLocalizationEvaluator(Node):
 
         # Extract poses
         loc_poses = data[['loc_x', 'loc_y', 'loc_yaw']].values
-        filtered_poses = data[['filtered_x', 'filtered_y',
-                               'filtered_yaw']].values
+        filtered_poses = data[['filtered_x', 'filtered_y', 'filtered_yaw']].values
 
         # Compute metrics
-        loc_metrics = self.compute_metrics(loc_poses,
-                                           "Raw Cartographer Localization")
-        filtered_metrics = self.compute_metrics(filtered_poses,
-                                                "Robot Localization Filtered")
+        loc_metrics = self.compute_metrics(loc_poses, "Raw Cartographer Localization")
+        filtered_metrics = self.compute_metrics(filtered_poses, "Robot Localization Filtered")
 
         # Print metrics
         self.print_metrics(loc_metrics)
@@ -226,8 +208,7 @@ class StaticLocalizationEvaluator(Node):
         # Generate visualization
         print("\nGenerating visualization...")
         plot_path = self.output_dir / 'static_localization.png'
-        self.create_visualization(loc_poses, filtered_poses, loc_metrics,
-                                  filtered_metrics, plot_path)
+        self.create_visualization(loc_poses, filtered_poses, loc_metrics, filtered_metrics, plot_path)
 
         print("\nEvaluation complete!")
         print(f"Results saved to: {self.output_dir}")
@@ -278,8 +259,7 @@ class StaticLocalizationEvaluator(Node):
             dy = np.diff(y)
             dtheta = np.diff(theta_unwrapped)
 
-            position_jitters = np.sum(
-                np.sqrt(dx**2 + dy**2) > position_threshold)
+            position_jitters = np.sum(np.sqrt(dx**2 + dy**2) > position_threshold)
             orientation_jitters = np.sum(np.abs(dtheta) > orientation_threshold)
 
             jitter_rate_position = position_jitters / (len(poses) - 1)
@@ -291,24 +271,20 @@ class StaticLocalizationEvaluator(Node):
         # 3-sigma outlier detection
         outliers_x = np.sum(np.abs(x - mean_x) > 3 * std_x)
         outliers_y = np.sum(np.abs(y - mean_y) > 3 * std_y)
-        outliers_theta = np.sum(
-            np.abs(theta_unwrapped - mean_theta) > 3 * std_theta)
+        outliers_theta = np.sum(np.abs(theta_unwrapped - mean_theta) > 3 * std_theta)
 
         outlier_ratio_x = outliers_x / len(poses)
         outlier_ratio_y = outliers_y / len(poses)
         outlier_ratio_theta = outliers_theta / len(poses)
 
         metrics = {
-            'name':
-                name,
+            'name': name,
             'mean': [mean_x, mean_y, mean_theta],
             'std': [std_x, std_y, std_theta],
             'rmse': [rmse_x, rmse_y, rmse_theta],
             'max_dev': [max_dev_x, max_dev_y, max_dev_theta],
             'jitter_rate': [jitter_rate_position, jitter_rate_orientation],
-            'outlier_ratio': [
-                outlier_ratio_x, outlier_ratio_y, outlier_ratio_theta
-            ]
+            'outlier_ratio': [outlier_ratio_x, outlier_ratio_y, outlier_ratio_theta]
         }
 
         return metrics
@@ -323,23 +299,17 @@ class StaticLocalizationEvaluator(Node):
         print(f"   Standard Deviation (STD):")
         print(f"     σ_x     = {metrics['std'][0]:.6f} m")
         print(f"     σ_y     = {metrics['std'][1]:.6f} m")
-        print(
-            f"     σ_θ     = {metrics['std'][2]:.6f} rad ({np.rad2deg(metrics['std'][2]):.4f}°)"
-        )
+        print(f"     σ_θ     = {metrics['std'][2]:.6f} rad ({np.rad2deg(metrics['std'][2]):.4f}°)")
 
         print(f"\n   Root Mean Square Error (RMSE):")
         print(f"     RMSE_x  = {metrics['rmse'][0]:.6f} m")
         print(f"     RMSE_y  = {metrics['rmse'][1]:.6f} m")
-        print(
-            f"     RMSE_θ  = {metrics['rmse'][2]:.6f} rad ({np.rad2deg(metrics['rmse'][2]):.4f}°)"
-        )
+        print(f"     RMSE_θ  = {metrics['rmse'][2]:.6f} rad ({np.rad2deg(metrics['rmse'][2]):.4f}°)")
 
         print(f"\n   Maximum Deviation:")
         print(f"     Max_x   = {metrics['max_dev'][0]:.6f} m")
         print(f"     Max_y   = {metrics['max_dev'][1]:.6f} m")
-        print(
-            f"     Max_θ   = {metrics['max_dev'][2]:.6f} rad ({np.rad2deg(metrics['max_dev'][2]):.4f}°)"
-        )
+        print(f"     Max_θ   = {metrics['max_dev'][2]:.6f} rad ({np.rad2deg(metrics['max_dev'][2]):.4f}°)")
 
         print(f"\n2. Stability Scoring:")
         print(f"   Jitter Frequency (change rate exceeding threshold):")
@@ -367,14 +337,15 @@ class StaticLocalizationEvaluator(Node):
         ax.scatter(x, y, c=color, alpha=0.6, s=30, label='Poses')
 
         # Plot mean position
-        ax.scatter(mean_x,
-                   mean_y,
-                   c='red',
-                   marker='x',
-                   s=200,
-                   linewidths=3,
-                   label=f'Mean ({mean_x:.3f}, {mean_y:.3f})',
-                   zorder=5)
+        ax.scatter(
+            mean_x,
+            mean_y,
+            c='red',
+            marker='x',
+            s=200,
+            linewidths=3,
+            label=f'Mean ({mean_x:.3f}, {mean_y:.3f})',
+            zorder=5)
 
         # Draw orientation arrows - very small and uniform
         arrow_step = max(1, len(poses) // 20)  # Show ~20 arrows
@@ -394,33 +365,35 @@ class StaticLocalizationEvaluator(Node):
 
         # Plot 1-sigma and 3-sigma confidence ellipses
         for n_std, alpha, label_text in [(1, 0.3, '1σ'), (3, 0.15, '3σ')]:
-            ellipse = Ellipse((mean_x, mean_y),
-                              width=n_std * std_x * 2,
-                              height=n_std * std_y * 2,
-                              alpha=alpha,
-                              color=color,
-                              label=f'{label_text} ellipse')
+            ellipse = Ellipse(
+                (mean_x, mean_y),
+                width=n_std * std_x * 2,
+                height=n_std * std_y * 2,
+                alpha=alpha,
+                color=color,
+                label=f'{label_text} ellipse')
             ax.add_patch(ellipse)
 
         # Add text annotations with metrics
-        textstr = '\n'.join([
-            f'STD: x={std_x:.4f}m, y={std_y:.4f}m',
-            f'     θ={np.rad2deg(std_theta):.3f}°',
-            f'RMSE: x={metrics["rmse"][0]:.4f}m, y={metrics["rmse"][1]:.4f}m',
-            f'Max Dev: {metrics["max_dev"][0]:.4f}m, {metrics["max_dev"][1]:.4f}m',
-            f'Jitter: pos={metrics["jitter_rate"][0]:.1%}, θ={metrics["jitter_rate"][1]:.1%}',
-            f'3σ Outliers: {max(metrics["outlier_ratio"]):.1%}'
-        ])
+        textstr = '\n'.join(
+            [
+                f'STD: x={std_x:.4f}m, y={std_y:.4f}m', f'     θ={np.rad2deg(std_theta):.3f}°',
+                f'RMSE: x={metrics["rmse"][0]:.4f}m, y={metrics["rmse"][1]:.4f}m',
+                f'Max Dev: {metrics["max_dev"][0]:.4f}m, {metrics["max_dev"][1]:.4f}m',
+                f'Jitter: pos={metrics["jitter_rate"][0]:.1%}, θ={metrics["jitter_rate"][1]:.1%}',
+                f'3σ Outliers: {max(metrics["outlier_ratio"]):.1%}'
+            ])
 
         props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
-        ax.text(0.05,
-                0.95,
-                textstr,
-                transform=ax.transAxes,
-                fontsize=9,
-                verticalalignment='top',
-                bbox=props,
-                family='monospace')
+        ax.text(
+            0.05,
+            0.95,
+            textstr,
+            transform=ax.transAxes,
+            fontsize=9,
+            verticalalignment='top',
+            bbox=props,
+            family='monospace')
 
         ax.set_xlabel('X (m)')
         ax.set_ylabel('Y (m)')
@@ -429,15 +402,12 @@ class StaticLocalizationEvaluator(Node):
         ax.axis('equal')
         ax.legend(loc='upper right', fontsize=8)
 
-    def create_visualization(self, loc_poses, filtered_poses, loc_metrics,
-                             filtered_metrics, save_path):
+    def create_visualization(self, loc_poses, filtered_poses, loc_metrics, filtered_metrics, save_path):
         """Create and save visualization without displaying"""
         fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-        self.visualize_poses(loc_poses, loc_metrics, axes[0],
-                             'Raw Cartographer Localization', 'blue')
-        self.visualize_poses(filtered_poses, filtered_metrics, axes[1],
-                             'Robot Localization Filtered', 'green')
+        self.visualize_poses(loc_poses, loc_metrics, axes[0], 'Raw Cartographer Localization', 'blue')
+        self.visualize_poses(filtered_poses, filtered_metrics, axes[1], 'Robot Localization Filtered', 'green')
 
         # Make both plots use the same axis limits for better comparison
         # Get the combined data range from both datasets
@@ -468,15 +438,12 @@ class StaticLocalizationEvaluator(Node):
         print(f"Saved visualization to: {save_path}")
         plt.close()
 
-    def save_report(self, report_path, loc_metrics, filtered_metrics,
-                    num_samples):
+    def save_report(self, report_path, loc_metrics, filtered_metrics, num_samples):
         """Save detailed evaluation report to file"""
         with open(report_path, 'w') as f:
             f.write("=" * 70 + "\n")
             f.write("STATIC LOCALIZATION EVALUATION REPORT\n")
-            f.write(
-                f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            )
+            f.write(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Number of samples: {num_samples}\n")
             f.write("=" * 70 + "\n\n")
 
@@ -489,30 +456,23 @@ class StaticLocalizationEvaluator(Node):
                 f.write("   Standard Deviation (STD):\n")
                 f.write(f"     σ_x     = {metrics['std'][0]:.6f} m\n")
                 f.write(f"     σ_y     = {metrics['std'][1]:.6f} m\n")
-                f.write(
-                    f"     σ_θ     = {metrics['std'][2]:.6f} rad ({np.rad2deg(metrics['std'][2]):.4f}°)\n\n"
-                )
+                f.write(f"     σ_θ     = {metrics['std'][2]:.6f} rad ({np.rad2deg(metrics['std'][2]):.4f}°)\n\n")
 
                 f.write("   Root Mean Square Error (RMSE):\n")
                 f.write(f"     RMSE_x  = {metrics['rmse'][0]:.6f} m\n")
                 f.write(f"     RMSE_y  = {metrics['rmse'][1]:.6f} m\n")
-                f.write(
-                    f"     RMSE_θ  = {metrics['rmse'][2]:.6f} rad ({np.rad2deg(metrics['rmse'][2]):.4f}°)\n\n"
-                )
+                f.write(f"     RMSE_θ  = {metrics['rmse'][2]:.6f} rad ({np.rad2deg(metrics['rmse'][2]):.4f}°)\n\n")
 
                 f.write("   Maximum Deviation:\n")
                 f.write(f"     Max_x   = {metrics['max_dev'][0]:.6f} m\n")
                 f.write(f"     Max_y   = {metrics['max_dev'][1]:.6f} m\n")
                 f.write(
-                    f"     Max_θ   = {metrics['max_dev'][2]:.6f} rad ({np.rad2deg(metrics['max_dev'][2]):.4f}°)\n\n"
-                )
+                    f"     Max_θ   = {metrics['max_dev'][2]:.6f} rad ({np.rad2deg(metrics['max_dev'][2]):.4f}°)\n\n")
 
                 f.write("2. Stability Scoring:\n")
-                f.write(
-                    "   Jitter Frequency (change rate exceeding threshold):\n")
+                f.write("   Jitter Frequency (change rate exceeding threshold):\n")
                 f.write(f"     Position:    {metrics['jitter_rate'][0]:.2%}\n")
-                f.write(
-                    f"     Orientation: {metrics['jitter_rate'][1]:.2%}\n\n")
+                f.write(f"     Orientation: {metrics['jitter_rate'][1]:.2%}\n\n")
 
                 f.write("   3-Sigma Outliers:\n")
                 f.write(f"     X:     {metrics['outlier_ratio'][0]:.2%}\n")

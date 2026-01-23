@@ -213,8 +213,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    ('index', 'Cartographer.tex', u'Cartographer Documentation',
-     u'The Cartographer Authors', 'manual'),
+    ('index', 'Cartographer.tex', u'Cartographer Documentation', u'The Cartographer Authors', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -241,8 +240,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [('index', 'cartographer', u'Cartographer Documentation',
-              [u'The Cartographer Authors'], 1)]
+man_pages = [('index', 'cartographer', u'Cartographer Documentation', [u'The Cartographer Authors'], 1)]
 
 # If true, show URL addresses after external links.
 #man_show_urls = False
@@ -253,11 +251,11 @@ man_pages = [('index', 'cartographer', u'Cartographer Documentation',
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    ('index', 'Cartographer', u'Cartographer Documentation',
-     u'The Cartographer Authors', 'Cartographer',
-     'Cartographer is a system that provides real-time simultaneous '
-     'localization and mapping (SLAM) in 2D and 3D across multiple platforms '
-     'and sensor configurations.', 'Miscellaneous'),
+    (
+        'index', 'Cartographer', u'Cartographer Documentation', u'The Cartographer Authors', 'Cartographer',
+        'Cartographer is a system that provides real-time simultaneous '
+        'localization and mapping (SLAM) in 2D and 3D across multiple platforms '
+        'and sensor configurations.', 'Miscellaneous'),
 ]
 
 # Documents to append as an appendix to all manuals.

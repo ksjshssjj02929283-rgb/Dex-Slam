@@ -213,8 +213,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    ('index', 'CartographerROS.tex', u'Cartographer ROS Documentation',
-     u'The Cartographer Authors', 'manual'),
+    ('index', 'CartographerROS.tex', u'Cartographer ROS Documentation', u'The Cartographer Authors', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -241,8 +240,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [('index', 'cartographer', u'Cartographer ROS Documentation',
-              [u'The Cartographer Authors'], 1)]
+man_pages = [('index', 'cartographer', u'Cartographer ROS Documentation', [u'The Cartographer Authors'], 1)]
 
 # If true, show URL addresses after external links.
 #man_show_urls = False
@@ -253,9 +251,9 @@ man_pages = [('index', 'cartographer', u'Cartographer ROS Documentation',
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    ('index', 'CartographerROS', u'Cartographer ROS Documentation',
-     u'The Cartographer Authors', 'Cartographer ROS',
-     'Provides ROS integration for Cartographer.', 'Miscellaneous'),
+    (
+        'index', 'CartographerROS', u'Cartographer ROS Documentation', u'The Cartographer Authors', 'Cartographer ROS',
+        'Provides ROS integration for Cartographer.', 'Miscellaneous'),
 ]
 
 # Documents to append as an appendix to all manuals.
@@ -270,7 +268,4 @@ texinfo_documents = [
 # If true, do not generate a @detailmenu in the "Top" node's menu.
 #texinfo_no_detailmenu = False
 
-intersphinx_mapping = {
-    'cartographer':
-        ('https://google-cartographer.readthedocs.io/en/latest/', None)
-}
+intersphinx_mapping = {'cartographer': ('https://google-cartographer.readthedocs.io/en/latest/', None)}

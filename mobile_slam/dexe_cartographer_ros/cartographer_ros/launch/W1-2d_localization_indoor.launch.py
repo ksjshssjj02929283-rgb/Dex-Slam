@@ -38,8 +38,7 @@ import subprocess
 # end
 
 json_file = os.path.join(
-    '/home/dexforce/w1/dexe_mobile_application/mobile_simulation/w1_nav2/',
-    'config', 'config.json')
+    '/home/dexforce/w1/dexe_mobile_application/mobile_simulation/w1_nav2/', 'config', 'config.json')
 
 with open(json_file, 'r') as f:
     config_data = json.load(f)
@@ -48,16 +47,13 @@ with open(json_file, 'r') as f:
 map_folder = config_data.get("map_filename", "default")
 print(map_folder)
 load_state_filename = os.path.join(
-    '/home/dexforce/w1/dexe_mobile_application/mobile_simulation/w1_nav2',
-    'maps', map_folder, 'map.pbstream')
+    '/home/dexforce/w1/dexe_mobile_application/mobile_simulation/w1_nav2', 'maps', map_folder, 'map.pbstream')
 
 initial_poses_filepath = os.path.join(
-    get_package_share_directory('cartographer_ros'), 'configuration_files',
-    'initial_poses.yaml')
+    get_package_share_directory('cartographer_ros'), 'configuration_files', 'initial_poses.yaml')
 
 apriltag_poses_filepath = os.path.join(
-    get_package_share_directory('cartographer_ros'), 'configuration_files',
-    'apriltag_poses.yaml')
+    get_package_share_directory('cartographer_ros'), 'configuration_files', 'apriltag_poses.yaml')
 
 
 def generate_launch_description():
@@ -65,25 +61,15 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     ## 如果不是仿真，这里需要设置为false
     use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='false',
-        description='Use simulation/Gazebo clock')
+        'use_sim_time', default_value='false', description='Use simulation/Gazebo clock')
     load_state_filename_arg = DeclareLaunchArgument(
-        'load_state_filename',
-        default_value=load_state_filename,
-        description='Load pbstream file')
+        'load_state_filename', default_value=load_state_filename, description='Load pbstream file')
     initial_poses_filename_arg = DeclareLaunchArgument(
-        'initial_poses_filename',
-        default_value=initial_poses_filepath,
-        description='Load pbstream file')
+        'initial_poses_filename', default_value=initial_poses_filepath, description='Load pbstream file')
     apriltag_poses_filename_arg = DeclareLaunchArgument(
-        'apriltag_poses_filename',
-        default_value=apriltag_poses_filepath,
-        description='Load pbstream file')
+        'apriltag_poses_filename', default_value=apriltag_poses_filepath, description='Load pbstream file')
     location_name_arg = DeclareLaunchArgument(
-        'location_name',
-        default_value='shenzhen',
-        description='Location of the robot')
+        'location_name', default_value='shenzhen', description='Location of the robot')
     ## ***** File paths ******
     pkg_share = FindPackageShare('cartographer_ros').find('cartographer_ros')
     urdf_dir = os.path.join(pkg_share, 'urdf')
@@ -93,20 +79,20 @@ def generate_launch_description():
 
     ## ***** Nodes *****
     ### urdf从b1_tf_manager中发布
-    robot_state_publisher_node = Node(package='robot_state_publisher',
-                                      executable='robot_state_publisher',
-                                      parameters=[{
-                                          'robot_description': robot_desc
-                                      }, {
-                                          'use_sim_time': use_sim_time
-                                      }],
-                                      output='screen')
+    robot_state_publisher_node = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        parameters=[{
+            'robot_description': robot_desc
+        }, {
+            'use_sim_time': use_sim_time
+        }],
+        output='screen')
 
     ## ***** robot_localization融合定位节点 *****
     robot_localization_node = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('robot_localization'),
-                         'launch', 'dexe_localization.launch.py')),
+            os.path.join(get_package_share_directory('robot_localization'), 'launch', 'dexe_localization.launch.py')),
         launch_arguments={'use_sim_time': use_sim_time}.items())
 
     ## ***** 发布静态tf,如果有urdf，则不需要 *****
@@ -139,18 +125,15 @@ def generate_launch_description():
         }],
         arguments=[
             '-configuration_directory',
-            FindPackageShare('cartographer_ros').find('cartographer_ros') +
-            '/configuration_files', '-configuration_basename',
-            'W1-2d_localization_indoor.lua', '-load_state_filename',
-            LaunchConfiguration('load_state_filename'),
-            '-initial_poses_filename',
+            FindPackageShare('cartographer_ros').find('cartographer_ros') + '/configuration_files',
+            '-configuration_basename', 'W1-2d_localization_indoor.lua', '-load_state_filename',
+            LaunchConfiguration('load_state_filename'), '-initial_poses_filename',
             LaunchConfiguration('initial_poses_filename'), '-location_name',
             LaunchConfiguration('location_name'), '-apriltag_poses_filename',
             LaunchConfiguration('apriltag_poses_filename')
         ],
         remappings=[
-            ('scan_1', 'laser_scan/front'), ('scan_2', 'laser_scan/rear'),
-            ('odom', 'odom'), ('imu', 'imu/chassis')
+            ('scan_1', 'laser_scan/front'), ('scan_2', 'laser_scan/rear'), ('odom', 'odom'), ('imu', 'imu/chassis')
         ],  # 实际未起作用，需要在node_constants.h中修改topic名
         output='screen')
     ### 此节点用于启动栅格地图更新
@@ -178,18 +161,19 @@ def generate_launch_description():
         }],
     )
 
-    return LaunchDescription([
-        # Launch arguments
-        # OpaqueFunction(function=is_node_running), # added by hz
-        use_sim_time_arg,
-        load_state_filename_arg,
-        initial_poses_filename_arg,
-        apriltag_poses_filename_arg,
-        location_name_arg,
-        # Nodes
-        # robot_state_publisher_node,
-        robot_localization_node,
-        cartographer_node,
-        # cartographer_occupancy_grid_node,
-        # rviz_node,
-    ])
+    return LaunchDescription(
+        [
+            # Launch arguments
+            # OpaqueFunction(function=is_node_running), # added by hz
+            use_sim_time_arg,
+            load_state_filename_arg,
+            initial_poses_filename_arg,
+            apriltag_poses_filename_arg,
+            location_name_arg,
+            # Nodes
+            # robot_state_publisher_node,
+            robot_localization_node,
+            cartographer_node,
+            # cartographer_occupancy_grid_node,
+            # rviz_node,
+        ])

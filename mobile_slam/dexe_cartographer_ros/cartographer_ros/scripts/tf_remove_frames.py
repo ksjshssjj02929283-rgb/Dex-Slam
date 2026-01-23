@@ -27,8 +27,7 @@ def main():
     def callback(msg):
         msg.transforms = [
             t for t in msg.transforms
-            if t.header.frame_id.lstrip('/') not in remove_frames and
-            t.child_frame_id.lstrip('/') not in remove_frames
+            if t.header.frame_id.lstrip('/') not in remove_frames and t.child_frame_id.lstrip('/') not in remove_frames
         ]
         publisher.publish(msg)
 

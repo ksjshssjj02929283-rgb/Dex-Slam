@@ -65,8 +65,7 @@ class LandmarkIdSampler(object):
         # WARNING: can be huge, check before potentially blocking the system.
         if len(id_vocabulary)**id_length > 1e6:
             raise ValueError("ID sampling space is too large")
-        self.sampling_space = list(
-            itertools.product(*(id_vocabulary for i in range(id_length))))
+        self.sampling_space = list(itertools.product(*(id_vocabulary for i in range(id_length))))
 
     def sample_id(self):
         # Draw a random combination of symbols and stringify it.
@@ -82,8 +81,7 @@ class LandmarkSampler(object):
             raise TypeError("expected LandmarkSamplerOptions")
         self.options = options
         rospy.loginfo("Initializing landmark ID sampler...")
-        self.landmark_id_sampler = LandmarkIdSampler(options.id_vocabulary,
-                                                     options.id_length)
+        self.landmark_id_sampler = LandmarkIdSampler(options.id_vocabulary, options.id_length)
         self._sampled_ids = []
 
     def random_landmark(self):
@@ -127,10 +125,8 @@ class SampledLandmarkPublisher(object):
         self.landmark_sampler = LandmarkSampler(landmark_sampler_options)
         rospy.loginfo("Publishing landmarks to topic: {}".format(TOPIC))
         self.publisher = rospy.Publisher(TOPIC, LandmarkList, queue_size=1)
-        self.publish_timer = rospy.Timer(rospy.Duration(publish_period),
-                                         self.publish_empty_landmark_list)
-        self.sample_timer = rospy.Timer(rospy.Duration(sample_period),
-                                        self.publish_random_landmark_list)
+        self.publish_timer = rospy.Timer(rospy.Duration(publish_period), self.publish_empty_landmark_list)
+        self.sample_timer = rospy.Timer(rospy.Duration(sample_period), self.publish_random_landmark_list)
 
     def publish_random_landmark_list(self, timer_event):
         self.publisher.publish(self.landmark_sampler.random_landmark_list())
@@ -142,40 +138,24 @@ class SampledLandmarkPublisher(object):
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(
-        description=DESC, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(description=DESC, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--translation_weight", type=float, default=1e5)
     parser.add_argument("--rotation_weight", type=float, default=1e5)
     parser.add_argument(
-        "--publish_period",
-        type=float,
-        default=0.1,
-        help="Baseline period for publishing empty landmark lists.")
+        "--publish_period", type=float, default=0.1, help="Baseline period for publishing empty landmark lists.")
     parser.add_argument(
-        "--sample_period",
-        type=float,
-        default=5.,
-        help="Period at which randomly sampled landmarks are published.")
+        "--sample_period", type=float, default=5., help="Period at which randomly sampled landmarks are published.")
     parser.add_argument(
-        "--num_landmarks",
-        type=int,
-        default=5,
-        help="The number of random landmarks published simultaneously.")
+        "--num_landmarks", type=int, default=5, help="The number of random landmarks published simultaneously.")
     parser.add_argument(
-        "--max_distance",
-        type=float,
-        default=1.0,
-        help="Maximum distance of a random landmark to the tracking frame.")
+        "--max_distance", type=float, default=1.0, help="Maximum distance of a random landmark to the tracking frame.")
     parser.add_argument(
         "--id_vocabulary",
         nargs='+',
         default={"a", "b", "c", "1", "2", "3"},
         help="Set of symbols that can appear in random landmark IDs.")
     parser.add_argument(
-        "--id_length",
-        type=int,
-        default=5,
-        help="The length of the random landmark IDs (number of symbols).")
+        "--id_length", type=int, default=5, help="The length of the random landmark IDs (number of symbols).")
     parser.add_argument(
         "--allow_duplicate_ids",
         action="store_true",
@@ -185,7 +165,6 @@ if __name__ == '__main__':
     rospy.init_node("landmark_sampler")
 
     landmark_sampler_options = LandmarkSamplerOptions(**args.__dict__)
-    sampler = SampledLandmarkPublisher(args.publish_period, args.sample_period,
-                                       landmark_sampler_options)
+    sampler = SampledLandmarkPublisher(args.publish_period, args.sample_period, landmark_sampler_options)
 
     rospy.spin()

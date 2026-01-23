@@ -36,10 +36,7 @@ def generate_launch_description():
         parameters=[
             parameters_file_path,
             str(parameters_file_path),
-            [
-                EnvironmentVariable(name='FILE_PATH'), os.sep,
-                'test_ekf_localization_node_bag2.yaml'
-            ],
+            [EnvironmentVariable(name='FILE_PATH'), os.sep, 'test_ekf_localization_node_bag2.yaml'],
         ],
     )
 
@@ -51,23 +48,19 @@ def generate_launch_description():
         parameters=[
             parameters_file_path,
             str(parameters_file_path),
-            [
-                EnvironmentVariable(name='FILE_PATH'), os.sep,
-                'test_ekf_localization_node_bag2.yaml'
-            ],
+            [EnvironmentVariable(name='FILE_PATH'), os.sep, 'test_ekf_localization_node_bag2.yaml'],
         ],
     )
 
-    return LaunchDescription([
-        launch.actions.DeclareLaunchArgument('output_final_position',
-                                             default_value='False'),
-        launch.actions.DeclareLaunchArgument('output_location',
-                                             default_value='ekf2.txt'),
-        ekf_node,
-        test_ekf_localization_node_bag2,
-        launch.actions.
-        RegisterEventHandler(event_handler=launch.event_handlers.OnProcessExit(
-            target_action=test_ekf_localization_node_bag2,
-            on_exit=[launch.actions.EmitEvent(event=launch.events.Shutdown())],
-        )),
-    ])
+    return LaunchDescription(
+        [
+            launch.actions.DeclareLaunchArgument('output_final_position', default_value='False'),
+            launch.actions.DeclareLaunchArgument('output_location', default_value='ekf2.txt'),
+            ekf_node,
+            test_ekf_localization_node_bag2,
+            launch.actions.RegisterEventHandler(
+                event_handler=launch.event_handlers.OnProcessExit(
+                    target_action=test_ekf_localization_node_bag2,
+                    on_exit=[launch.actions.EmitEvent(event=launch.events.Shutdown())],
+                )),
+        ])

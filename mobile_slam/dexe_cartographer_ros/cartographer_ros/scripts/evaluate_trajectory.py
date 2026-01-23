@@ -162,42 +162,33 @@ class TrajectoryEvaluator:
         fig, ax = plt.subplots(1, 1, figsize=(12, 10))
 
         # Plot filtered trajectory (reference) - solid line
-        ax.plot(self.filtered_x,
-                self.filtered_y,
-                'g-',
-                alpha=0.6,
-                linewidth=2.5,
-                label='Filtered (Reference)',
-                zorder=2)
+        ax.plot(
+            self.filtered_x, self.filtered_y, 'g-', alpha=0.6, linewidth=2.5, label='Filtered (Reference)', zorder=2)
 
         # Plot raw Cartographer trajectory - dashed line
-        ax.plot(self.loc_x,
-                self.loc_y,
-                'b--',
-                alpha=0.7,
-                linewidth=2,
-                label='Raw Cartographer',
-                zorder=1)
+        ax.plot(self.loc_x, self.loc_y, 'b--', alpha=0.7, linewidth=2, label='Raw Cartographer', zorder=1)
 
         # Plot start and end points
-        ax.scatter(self.filtered_x[0],
-                   self.filtered_y[0],
-                   c='green',
-                   marker='o',
-                   s=200,
-                   edgecolors='black',
-                   linewidths=2,
-                   label='Start',
-                   zorder=5)
-        ax.scatter(self.filtered_x[-1],
-                   self.filtered_y[-1],
-                   c='red',
-                   marker='s',
-                   s=200,
-                   edgecolors='black',
-                   linewidths=2,
-                   label='End',
-                   zorder=5)
+        ax.scatter(
+            self.filtered_x[0],
+            self.filtered_y[0],
+            c='green',
+            marker='o',
+            s=200,
+            edgecolors='black',
+            linewidths=2,
+            label='Start',
+            zorder=5)
+        ax.scatter(
+            self.filtered_x[-1],
+            self.filtered_y[-1],
+            c='red',
+            marker='s',
+            s=200,
+            edgecolors='black',
+            linewidths=2,
+            label='End',
+            zorder=5)
 
         # Draw orientation arrows for filtered trajectory (every nth point)
         n_points = len(self.filtered_x)
@@ -210,22 +201,21 @@ class TrajectoryEvaluator:
         for i in range(0, n_points, arrow_step):
             dx = arrow_length * np.cos(self.filtered_yaw[i])
             dy = arrow_length * np.sin(self.filtered_yaw[i])
-            ax.arrow(self.filtered_x[i],
-                     self.filtered_y[i],
-                     dx,
-                     dy,
-                     head_width=arrow_length * 0.3,
-                     head_length=arrow_length * 0.3,
-                     fc='green',
-                     ec='green',
-                     alpha=0.5,
-                     linewidth=0.8)
+            ax.arrow(
+                self.filtered_x[i],
+                self.filtered_y[i],
+                dx,
+                dy,
+                head_width=arrow_length * 0.3,
+                head_length=arrow_length * 0.3,
+                fc='green',
+                ec='green',
+                alpha=0.5,
+                linewidth=0.8)
 
         ax.set_xlabel('X (m)', fontsize=12)
         ax.set_ylabel('Y (m)', fontsize=12)
-        ax.set_title('Trajectory Comparison: Raw vs Filtered',
-                     fontsize=14,
-                     fontweight='bold')
+        ax.set_title('Trajectory Comparison: Raw vs Filtered', fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
         ax.axis('equal')
         ax.legend(loc='best', fontsize=11)
@@ -241,24 +231,8 @@ class TrajectoryEvaluator:
         ax.plot(x, y, color=color, alpha=0.6, linewidth=1.5, label='Trajectory')
 
         # Plot start and end points
-        ax.scatter(x[0],
-                   y[0],
-                   c='green',
-                   marker='o',
-                   s=200,
-                   edgecolors='black',
-                   linewidths=2,
-                   label='Start',
-                   zorder=5)
-        ax.scatter(x[-1],
-                   y[-1],
-                   c='red',
-                   marker='s',
-                   s=200,
-                   edgecolors='black',
-                   linewidths=2,
-                   label='End',
-                   zorder=5)
+        ax.scatter(x[0], y[0], c='green', marker='o', s=200, edgecolors='black', linewidths=2, label='Start', zorder=5)
+        ax.scatter(x[-1], y[-1], c='red', marker='s', s=200, edgecolors='black', linewidths=2, label='End', zorder=5)
 
         # Draw orientation arrows (every nth point to avoid clutter)
         n_points = len(x)
@@ -271,16 +245,17 @@ class TrajectoryEvaluator:
         for i in range(0, n_points, arrow_step):
             dx = arrow_length * np.cos(yaw[i])
             dy = arrow_length * np.sin(yaw[i])
-            ax.arrow(x[i],
-                     y[i],
-                     dx,
-                     dy,
-                     head_width=arrow_length * 0.4,
-                     head_length=arrow_length * 0.4,
-                     fc='black',
-                     ec='black',
-                     alpha=0.6,
-                     linewidth=0.5)
+            ax.arrow(
+                x[i],
+                y[i],
+                dx,
+                dy,
+                head_width=arrow_length * 0.4,
+                head_length=arrow_length * 0.4,
+                fc='black',
+                ec='black',
+                alpha=0.6,
+                linewidth=0.5)
 
         ax.set_xlabel('X (m)', fontsize=12)
         ax.set_ylabel('Y (m)', fontsize=12)
@@ -299,24 +274,21 @@ class TrajectoryEvaluator:
 
         # 1. Position error heatmap on filtered trajectory (reference)
         self._plot_error_on_trajectory(
-            axes[0], self.filtered_x, self.filtered_y, self.filtered_yaw,
-            pos_errors, 'Position Error (Raw vs Filtered Reference)',
-            'Position Error (m)', cm.jet)
+            axes[0], self.filtered_x, self.filtered_y, self.filtered_yaw, pos_errors,
+            'Position Error (Raw vs Filtered Reference)', 'Position Error (m)', cm.jet)
 
         # 2. Orientation error heatmap on filtered trajectory (reference)
         ori_errors_deg = np.rad2deg(ori_errors)
         self._plot_error_on_trajectory(
-            axes[1], self.filtered_x, self.filtered_y, self.filtered_yaw,
-            ori_errors_deg, 'Orientation Error (Raw vs Filtered Reference)',
-            'Orientation Error (°)', cm.hot)
+            axes[1], self.filtered_x, self.filtered_y, self.filtered_yaw, ori_errors_deg,
+            'Orientation Error (Raw vs Filtered Reference)', 'Orientation Error (°)', cm.hot)
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved error heatmap to: {save_path}")
         plt.close()
 
-    def _plot_error_on_trajectory(self, ax, x, y, yaw, errors, title,
-                                  cbar_label, colormap):
+    def _plot_error_on_trajectory(self, ax, x, y, yaw, errors, title, cbar_label, colormap):
         """Helper function to plot error as heatmap on trajectory"""
         # Create colormap normalization
         norm = Normalize(vmin=np.min(errors), vmax=np.max(errors))
@@ -324,10 +296,7 @@ class TrajectoryEvaluator:
         # Plot trajectory segments colored by error
         for i in range(len(x) - 1):
             color = colormap(norm(errors[i]))
-            ax.plot([x[i], x[i + 1]], [y[i], y[i + 1]],
-                    color=color,
-                    linewidth=3,
-                    alpha=0.8)
+            ax.plot([x[i], x[i + 1]], [y[i], y[i + 1]], color=color, linewidth=3, alpha=0.8)
 
         # Add colorbar
         sm = cm.ScalarMappable(cmap=colormap, norm=norm)
@@ -336,24 +305,8 @@ class TrajectoryEvaluator:
         cbar.set_label(cbar_label, fontsize=11)
 
         # Plot start and end points
-        ax.scatter(x[0],
-                   y[0],
-                   c='green',
-                   marker='o',
-                   s=200,
-                   edgecolors='black',
-                   linewidths=2,
-                   label='Start',
-                   zorder=5)
-        ax.scatter(x[-1],
-                   y[-1],
-                   c='red',
-                   marker='s',
-                   s=200,
-                   edgecolors='black',
-                   linewidths=2,
-                   label='End',
-                   zorder=5)
+        ax.scatter(x[0], y[0], c='green', marker='o', s=200, edgecolors='black', linewidths=2, label='Start', zorder=5)
+        ax.scatter(x[-1], y[-1], c='red', marker='s', s=200, edgecolors='black', linewidths=2, label='End', zorder=5)
 
         # Add statistics text
         stats_text = f'Mean: {np.mean(errors):.4f}\n'
@@ -362,14 +315,15 @@ class TrajectoryEvaluator:
         stats_text += f'Max: {np.max(errors):.4f}'
 
         props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
-        ax.text(0.02,
-                0.98,
-                stats_text,
-                transform=ax.transAxes,
-                fontsize=10,
-                verticalalignment='top',
-                bbox=props,
-                family='monospace')
+        ax.text(
+            0.02,
+            0.98,
+            stats_text,
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment='top',
+            bbox=props,
+            family='monospace')
 
         ax.set_xlabel('X (m)', fontsize=12)
         ax.set_ylabel('Y (m)', fontsize=12)
@@ -394,108 +348,70 @@ class TrajectoryEvaluator:
         ax1 = fig.add_subplot(gs[0, :])
         ax1.plot(time_from_start, pos_errors, 'b-', linewidth=1, alpha=0.7)
         ax1.fill_between(time_from_start, 0, pos_errors, alpha=0.3)
-        ax1.axhline(np.mean(pos_errors),
-                    color='r',
-                    linestyle='--',
-                    label=f'Mean: {np.mean(pos_errors):.4f}m')
+        ax1.axhline(np.mean(pos_errors), color='r', linestyle='--', label=f'Mean: {np.mean(pos_errors):.4f}m')
         ax1.set_xlabel('Time (s)', fontsize=12)
         ax1.set_ylabel('Position Error (m)', fontsize=12)
-        ax1.set_title('Position Error Over Time',
-                      fontsize=13,
-                      fontweight='bold')
+        ax1.set_title('Position Error Over Time', fontsize=13, fontweight='bold')
         ax1.grid(True, alpha=0.3)
         ax1.legend()
 
         # 2. Position error histogram
         ax2 = fig.add_subplot(gs[1, 0])
-        ax2.hist(pos_errors,
-                 bins=50,
-                 color='blue',
-                 alpha=0.7,
-                 edgecolor='black')
-        ax2.axvline(np.mean(pos_errors),
-                    color='r',
-                    linestyle='--',
-                    linewidth=2,
-                    label=f'Mean: {np.mean(pos_errors):.4f}m')
-        ax2.axvline(np.median(pos_errors),
-                    color='g',
-                    linestyle='--',
-                    linewidth=2,
-                    label=f'Median: {np.median(pos_errors):.4f}m')
+        ax2.hist(pos_errors, bins=50, color='blue', alpha=0.7, edgecolor='black')
+        ax2.axvline(
+            np.mean(pos_errors), color='r', linestyle='--', linewidth=2, label=f'Mean: {np.mean(pos_errors):.4f}m')
+        ax2.axvline(
+            np.median(pos_errors),
+            color='g',
+            linestyle='--',
+            linewidth=2,
+            label=f'Median: {np.median(pos_errors):.4f}m')
         ax2.set_xlabel('Position Error (m)', fontsize=12)
         ax2.set_ylabel('Frequency', fontsize=12)
-        ax2.set_title('Position Error Distribution',
-                      fontsize=13,
-                      fontweight='bold')
+        ax2.set_title('Position Error Distribution', fontsize=13, fontweight='bold')
         ax2.legend()
         ax2.grid(True, alpha=0.3)
 
         # 3. Orientation error histogram
         ax3 = fig.add_subplot(gs[1, 1])
-        ax3.hist(ori_errors_deg,
-                 bins=50,
-                 color='orange',
-                 alpha=0.7,
-                 edgecolor='black')
-        ax3.axvline(np.mean(ori_errors_deg),
-                    color='r',
-                    linestyle='--',
-                    linewidth=2,
-                    label=f'Mean: {np.mean(ori_errors_deg):.4f}°')
-        ax3.axvline(np.median(ori_errors_deg),
-                    color='g',
-                    linestyle='--',
-                    linewidth=2,
-                    label=f'Median: {np.median(ori_errors_deg):.4f}°')
+        ax3.hist(ori_errors_deg, bins=50, color='orange', alpha=0.7, edgecolor='black')
+        ax3.axvline(
+            np.mean(ori_errors_deg),
+            color='r',
+            linestyle='--',
+            linewidth=2,
+            label=f'Mean: {np.mean(ori_errors_deg):.4f}°')
+        ax3.axvline(
+            np.median(ori_errors_deg),
+            color='g',
+            linestyle='--',
+            linewidth=2,
+            label=f'Median: {np.median(ori_errors_deg):.4f}°')
         ax3.set_xlabel('Orientation Error (°)', fontsize=12)
         ax3.set_ylabel('Frequency', fontsize=12)
-        ax3.set_title('Orientation Error Distribution',
-                      fontsize=13,
-                      fontweight='bold')
+        ax3.set_title('Orientation Error Distribution', fontsize=13, fontweight='bold')
         ax3.legend()
         ax3.grid(True, alpha=0.3)
 
         # 4. XY position errors
         ax4 = fig.add_subplot(gs[2, 0])
-        ax4.plot(time_from_start,
-                 dx,
-                 'r-',
-                 linewidth=1,
-                 alpha=0.7,
-                 label='X Error')
-        ax4.plot(time_from_start,
-                 dy,
-                 'b-',
-                 linewidth=1,
-                 alpha=0.7,
-                 label='Y Error')
+        ax4.plot(time_from_start, dx, 'r-', linewidth=1, alpha=0.7, label='X Error')
+        ax4.plot(time_from_start, dy, 'b-', linewidth=1, alpha=0.7, label='Y Error')
         ax4.axhline(0, color='k', linestyle='-', linewidth=0.5)
         ax4.set_xlabel('Time (s)', fontsize=12)
         ax4.set_ylabel('Error (m)', fontsize=12)
-        ax4.set_title('X and Y Position Errors Over Time',
-                      fontsize=13,
-                      fontweight='bold')
+        ax4.set_title('X and Y Position Errors Over Time', fontsize=13, fontweight='bold')
         ax4.legend()
         ax4.grid(True, alpha=0.3)
 
         # 5. Orientation error over time
         ax5 = fig.add_subplot(gs[2, 1])
         ax5.plot(time_from_start, ori_errors_deg, 'g-', linewidth=1, alpha=0.7)
-        ax5.fill_between(time_from_start,
-                         0,
-                         ori_errors_deg,
-                         alpha=0.3,
-                         color='green')
-        ax5.axhline(np.mean(ori_errors_deg),
-                    color='r',
-                    linestyle='--',
-                    label=f'Mean: {np.mean(ori_errors_deg):.4f}°')
+        ax5.fill_between(time_from_start, 0, ori_errors_deg, alpha=0.3, color='green')
+        ax5.axhline(np.mean(ori_errors_deg), color='r', linestyle='--', label=f'Mean: {np.mean(ori_errors_deg):.4f}°')
         ax5.set_xlabel('Time (s)', fontsize=12)
         ax5.set_ylabel('Orientation Error (°)', fontsize=12)
-        ax5.set_title('Orientation Error Over Time',
-                      fontsize=13,
-                      fontweight='bold')
+        ax5.set_title('Orientation Error Over Time', fontsize=13, fontweight='bold')
         ax5.legend()
         ax5.grid(True, alpha=0.3)
 
@@ -511,8 +427,7 @@ class TrajectoryEvaluator:
         print("=" * 70)
 
         # Compute errors (using filtered as reference)
-        print(
-            "\n--- Position and Orientation Errors (vs Filtered Reference) ---")
+        print("\n--- Position and Orientation Errors (vs Filtered Reference) ---")
         pos_errors, dx, dy = self.compute_position_errors()
         ori_errors = self.compute_orientation_errors()
         ori_errors_deg = np.rad2deg(ori_errors)
@@ -562,9 +477,7 @@ class TrajectoryEvaluator:
         with open(report_path, 'w') as f:
             f.write("=" * 70 + "\n")
             f.write("TRAJECTORY EVALUATION REPORT\n")
-            f.write(
-                f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            )
+            f.write(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Data file: {self.csv_file.name}\n")
             f.write(f"Number of poses: {len(self.data)}\n")
             f.write("Reference: Filtered trajectory from robot_localization\n")
@@ -590,9 +503,7 @@ class TrajectoryEvaluator:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description=
-        'Evaluate trajectory data comparing raw and filtered localization')
+    parser = argparse.ArgumentParser(description='Evaluate trajectory data comparing raw and filtered localization')
 
     # Default path to trajectory data
     default_csv = Path.home(
@@ -605,10 +516,7 @@ def main():
         default=str(default_csv),
         help=f'Path to CSV file with trajectory data (default: {default_csv})')
     parser.add_argument(
-        '--output-dir',
-        type=str,
-        default=None,
-        help='Output directory for results (default: same as input file)')
+        '--output-dir', type=str, default=None, help='Output directory for results (default: same as input file)')
 
     args = parser.parse_args()
 

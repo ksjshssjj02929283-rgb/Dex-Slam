@@ -143,8 +143,7 @@ def ParseProtoFilesRecursively(root):
                 path = os.path.join(dirpath, name)
                 print("Found '%s'..." % path)
                 assert not os.path.islink(path)
-                message_list.extend(
-                    ParseProtoFile(io.open(path, encoding='UTF-8')))
+                message_list.extend(ParseProtoFile(io.open(path, encoding='UTF-8')))
     return message_list
 
 
@@ -167,8 +166,7 @@ class Resolver(object):
             candidate = '.'.join(package[0:levels]) + '.' + message_name
             if candidate in self.name_set:
                 return candidate
-        raise ResolutionError('Resolving %s in %s failed.' %
-                              (message_name, package_name))
+        raise ResolutionError('Resolving %s in %s failed.' % (message_name, package_name))
 
 
 def GenerateDocumentation(output_file, root):
@@ -190,9 +188,7 @@ def GenerateDocumentation(output_file, root):
             # and is not parsed from the Lua files.
             if option_type in ('InitialTrajectoryPose',):
                 continue
-            content.append(
-                resolver.Resolve(option_type, message.package) + ' ' +
-                option_name)
+            content.append(resolver.Resolve(option_type, message.package) + ' ' + option_name)
             if not option_comments:
                 option_comments.append(NODOC)
             for comment in option_comments:

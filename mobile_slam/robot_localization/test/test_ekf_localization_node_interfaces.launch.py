@@ -44,10 +44,7 @@ def generate_launch_description():
         parameters=[
             parameters_file_path,
             str(parameters_file_path),
-            [
-                EnvironmentVariable(name='FILE_PATH'), os.sep,
-                'test_ekf_localization_node_interfaces.yaml'
-            ],
+            [EnvironmentVariable(name='FILE_PATH'), os.sep, 'test_ekf_localization_node_interfaces.yaml'],
         ],
     )
 
@@ -61,8 +58,7 @@ def main(argv=sys.argv[1:]):
 
     test1_action = ExecuteProcess(
         cmd=[
-            get_package_prefix('robot_localization') +
-            '/lib/robot_localization/test_ekf_localization_node_interfaces'
+            get_package_prefix('robot_localization') + '/lib/robot_localization/test_ekf_localization_node_interfaces'
         ],
         output='screen',
     )

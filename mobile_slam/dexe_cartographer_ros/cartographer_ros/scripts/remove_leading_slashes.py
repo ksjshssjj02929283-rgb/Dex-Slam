@@ -22,8 +22,7 @@ import rosbag
 
 
 def ParseArgs():
-    argument_parser = argparse.ArgumentParser(
-        description="Removes leading slashes from frame names.")
+    argument_parser = argparse.ArgumentParser(description="Removes leading slashes from frame names.")
     argument_parser.add_argument("input", type=str, help="Input bag")
     return argument_parser.parse_args()
 
@@ -42,8 +41,7 @@ def RewriteMsg(msg):
 
 def Main():
     options = ParseArgs()
-    with rosbag.Bag(os.path.splitext(options.input)[0] + ".filtered.bag",
-                    "w") as outbag:
+    with rosbag.Bag(os.path.splitext(options.input)[0] + ".filtered.bag", "w") as outbag:
         for topic, msg, t in rosbag.Bag(options.input).read_messages():
             RewriteMsg(msg)
             outbag.write(topic, msg, msg.header.stamp if msg._has_header else t)

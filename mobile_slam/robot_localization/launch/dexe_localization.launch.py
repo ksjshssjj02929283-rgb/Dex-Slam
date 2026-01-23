@@ -39,22 +39,17 @@ def launch_setup(context, *args, **kwargs):
     if filter_type.lower() == 'ekf':
         executable = 'ekf_node'
         node_name = 'ekf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params',
-                                   'dexe_ekf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ekf.yaml')
     elif filter_type.lower() == 'ukf':
         executable = 'ukf_node'
         node_name = 'ukf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params',
-                                   'dexe_ukf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ukf.yaml')
     elif filter_type.lower() == 'eskf':
         executable = 'eskf_node'
         node_name = 'eskf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params',
-                                   'dexe_eskf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_eskf.yaml')
     else:
-        raise ValueError(
-            f"Invalid filter_type: {filter_type}. Must be 'ekf', 'ukf', or 'eskf'"
-        )
+        raise ValueError(f"Invalid filter_type: {filter_type}. Must be 'ekf', 'ukf', or 'eskf'")
 
     # Localization node
     localization_node = Node(
@@ -85,11 +80,6 @@ def generate_launch_description():
         description='Type of filter to use: ekf, ukf, or eskf',
         choices=['ekf', 'ukf', 'eskf'])
 
-    use_sim_time_arg = DeclareLaunchArgument('use_sim_time',
-                                             default_value='false',
-                                             description='Use simulation time')
+    use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='false', description='Use simulation time')
 
-    return LaunchDescription([
-        filter_type_arg, use_sim_time_arg,
-        OpaqueFunction(function=launch_setup)
-    ])
+    return LaunchDescription([filter_type_arg, use_sim_time_arg, OpaqueFunction(function=launch_setup)])
