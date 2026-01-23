@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
+#include <regex>
+#include <string>
+
 #include "cartographer_ros/assets_writer.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
-#include <regex>
-#include <string>
 
 DEFINE_string(configuration_directory, "",
               "First directory in which configuration files are searched, "
@@ -61,15 +62,12 @@ int main(int argc, char** argv) {
 
   std::regex regex(",");
   std::vector<std::string> bag_filenames(
-    std::sregex_token_iterator(
-      FLAGS_bag_filenames.begin(), FLAGS_bag_filenames.end(), regex, -1),
-    std::sregex_token_iterator()
-    );
+      std::sregex_token_iterator(FLAGS_bag_filenames.begin(),
+                                 FLAGS_bag_filenames.end(), regex, -1),
+      std::sregex_token_iterator());
 
   ::cartographer_ros::AssetsWriter asset_writer(
-      FLAGS_pose_graph_filename,
-      bag_filenames,
-      FLAGS_output_file_prefix);
+      FLAGS_pose_graph_filename, bag_filenames, FLAGS_output_file_prefix);
 
   asset_writer.Run(FLAGS_configuration_directory, FLAGS_configuration_basename,
                    FLAGS_urdf_filename, FLAGS_use_bag_transforms);

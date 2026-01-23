@@ -35,7 +35,10 @@ std::unique_ptr<::cartographer::transform::Rigid3d> TfBridge::LookupToTracking(
   std::unique_ptr<::cartographer::transform::Rigid3d> frame_id_to_tracking;
   try {
     const rclcpp::Time latest_tf_time =
-        buffer_->lookupTransform(tracking_frame_, frame_id, ::rclcpp::Time(0.), timeout).header.stamp;
+        buffer_
+            ->lookupTransform(tracking_frame_, frame_id, ::rclcpp::Time(0.),
+                              timeout)
+            .header.stamp;
     const rclcpp::Time requested_time = ToRos(time);
 
     if (latest_tf_time >= requested_time) {

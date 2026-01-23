@@ -29,29 +29,27 @@ namespace cartographer_ros {
 
 // Top-level options of Cartographer's ROS integration.
 struct NodeOptions {
-  ::cartographer::mapping::proto::MapBuilderOptions map_builder_options;
-  std::string map_frame;
-  double lookup_transform_timeout_sec;
-  double submap_publish_period_sec;
-  double pose_publish_period_sec;
-  double trajectory_publish_period_sec;
-  bool publish_to_tf = true;
-  bool publish_tracked_pose = true;
-  bool use_pose_extrapolator = true;
-  
-  bool publish_local_pose = true;// new added by hz: 添加发布局部位姿的标志
-  bool sub_initial_pose = false;// new added by hz: 添加使用初始位姿的标志
-  bool sub_apriltag_pose = false;// new added by hz: 添加使用apriltag位姿的标志
-  // std::string localization_local_frame;// new added by hz: 
-  std::string localPoseTopic;// new added by hz: 
+    ::cartographer::mapping::proto::MapBuilderOptions map_builder_options;
+    std::string map_frame;
+    double lookup_transform_timeout_sec;
+    double submap_publish_period_sec;
+    double pose_publish_period_sec;
+    double trajectory_publish_period_sec;
+    bool publish_to_tf = true;
+    bool publish_tracked_pose = true;
+    bool use_pose_extrapolator = true;
+
+    bool publish_local_pose = true;  // new added by hz: 添加发布局部位姿的标志
+    bool sub_initial_pose = false;   // new added by hz: 添加使用初始位姿的标志
+    bool sub_apriltag_pose = false;  // new added by hz: 添加使用apriltag位姿的标志
+    // std::string localization_local_frame;// new added by hz:
+    std::string localPoseTopic;  // new added by hz:
 };
 
-NodeOptions CreateNodeOptions(
-    ::cartographer::common::LuaParameterDictionary* lua_parameter_dictionary);
+NodeOptions CreateNodeOptions(::cartographer::common::LuaParameterDictionary* lua_parameter_dictionary);
 
-std::tuple<NodeOptions, TrajectoryOptions> LoadOptions(
-    const std::string& configuration_directory,
-    const std::string& configuration_basename);
+std::tuple<NodeOptions, TrajectoryOptions> LoadOptions(const std::string& configuration_directory,
+                                                       const std::string& configuration_basename);
 }  // namespace cartographer_ros
 
 #endif  // CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_NODE_OPTIONS_H

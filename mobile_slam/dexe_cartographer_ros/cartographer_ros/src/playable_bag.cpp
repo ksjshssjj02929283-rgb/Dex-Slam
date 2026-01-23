@@ -19,9 +19,9 @@
 #include "absl/memory/memory.h"
 #include "cartographer_ros/node_constants.h"
 #include "glog/logging.h"
-#include "tf2_msgs/msg/tf_message.hpp"
-#include "rosbag2_storage/topic_metadata.hpp"
 #include "rosbag2_storage/bag_metadata.hpp"
+#include "rosbag2_storage/topic_metadata.hpp"
+#include "tf2_msgs/msg/tf_message.hpp"
 
 namespace cartographer_ros {
 
@@ -40,7 +40,7 @@ PlayableBag::PlayableBag(
   LOG(WARNING) << "Opening bag: " << bag_filename;
   bag_reader_->open(bag_filename);
   bag_metadata = bag_reader_->get_metadata();
-  duration_in_seconds_ = bag_metadata.duration.count()/1e9;
+  duration_in_seconds_ = bag_metadata.duration.count() / 1e9;
   LOG(WARNING) << "duration_in_seconds_: " << duration_in_seconds_;
   LOG(WARNING) << "message_count: " << bag_metadata.message_count;
   LOG(WARNING) << "compression_mode: " << bag_metadata.compression_mode;
@@ -58,8 +58,9 @@ rclcpp::Time PlayableBag::PeekMessageTime() const {
 
 std::tuple<rclcpp::Time, rclcpp::Time> PlayableBag::GetBeginEndTime() const {
   return std::make_tuple(
-    rclcpp::Time(bag_metadata.starting_time.time_since_epoch().count()),
-    rclcpp::Time(bag_metadata.starting_time.time_since_epoch().count() + bag_metadata.duration.count()));
+      rclcpp::Time(bag_metadata.starting_time.time_since_epoch().count()),
+      rclcpp::Time(bag_metadata.starting_time.time_since_epoch().count() +
+                   bag_metadata.duration.count()));
 }
 
 rosbag2_storage::SerializedBagMessage PlayableBag::GetNextMessage(
@@ -70,7 +71,8 @@ rosbag2_storage::SerializedBagMessage PlayableBag::GetNextMessage(
   AdvanceUntilMessageAvailable();
   double processed_seconds =
       (rclcpp::Time(msg.time_stamp) -
-       rclcpp::Time(bag_metadata.starting_time.time_since_epoch().count())).seconds();
+       rclcpp::Time(bag_metadata.starting_time.time_since_epoch().count()))
+          .seconds();
   if ((message_counter_ % 10000) == 0) {
     LOG(INFO) << "Processed " << processed_seconds << " of "
               << duration_in_seconds_ << " seconds of bag " << bag_filename_;
@@ -121,13 +123,15 @@ void PlayableBag::AdvanceUntilMessageAvailable() {
 
 PlayableBagMultiplexer::PlayableBagMultiplexer(rclcpp::Node::SharedPtr node) {
   node_ = node;
-  bag_progress_pub_ = node_->create_publisher<cartographer_ros_msgs::msg::BagfileProgress>(
-      "bagfile_progress", 10);
+  bag_progress_pub_ =
+      node_->create_publisher<cartographer_ros_msgs::msg::BagfileProgress>(
+          "bagfile_progress", 10);
   if (!node_->has_parameter("bagfile_progress_pub_interval")) {
-    node_->declare_parameter("bagfile_progress_pub_interval", progress_pub_interval_);
+    node_->declare_parameter("bagfile_progress_pub_interval",
+                             progress_pub_interval_);
   }
-  progress_pub_interval_ =
-      node_->get_parameter_or("bagfile_progress_pub_interval", progress_pub_interval_, 10.0);
+  progress_pub_interval_ = node_->get_parameter_or(
+      "bagfile_progress_pub_interval", progress_pub_interval_, 10.0);
 }
 
 void PlayableBagMultiplexer::AddPlayableBag(PlayableBag playable_bag) {
@@ -146,12 +150,14 @@ bool PlayableBagMultiplexer::IsMessageAvailable() const {
   return !next_message_queue_.empty();
 }
 
-std::tuple<rosbag2_storage::SerializedBagMessage, int, std::string, bool> PlayableBagMultiplexer::GetNextMessage() {
+std::tuple<rosbag2_storage::SerializedBagMessage, int, std::string, bool>
+PlayableBagMultiplexer::GetNextMessage() {
   CHECK(IsMessageAvailable());
   const int current_bag_index = next_message_queue_.top().bag_index;
   PlayableBag& current_bag = playable_bags_.at(current_bag_index);
   cartographer_ros_msgs::msg::BagfileProgress progress;
-  rosbag2_storage::SerializedBagMessage msg = current_bag.GetNextMessage(&progress);
+  rosbag2_storage::SerializedBagMessage msg =
+      current_bag.GetNextMessage(&progress);
   const bool publish_progress =
       current_bag.finished() ||
       node_->now() - bag_progress_time_map_[current_bag.bag_id()] >=
@@ -164,7 +170,8 @@ std::tuple<rosbag2_storage::SerializedBagMessage, int, std::string, bool> Playab
     bag_progress_pub_->publish(progress);
     bag_progress_time_map_[current_bag.bag_id()] = node_->now();
   }
-  CHECK_EQ(msg.time_stamp, next_message_queue_.top().message_timestamp.nanoseconds());
+  CHECK_EQ(msg.time_stamp,
+           next_message_queue_.top().message_timestamp.nanoseconds());
   next_message_queue_.pop();
   if (current_bag.IsMessageAvailable()) {
     next_message_queue_.emplace(
@@ -173,7 +180,7 @@ std::tuple<rosbag2_storage::SerializedBagMessage, int, std::string, bool> Playab
 
   std::string topic_type;
   for (auto topic_info : current_bag.bag_metadata.topics_with_message_count) {
-    if (topic_info.topic_metadata.name == msg.topic_name){
+    if (topic_info.topic_metadata.name == msg.topic_name) {
       topic_type = topic_info.topic_metadata.type;
       break;
     }

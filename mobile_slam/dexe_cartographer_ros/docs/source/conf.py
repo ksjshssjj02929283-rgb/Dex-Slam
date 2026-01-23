@@ -212,9 +212,10 @@ latex_elements = {
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
-latex_documents = [('index', 'CartographerROS.tex',
-                    u'Cartographer ROS Documentation',
-                    u'The Cartographer Authors', 'manual'),]
+latex_documents = [
+    ('index', 'CartographerROS.tex', u'Cartographer ROS Documentation',
+     u'The Cartographer Authors', 'manual'),
+]
 
 # The name of an image file (relative to this directory) to place at the top of
 # the title page.
@@ -270,6 +271,6 @@ texinfo_documents = [
 #texinfo_no_detailmenu = False
 
 intersphinx_mapping = {
-    'cartographer': ('https://google-cartographer.readthedocs.io/en/latest/',
-                     None)
+    'cartographer':
+        ('https://google-cartographer.readthedocs.io/en/latest/', None)
 }

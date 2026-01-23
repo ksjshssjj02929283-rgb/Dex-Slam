@@ -4,14 +4,16 @@
  * @brief 读取pbsream文件，融合子地图，生成ros消息格式的栅格地图
  * @version 0.1
  * @date 2023-05-22
- * 
+ *
  * @copyright Copyright (c) 2023
- * 
+ *
  */
 
 // Publishes a frozen nav_msgs/OccupancyGrid map from serialized submaps.
 
 #include <map>
+#include <nav_msgs/msg/occupancy_grid.hpp>
+#include <rclcpp/rclcpp.hpp>
 #include <string>
 
 #include "cartographer/io/proto_stream.h"
@@ -26,8 +28,6 @@
 #include "cartographer_ros/ros_map.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
-#include <nav_msgs/msg/occupancy_grid.hpp>
-#include <rclcpp/rclcpp.hpp>
 
 DEFINE_string(pbstream_filename, "",
               "Filename of a pbstream to draw a map from.");
@@ -38,11 +38,11 @@ DEFINE_double(resolution, 0.05, "Resolution of a grid cell in the drawn map.");
 namespace cartographer_ros {
 namespace {
 /**
- * @brief 
- * 
- * @param[in] pbstream_filename 
- * @param[in] resolution 
- * @return std::unique_ptr<nav_msgs::msg::OccupancyGrid> 
+ * @brief
+ *
+ * @param[in] pbstream_filename
+ * @param[in] resolution
+ * @return std::unique_ptr<nav_msgs::msg::OccupancyGrid>
  */
 std::unique_ptr<nav_msgs::msg::OccupancyGrid> LoadOccupancyGridMsg(
     const std::string& pbstream_filename, const double resolution) {
@@ -72,9 +72,11 @@ void Run(const std::string& pbstream_filename, const std::string& map_topic,
       rclcpp::Node::make_shared("cartographer_pbstream_map_publisher");
   std::unique_ptr<nav_msgs::msg::OccupancyGrid> msg_ptr =
       LoadOccupancyGridMsg(pbstream_filename, resolution);
-  // noted by hz: Qos被用来配置数据传输的各种参数，这里的意思是如果发布者发布消息的速度超过订阅者的处理速度，订阅者只保留最新的一条消息。其他就消息将丢弃  
-  auto pub = cartographer_pbstream_map_publisher_node->create_publisher<nav_msgs::msg::OccupancyGrid>(
-      map_topic, rclcpp::QoS(1).transient_local());
+  // noted by hz:
+  // Qos被用来配置数据传输的各种参数，这里的意思是如果发布者发布消息的速度超过订阅者的处理速度，订阅者只保留最新的一条消息。其他就消息将丢弃
+  auto pub = cartographer_pbstream_map_publisher_node
+                 ->create_publisher<nav_msgs::msg::OccupancyGrid>(
+                     map_topic, rclcpp::QoS(1).transient_local());
 
   LOG(INFO) << "Publishing occupancy grid topic " << map_topic
             << " (frame_id: " << map_frame_id

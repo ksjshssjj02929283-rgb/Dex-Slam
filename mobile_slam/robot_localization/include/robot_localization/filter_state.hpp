@@ -36,13 +36,13 @@
 #define ROBOT_LOCALIZATION__FILTER_STATE_HPP_
 
 #include <memory>
+
 #include "Eigen/Dense"
 #include "rclcpp/duration.hpp"
 #include "rclcpp/macros.hpp"
 #include "rclcpp/time.hpp"
 
-namespace robot_localization
-{
+namespace robot_localization {
 
 /**
  * @brief Structure used for storing and comparing filter states
@@ -51,34 +51,33 @@ namespace robot_localization
  * history. Measurement units are assumed to be in meters and radians. Times are
  * real-valued and measured in seconds.
  */
-struct FilterState
-{
-  FilterState()
-  : state_(), estimate_error_covariance_(), latest_control_(),
-    last_measurement_time_(0.0), latest_control_time_(0)
-  {
-  }
+struct FilterState {
+    FilterState()
+        : state_(),
+          estimate_error_covariance_(),
+          latest_control_(),
+          last_measurement_time_(0.0),
+          latest_control_time_(0) {}
 
-  // The filter state vector
-  Eigen::VectorXd state_;
+    // The filter state vector
+    Eigen::VectorXd state_;
 
-  // The filter error covariance matrix
-  Eigen::MatrixXd estimate_error_covariance_;
+    // The filter error covariance matrix
+    Eigen::MatrixXd estimate_error_covariance_;
 
-  // The most recent control vector
-  Eigen::VectorXd latest_control_;
+    // The most recent control vector
+    Eigen::VectorXd latest_control_;
 
-  // The time stamp of the most recent measurement for the filter
-  rclcpp::Time last_measurement_time_;
+    // The time stamp of the most recent measurement for the filter
+    rclcpp::Time last_measurement_time_;
 
-  // The time stamp of the most recent control term
-  rclcpp::Time latest_control_time_;
+    // The time stamp of the most recent control term
+    rclcpp::Time latest_control_time_;
 
-  // We want the queue to be sorted from latest to earliest timestamps.
-  bool operator()(const FilterState & a, const FilterState & b)
-  {
-    return a.last_measurement_time_ < b.last_measurement_time_;
-  }
+    // We want the queue to be sorted from latest to earliest timestamps.
+    bool operator()(const FilterState& a, const FilterState& b) {
+        return a.last_measurement_time_ < b.last_measurement_time_;
+    }
 };
 using FilterStatePtr = std::shared_ptr<FilterState>;
 

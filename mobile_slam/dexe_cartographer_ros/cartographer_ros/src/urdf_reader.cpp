@@ -4,9 +4,9 @@
  * @brief 从urdf读取静态tf
  * @version 0.1
  * @date 2023-05-19
- * 
+ *
  * @copyright Copyright (c) 2023
- * 
+ *
  */
 
 #include "cartographer_ros/urdf_reader.h"
@@ -20,7 +20,8 @@
 namespace cartographer_ros {
 
 std::vector<geometry_msgs::msg::TransformStamped> ReadStaticTransformsFromUrdf(
-    const std::string& urdf_filename, std::shared_ptr<tf2_ros::Buffer> tf_buffer) {
+    const std::string& urdf_filename,
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer) {
   urdf::Model model;
   CHECK(model.initFile(urdf_filename));
   std::vector<urdf::LinkSharedPtr> links;

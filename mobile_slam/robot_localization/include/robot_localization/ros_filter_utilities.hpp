@@ -33,35 +33,31 @@
 #ifndef ROBOT_LOCALIZATION__ROS_FILTER_UTILITIES_HPP_
 #define ROBOT_LOCALIZATION__ROS_FILTER_UTILITIES_HPP_
 
-#include <Eigen/Dense>
-
-#include <tf2_ros/buffer.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Transform.h>
+#include <tf2_ros/buffer.h>
 
+#include <Eigen/Dense>
 #include <iomanip>
 #include <iostream>
+#include <rclcpp/time.hpp>
 #include <string>
 #include <vector>
 
-#include <rclcpp/time.hpp>
-
-#define RF_DEBUG(msg) \
-  if (filter_.getDebug()) { \
-    debug_stream_ << msg; \
-  }
+#define RF_DEBUG(msg)         \
+    if (filter_.getDebug()) { \
+        debug_stream_ << msg; \
+    }
 
 // Handy methods for debug output
-std::ostream & operator<<(std::ostream & os, const tf2::Vector3 & vec);
-std::ostream & operator<<(std::ostream & os, const tf2::Quaternion & quat);
-std::ostream & operator<<(std::ostream & os, const tf2::Transform & trans);
-std::ostream & operator<<(std::ostream & os, const std::vector<double> & vec);
-std::ostream & operator<<(std::ostream & os, const std::vector<bool> & vec);
+std::ostream& operator<<(std::ostream& os, const tf2::Vector3& vec);
+std::ostream& operator<<(std::ostream& os, const tf2::Quaternion& quat);
+std::ostream& operator<<(std::ostream& os, const tf2::Transform& trans);
+std::ostream& operator<<(std::ostream& os, const std::vector<double>& vec);
+std::ostream& operator<<(std::ostream& os, const std::vector<bool>& vec);
 
-namespace robot_localization
-{
-namespace ros_filter_utilities
-{
+namespace robot_localization {
+namespace ros_filter_utilities {
 
 double getYaw(const tf2::Quaternion quat);
 
@@ -83,14 +79,13 @@ double getYaw(const tf2::Quaternion quat);
 //! frame_id to itself. If any of these checks succeed, the method sets the
 //! value of @p targetFrameTrans and returns true, otherwise it returns false.
 //!
-bool lookupTransformSafe(
-  const tf2_ros::Buffer * buffer,
-  const std::string & target_frame,
-  const std::string & source_frame,
-  const rclcpp::Time & time,
-  const rclcpp::Duration & timeout,
-  tf2::Transform & target_frame_trans,
-  const bool silent = false);
+bool lookupTransformSafe(const tf2_ros::Buffer* buffer,
+                         const std::string& target_frame,
+                         const std::string& source_frame,
+                         const rclcpp::Time& time,
+                         const rclcpp::Duration& timeout,
+                         tf2::Transform& target_frame_trans,
+                         const bool silent = false);
 
 //! @brief Method for safely obtaining transforms.
 //! @param[in] buffer - tf buffer object to use for looking up the transform
@@ -109,13 +104,12 @@ bool lookupTransformSafe(
 //! frame_id to itself. If any of these checks succeed, the method sets the
 //! value of @p targetFrameTrans and returns true, otherwise it returns false.
 //!
-bool lookupTransformSafe(
-  const tf2_ros::Buffer * buffer,
-  const std::string & targetFrame,
-  const std::string & sourceFrame,
-  const rclcpp::Time & time,
-  tf2::Transform & targetFrameTrans,
-  const bool silent = false);
+bool lookupTransformSafe(const tf2_ros::Buffer* buffer,
+                         const std::string& targetFrame,
+                         const std::string& sourceFrame,
+                         const rclcpp::Time& time,
+                         tf2::Transform& targetFrameTrans,
+                         const bool silent = false);
 
 //! @brief Utility method for converting quaternion to RPY
 //! @param[in] quat - The quaternion to convert
@@ -123,21 +117,19 @@ bool lookupTransformSafe(
 //! @param[out] pitch - The converted pitch
 //! @param[out] yaw - The converted yaw
 //!
-void quatToRPY(
-  const tf2::Quaternion & quat, double & roll, double & pitch,
-  double & yaw);
+void quatToRPY(const tf2::Quaternion& quat, double& roll, double& pitch, double& yaw);
 
 //! @brief Converts our Eigen state vector into a TF transform/pose
 //! @param[in] state - The state to convert
 //! @param[out] stateTF - The converted state
 //!
-void stateToTF(const Eigen::VectorXd & state, tf2::Transform & stateTF);
+void stateToTF(const Eigen::VectorXd& state, tf2::Transform& stateTF);
 
 //! @brief Converts a TF transform/pose into our Eigen state vector
 //! @param[in] stateTF - The state to convert
 //! @param[out] state - The converted state
 //!
-void TFtoState(const tf2::Transform & stateTF, Eigen::VectorXd & state);
+void TFtoState(const tf2::Transform& stateTF, Eigen::VectorXd& state);
 
 }  // namespace ros_filter_utilities
 }  // namespace robot_localization

@@ -59,11 +59,16 @@ std::unique_ptr<carto::sensor::OdometryData> SensorBridge::ToOdometryData(
   }
   return absl::make_unique<carto::sensor::OdometryData>(
       carto::sensor::OdometryData{
-          time, ToRigid3d(msg->pose.pose) * sensor_to_tracking->inverse()}); // noted by hz: 将里程计的pose转换到tracking_frame坐标系
+          time,
+          ToRigid3d(msg->pose.pose) *
+              sensor_to_tracking
+                  ->inverse()});  // noted by hz:
+                                  // 将里程计的pose转换到tracking_frame坐标系
 }
 
 void SensorBridge::HandleOdometryMessage(
-    const std::string& sensor_id, const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
+    const std::string& sensor_id,
+    const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
   std::unique_ptr<carto::sensor::OdometryData> odometry_data =
       ToOdometryData(msg);
   if (odometry_data != nullptr) {
@@ -74,7 +79,8 @@ void SensorBridge::HandleOdometryMessage(
 }
 
 void SensorBridge::HandleNavSatFixMessage(
-    const std::string& sensor_id, const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg) {
+    const std::string& sensor_id,
+    const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg) {
   const carto::common::Time time = FromRos(msg->header.stamp);
   if (msg->status.status == sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX) {
     trajectory_builder_->AddSensorData(
@@ -143,8 +149,9 @@ std::unique_ptr<carto::sensor::ImuData> SensorBridge::ToImuData(
       sensor_to_tracking->rotation() * ToEigen(msg->angular_velocity)});
 }
 
-void SensorBridge::HandleImuMessage(const std::string& sensor_id,
-                                    const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
+void SensorBridge::HandleImuMessage(
+    const std::string& sensor_id,
+    const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
   std::unique_ptr<carto::sensor::ImuData> imu_data = ToImuData(msg);
   if (imu_data != nullptr) {
     trajectory_builder_->AddSensorData(
@@ -155,7 +162,8 @@ void SensorBridge::HandleImuMessage(const std::string& sensor_id,
 }
 
 void SensorBridge::HandleLaserScanMessage(
-    const std::string& sensor_id, const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg) {
+    const std::string& sensor_id,
+    const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg) {
   carto::sensor::PointCloudWithIntensities point_cloud;
   carto::common::Time time;
   std::tie(point_cloud, time) = ToPointCloudWithIntensities(*msg);
@@ -232,19 +240,25 @@ void SensorBridge::HandleRangefinder(
     CHECK_LE(ranges.back().time, 0.f);
   }
 
-  // This was added to get rid of the TimedPointCloudData warning for a missing argument
+  // This was added to get rid of the TimedPointCloudData warning for a missing
+  // argument
   std::vector<float> intensities_;
   // 查找得到在time时刻 tracking frame->sensor frame 的转换
-  const auto sensor_to_tracking =
-      tf_bridge_.LookupToTracking(time, CheckNoLeadingSlash(frame_id)); // CheckNoLeadingSlash(frame_id)去除frame_id前面的斜杠
+  const auto sensor_to_tracking = tf_bridge_.LookupToTracking(
+      time,
+      CheckNoLeadingSlash(
+          frame_id));  // CheckNoLeadingSlash(frame_id)去除frame_id前面的斜杠
   if (sensor_to_tracking != nullptr) {
     // 将激光数据传入前端匹配，然后传入后端，进行优化求解
     // 这里trajectory_builder_声明的类型是接口类/基类，具体的实现在子类/继承类的实现中
     trajectory_builder_->AddSensorData(
-        sensor_id, carto::sensor::TimedPointCloudData{  // 时间戳，点云相对于tracking frame的原点，点云从sensor frame旋转到tracking frame，强度值
+        sensor_id, carto::sensor::TimedPointCloudData{
+                       // 时间戳，点云相对于tracking frame的原点，点云从sensor
+                       // frame旋转到tracking frame，强度值
                        time, sensor_to_tracking->translation().cast<float>(),
                        carto::sensor::TransformTimedPointCloud(
-                           ranges, sensor_to_tracking->cast<float>(), false), intensities_});
+                           ranges, sensor_to_tracking->cast<float>(), false),
+                       intensities_});
   }
 }
 

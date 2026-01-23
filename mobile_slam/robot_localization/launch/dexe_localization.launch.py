@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """
 DCM localization launch file with configurable filter type.
 Supports EKF, UKF, and ESKF filters.
@@ -28,30 +27,35 @@ import os
 
 def launch_setup(context, *args, **kwargs):
     """Setup function to handle conditional logic based on filter type."""
-    
+
     # Get the robot_localization package directory
     robot_localization_dir = get_package_share_directory('robot_localization')
-    
+
     # Get launch configuration values
     filter_type = LaunchConfiguration('filter_type').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
-    
+
     # Determine executable and params file based on filter type
     if filter_type.lower() == 'ekf':
         executable = 'ekf_node'
         node_name = 'ekf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ekf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params',
+                                   'dexe_ekf.yaml')
     elif filter_type.lower() == 'ukf':
         executable = 'ukf_node'
         node_name = 'ukf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_ukf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params',
+                                   'dexe_ukf.yaml')
     elif filter_type.lower() == 'eskf':
         executable = 'eskf_node'
         node_name = 'eskf_filter_node'
-        params_file = os.path.join(robot_localization_dir, 'params', 'dexe_eskf.yaml')
+        params_file = os.path.join(robot_localization_dir, 'params',
+                                   'dexe_eskf.yaml')
     else:
-        raise ValueError(f"Invalid filter_type: {filter_type}. Must be 'ekf', 'ukf', or 'eskf'")
-    
+        raise ValueError(
+            f"Invalid filter_type: {filter_type}. Must be 'ekf', 'ukf', or 'eskf'"
+        )
+
     # Localization node
     localization_node = Node(
         package='robot_localization',
@@ -60,38 +64,32 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         respawn=True,
         respawn_delay=2.0,
-        parameters=[
-            params_file,
-            {'use_sim_time': use_sim_time}
-        ],
+        parameters=[params_file, {
+            'use_sim_time': use_sim_time
+        }],
         remappings=[
             # Add any topic remappings here if needed
             # ('odometry/filtered', '/odometry/local'),
-        ]
-    )
-    
+        ])
+
     return [localization_node]
 
 
 def generate_launch_description():
     """Generate launch description with configurable filter type."""
-    
+
     # Declare launch arguments
     filter_type_arg = DeclareLaunchArgument(
         'filter_type',
         default_value='ukf',
         description='Type of filter to use: ekf, ukf, or eskf',
-        choices=['ekf', 'ukf', 'eskf']
-    )
-    
-    use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='false',
-        description='Use simulation time'
-    )
-    
+        choices=['ekf', 'ukf', 'eskf'])
+
+    use_sim_time_arg = DeclareLaunchArgument('use_sim_time',
+                                             default_value='false',
+                                             description='Use simulation time')
+
     return LaunchDescription([
-        filter_type_arg,
-        use_sim_time_arg,
+        filter_type_arg, use_sim_time_arg,
         OpaqueFunction(function=launch_setup)
     ])

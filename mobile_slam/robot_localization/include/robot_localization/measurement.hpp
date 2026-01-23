@@ -36,18 +36,15 @@
 #define ROBOT_LOCALIZATION__MEASUREMENT_HPP_
 
 #include <Eigen/Dense>
-
 #include <limits>
-#include <string>
-#include <vector>
 #include <memory>
-
 #include <rclcpp/duration.hpp>
 #include <rclcpp/macros.hpp>
 #include <rclcpp/time.hpp>
+#include <string>
+#include <vector>
 
-namespace robot_localization
-{
+namespace robot_localization {
 
 /**
  * @brief Structure used for storing and comparing measurements
@@ -56,52 +53,46 @@ namespace robot_localization
  * Measurement units are assumed to be in meters and radians. Times are
  * real-valued and measured in seconds.
  */
-struct Measurement
-{
-  Measurement()
-  : time_(0), mahalanobis_thresh_(std::numeric_limits<double>::max()),
-    latest_control_time_(0), topic_name_(""), latest_control_()
-  {
-  }
+struct Measurement {
+    Measurement()
+        : time_(0),
+          mahalanobis_thresh_(std::numeric_limits<double>::max()),
+          latest_control_time_(0),
+          topic_name_(""),
+          latest_control_() {}
 
-  // The real-valued time, in seconds, since some epoch (presumably the start of
-  // execution, but any will do)
-  rclcpp::Time time_;
+    // The real-valued time, in seconds, since some epoch (presumably the start of
+    // execution, but any will do)
+    rclcpp::Time time_;
 
-  // The Mahalanobis distance threshold in number of sigmas
-  double mahalanobis_thresh_;
+    // The Mahalanobis distance threshold in number of sigmas
+    double mahalanobis_thresh_;
 
-  // The time stamp of the most recent control term (needed for lagged data)
-  rclcpp::Time latest_control_time_;
+    // The time stamp of the most recent control term (needed for lagged data)
+    rclcpp::Time latest_control_time_;
 
-  // The topic name for this measurement. Needed for capturing previous state
-  // values for new measurements.
-  std::string topic_name_;
+    // The topic name for this measurement. Needed for capturing previous state
+    // values for new measurements.
+    std::string topic_name_;
 
-  // This defines which variables within this measurement actually get passed
-  // into the filter. std::vector<bool> is generally frowned upon, so we use
-  // ints.
-  std::vector<bool> update_vector_;
+    // This defines which variables within this measurement actually get passed
+    // into the filter. std::vector<bool> is generally frowned upon, so we use
+    // ints.
+    std::vector<bool> update_vector_;
 
-  // The most recent control vector (needed for lagged data)
-  Eigen::VectorXd latest_control_;
+    // The most recent control vector (needed for lagged data)
+    Eigen::VectorXd latest_control_;
 
-  // The measurement and its associated covariance
-  Eigen::VectorXd measurement_;
-  Eigen::MatrixXd covariance_;
+    // The measurement and its associated covariance
+    Eigen::VectorXd measurement_;
+    Eigen::MatrixXd covariance_;
 
-  // We want earlier times to have greater priority
-  bool operator()(
-    const std::shared_ptr<Measurement> & a,
-    const std::shared_ptr<Measurement> & b)
-  {
-    return (*this)(*(a.get()), *(b.get()));
-  }
+    // We want earlier times to have greater priority
+    bool operator()(const std::shared_ptr<Measurement>& a, const std::shared_ptr<Measurement>& b) {
+        return (*this)(*(a.get()), *(b.get()));
+    }
 
-  bool operator()(const Measurement & a, const Measurement & b)
-  {
-    return a.time_ > b.time_;
-  }
+    bool operator()(const Measurement& a, const Measurement& b) { return a.time_ > b.time_; }
 };
 using MeasurementPtr = std::shared_ptr<Measurement>;
 

@@ -19,21 +19,19 @@
 
 #include <functional>
 #include <memory>
+#include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <vector>
 
-#include <rclcpp/rclcpp.hpp>
 #include "cartographer/mapping/map_builder_interface.h"
 #include "cartographer_ros/node_options.h"
 
 namespace cartographer_ros {
 
-using MapBuilderFactory =
-    std::function<std::unique_ptr<::cartographer::mapping::MapBuilderInterface>(
-        const ::cartographer::mapping::proto::MapBuilderOptions&)>;
+using MapBuilderFactory = std::function<std::unique_ptr<::cartographer::mapping::MapBuilderInterface>(
+    const ::cartographer::mapping::proto::MapBuilderOptions&)>;
 
-void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
-                    rclcpp::Node::SharedPtr cartographer_offline_node);
+void RunOfflineNode(const MapBuilderFactory& map_builder_factory, rclcpp::Node::SharedPtr cartographer_offline_node);
 
 }  // namespace cartographer_ros
 

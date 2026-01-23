@@ -4,9 +4,9 @@
  * @brief 固定的topic与service的名字, Topic名字可以通过launch里的remap来更改
  * @version 0.1
  * @date 2023-05-22
- * 
+ *
  * @copyright Copyright (c) 2023
- * 
+ *
  */
 
 #ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_NODE_CONSTANTS_H
@@ -18,7 +18,7 @@
 namespace cartographer_ros {
 
 // Default topic names; expected to be remapped as needed.
-constexpr char kLaserScanTopic[] = "scan"; // scan_1
+constexpr char kLaserScanTopic[] = "scan";  // scan_1
 constexpr char kMultiEchoLaserScanTopic[] = "echoes";
 constexpr char kPointCloud2Topic[] = "points2";
 constexpr char kImuTopic[] = "imu";
@@ -46,8 +46,7 @@ constexpr int kInfiniteSubscriberQueueSize = 0;
 constexpr int kLatestOnlyPublisherQueueSize = 1;
 
 // For multiple topics adds numbers to the topic name and returns the list.
-std::vector<std::string> ComputeRepeatedTopicNames(const std::string& topic,
-                                                   int num_topics);
+std::vector<std::string> ComputeRepeatedTopicNames(const std::string& topic, int num_topics);
 
 }  // namespace cartographer_ros
 

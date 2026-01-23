@@ -18,6 +18,7 @@
 
 #include <cmath>
 
+#include "builtin_interfaces/msg/time.hpp"
 #include "cartographer/common/math.h"
 #include "cartographer/common/port.h"
 #include "cartographer/common/time.h"
@@ -35,7 +36,6 @@
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
 #include "pcl_conversions/pcl_conversions.h"
-#include "builtin_interfaces/msg/time.hpp"
 //#include "ros/serialization.h"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
@@ -85,9 +85,9 @@ using ::cartographer::transform::Rigid3d;
 using ::cartographer_ros_msgs::msg::LandmarkEntry;
 using ::cartographer_ros_msgs::msg::LandmarkList;
 
-sensor_msgs::msg::PointCloud2 PreparePointCloud2Message(const int64_t timestamp,
-                                                   const std::string& frame_id,
-                                                   const int num_points) {
+sensor_msgs::msg::PointCloud2 PreparePointCloud2Message(
+    const int64_t timestamp, const std::string& frame_id,
+    const int num_points) {
   sensor_msgs::msg::PointCloud2 msg;
   msg.header.stamp = ToRos(::cartographer::common::FromUniversal(timestamp));
   msg.header.frame_id = frame_id;
@@ -191,7 +191,7 @@ sensor_msgs::msg::PointCloud2 ToPointCloud2Message(
     const ::cartographer::sensor::TimedPointCloud& point_cloud) {
   auto msg = PreparePointCloud2Message(timestamp, frame_id, point_cloud.size());
   size_t offset = 0;
-  float * const data = reinterpret_cast<float*>(&msg.data[0]);
+  float* const data = reinterpret_cast<float*>(&msg.data[0]);
   for (const auto& point : point_cloud) {
     data[offset++] = point.position.x();
     data[offset++] = point.position.y();

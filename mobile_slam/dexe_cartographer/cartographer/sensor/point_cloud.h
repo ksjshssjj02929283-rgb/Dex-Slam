@@ -111,13 +111,12 @@ PointCloud TransformPointCloud(const PointCloud& point_cloud,
 
 // Transforms 'point_cloud' according to 'transform'.
 // TimedPointCloud TransformTimedPointCloud(const TimedPointCloud& point_cloud,
-//                                          const transform::Rigid3f& transform);
+//                                          const transform::Rigid3f&
+//                                          transform);
 // added by hz
-TimedPointCloud TransformTimedPointCloud(const TimedPointCloud& point_cloud,
-                                         const transform::Rigid3f& transformbool,
-                                         bool if_filter = false,
-                                         float robot_x = 0.6,
-                                         float robot_y = 0.3);
+TimedPointCloud TransformTimedPointCloud(
+    const TimedPointCloud& point_cloud, const transform::Rigid3f& transformbool,
+    bool if_filter = false, float robot_x = 0.6, float robot_y = 0.3);
 // added by hz end
 
 // Returns a new point cloud without points that fall outside the region defined

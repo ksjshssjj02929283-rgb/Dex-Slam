@@ -18,6 +18,7 @@
 #define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_SUBMAP_H
 
 #include <memory>
+#include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <vector>
 
@@ -26,7 +27,6 @@
 #include "cartographer/mapping/id.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer_ros_msgs/srv/submap_query.hpp"
-#include <rclcpp/rclcpp.hpp>
 
 namespace cartographer_ros {
 

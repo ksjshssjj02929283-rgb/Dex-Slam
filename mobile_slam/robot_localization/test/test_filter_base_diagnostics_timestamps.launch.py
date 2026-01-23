@@ -30,7 +30,7 @@ from ament_index_python.packages import get_package_prefix
 
 def generate_launch_description():
     parameters_file_dir = pathlib.Path(__file__).resolve().parent
-    parameters_file_path = parameters_file_dir / 'test_filter_base_diagnostics_timestamps.yaml'    
+    parameters_file_path = parameters_file_dir / 'test_filter_base_diagnostics_timestamps.yaml'
     os.environ['FILE_PATH'] = str(parameters_file_dir)
 
     ekf_node = launch_ros.actions.Node(
@@ -39,20 +39,28 @@ def generate_launch_description():
         name='test_filter_base_diagnostics_timestamps',
         output='screen',
         parameters=[
-        parameters_file_path,
-        str(parameters_file_path),
-        [EnvironmentVariable(name='FILE_PATH'), os.sep, 'test_filter_base_diagnostics_timestamps.yaml'],
-       ],)
+            parameters_file_path,
+            str(parameters_file_path),
+            [
+                EnvironmentVariable(name='FILE_PATH'), os.sep,
+                'test_filter_base_diagnostics_timestamps.yaml'
+            ],
+        ],
+    )
 
     return LaunchDescription([
         ekf_node,
     ])
 
+
 def main(argv=sys.argv[1:]):
     ld = generate_launch_description()
 
     test1_action = ExecuteProcess(
-        cmd=[get_package_prefix('robot_localization') + '/lib/robot_localization/test_filter_base_diagnostics_timestamps'],
+        cmd=[
+            get_package_prefix('robot_localization') +
+            '/lib/robot_localization/test_filter_base_diagnostics_timestamps'
+        ],
         output='screen',
     )
 
@@ -61,6 +69,7 @@ def main(argv=sys.argv[1:]):
     ls = LaunchService(argv=argv)
     ls.include_launch_description(ld)
     return lts.run(ls)
+
 
 if __name__ == '__main__':
     sys.exit(main())

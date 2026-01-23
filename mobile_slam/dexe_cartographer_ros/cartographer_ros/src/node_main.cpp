@@ -21,7 +21,8 @@
 #include "cartographer_ros/ros_log_sink.h"
 #include "gflags/gflags.h"
 #include "tf2_ros/transform_listener.h"
-// noted by hz: 通过 gflags 或 glog 从命令行获取参数，这些都可以在launch文件中设置参数
+// noted by hz: 通过 gflags 或 glog
+// 从命令行获取参数，这些都可以在launch文件中设置参数
 DEFINE_bool(collect_metrics, false,
             "Activates the collection of runtime metrics. If activated, the "
             "metrics can be accessed via a ROS service.");
@@ -60,36 +61,38 @@ void Run() {
   // added by hz
   bool flag_localization = false;
   // end
-  rclcpp::Node::SharedPtr cartographer_node = rclcpp::Node::make_shared("cartographer_node");
+  rclcpp::Node::SharedPtr cartographer_node =
+      rclcpp::Node::make_shared("cartographer_node");
 
   constexpr double kTfBufferCacheTimeInSeconds = 10.;
   // noted by hz: 存放tf的buffer
   std::shared_ptr<tf2_ros::Buffer> tf_buffer =
       std::make_shared<tf2_ros::Buffer>(
-        cartographer_node->get_clock(),
-        tf2::durationFromSec(kTfBufferCacheTimeInSeconds),
-        cartographer_node);
+          cartographer_node->get_clock(),
+          tf2::durationFromSec(kTfBufferCacheTimeInSeconds), cartographer_node);
   // noted by hz: 监听tf
   std::shared_ptr<tf2_ros::TransformListener> tf_listener =
       std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
-  // noted by hz: 通过 gflags 或 glog 从命令行获取参数，这些都可以在launch文件中设置参数
-  // 比如：./your_program --configuration_directory=/path/to/configs
+  // noted by hz: 通过 gflags 或 glog
+  // 从命令行获取参数，这些都可以在launch文件中设置参数 比如：./your_program
+  // --configuration_directory=/path/to/configs
   NodeOptions node_options;
   TrajectoryOptions trajectory_options;
   std::tie(node_options, trajectory_options) =
       LoadOptions(FLAGS_configuration_directory, FLAGS_configuration_basename);
-  // noted by hz: 实例化SLAM算法，初始化地图构建器，位姿图 优化问题 是否合并多激光雷达数据
+  // noted by hz: 实例化SLAM算法，初始化地图构建器，位姿图 优化问题
+  // 是否合并多激光雷达数据
   auto map_builder =
-    cartographer::mapping::CreateMapBuilder(node_options.map_builder_options);
+      cartographer::mapping::CreateMapBuilder(node_options.map_builder_options);
   // noted by hz: 注册SLAM算法节点，并传入参数
   auto node = std::make_shared<cartographer_ros::Node>(
-    node_options, std::move(map_builder), tf_buffer, cartographer_node,
-    FLAGS_collect_metrics);
+      node_options, std::move(map_builder), tf_buffer, cartographer_node,
+      FLAGS_collect_metrics);
   // noted by hz: 如果pbstream不为空，载入pbstream文件(纯定位模式会用到)
   // 加载pbstream文件的函数调用逻辑
-  // node_main.cpp -> 
-  // node.cpp -> 
-  // map_builder_bridge.cpp -> 
+  // node_main.cpp ->
+  // node.cpp ->
+  // map_builder_bridge.cpp ->
   // map_builder_interface.h(在这里LoadState是纯虚函数)
   if (!FLAGS_load_state_filename.empty()) {
     node->LoadState(FLAGS_load_state_filename, FLAGS_load_frozen_state);
@@ -98,23 +101,34 @@ void Run() {
     // end
   }
   // noted by hz: 使用默认topic开始轨迹
-  // 建图逻辑在这里实现？？？ 
+  // 建图逻辑在这里实现？？？
   // node_main ->
   //
-  // node / void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options) ->
+  // node / void StartTrajectoryWithDefaultTopics(const TrajectoryOptions&
+  // options) ->
   //
   // node / int AddTrajectory(const TrajectoryOptions& options) ->
   //
-  // map_builder_bridge / int AddTrajectory(const std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>&expected_sensor_ids,const TrajectoryOptions& trajectory_options) ->
+  // map_builder_bridge / int AddTrajectory(const
+  // std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>&expected_sensor_ids,const
+  // TrajectoryOptions& trajectory_options) ->
   //
-  // map_builder_interface / int AddTrajectoryBuilder(const std::set<SensorId> &expected_sensor_ids,const proto::TrajectoryBuilderOptions &trajectory_options,LocalSlamResultCallback local_slam_result_callback) override ->
+  // map_builder_interface / int AddTrajectoryBuilder(const std::set<SensorId>
+  // &expected_sensor_ids,const proto::TrajectoryBuilderOptions
+  // &trajectory_options,LocalSlamResultCallback local_slam_result_callback)
+  // override ->
   //    这里map_builder_interface只是个接口，实际实现是在map_builder
 
-  std::cout << "FLAGS_initial_poses_filename: " << FLAGS_initial_poses_filename << std::endl;
-  std::cout << "FLAGS_apriltag_poses_filename: " << FLAGS_apriltag_poses_filename << std::endl;
-  std::cout << "FLAGS_location_name: " << FLAGS_location_name << "\n" << std::endl;
+  std::cout << "FLAGS_initial_poses_filename: " << FLAGS_initial_poses_filename
+            << std::endl;
+  std::cout << "FLAGS_apriltag_poses_filename: "
+            << FLAGS_apriltag_poses_filename << std::endl;
+  std::cout << "FLAGS_location_name: " << FLAGS_location_name << "\n"
+            << std::endl;
   if (FLAGS_start_trajectory_with_default_topics) {
-    node->StartTrajectoryWithDefaultTopics(trajectory_options, flag_localization, FLAGS_initial_poses_filename, FLAGS_apriltag_poses_filename, FLAGS_location_name);
+    node->StartTrajectoryWithDefaultTopics(
+        trajectory_options, flag_localization, FLAGS_initial_poses_filename,
+        FLAGS_apriltag_poses_filename, FLAGS_location_name);
   }
 
   rclcpp::spin(cartographer_node);
@@ -125,7 +139,7 @@ void Run() {
 
   if (!FLAGS_save_state_filename.empty()) {
     node->SerializeState(FLAGS_save_state_filename,
-                        true /* include_unfinished_submaps */);
+                         true /* include_unfinished_submaps */);
   }
 }
 

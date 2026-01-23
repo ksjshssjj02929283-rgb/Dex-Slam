@@ -24,9 +24,10 @@ namespace cartographer_ros {
 // TODO: png ?
 void WritePgm(const ::cartographer::io::Image& image, const double resolution,
               ::cartographer::io::FileWriter* file_writer) {
-  const std::string header =
-      "P5\n# Cartographer map; " + std::to_string(resolution) + " m/pixel\n" +
-      std::to_string(image.width()) + " " + std::to_string(image.height()) + "\n255\n";
+  const std::string header = "P5\n# Cartographer map; " +
+                             std::to_string(resolution) + " m/pixel\n" +
+                             std::to_string(image.width()) + " " +
+                             std::to_string(image.height()) + "\n255\n";
   file_writer->Write(header.data(), header.size());
   for (int y = 0; y < image.height(); ++y) {
     for (int x = 0; x < image.width(); ++x) {
@@ -42,15 +43,16 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
   // Magic constants taken directly from ros map_saver code:
   // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
   // TODO: check ROS2 map format
-  // added by hz 
+  // added by hz
   // 只保留地图文件名
   std::string tmp_pgm_filename = pgm_filename;
   std::filesystem::path p(tmp_pgm_filename);
   tmp_pgm_filename = p.filename().string();
   // end
   const std::string output =
-      "image: " + tmp_pgm_filename + "\n" + "resolution: " + std::to_string(resolution) + "\n" +
-      "origin: [" + std::to_string(origin.x()) + ", " + std::to_string(origin.y()) +
+      "image: " + tmp_pgm_filename + "\n" +
+      "resolution: " + std::to_string(resolution) + "\n" + "origin: [" +
+      std::to_string(origin.x()) + ", " + std::to_string(origin.y()) +
       ", 0.0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n";
   file_writer->Write(output.data(), output.size());
 }

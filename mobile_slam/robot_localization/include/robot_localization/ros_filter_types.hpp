@@ -33,14 +33,13 @@
 #ifndef ROBOT_LOCALIZATION__ROS_FILTER_TYPES_HPP_
 #define ROBOT_LOCALIZATION__ROS_FILTER_TYPES_HPP_
 
-#include "robot_localization/ros_filter.hpp"
 #include "robot_localization/ekf.hpp"
+#include "robot_localization/ros_filter.hpp"
 #include "robot_localization/ukf.hpp"
 
-namespace robot_localization
-{
+namespace robot_localization {
 typedef RosFilter<Ukf> RosUkf;
 typedef RosFilter<Ekf> RosEkf;
-}
+}  // namespace robot_localization
 
 #endif  // ROBOT_LOCALIZATION__ROS_FILTER_TYPES_HPP_

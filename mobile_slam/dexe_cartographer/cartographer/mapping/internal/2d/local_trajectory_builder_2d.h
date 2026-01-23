@@ -44,14 +44,15 @@ namespace mapping {
 class LocalTrajectoryBuilder2D {
  public:
   struct InsertionResult {
-    std::shared_ptr<const TrajectoryNode::Data> constant_data; // 前端匹配用的数据和计算出来的local坐标系下的位姿
+    std::shared_ptr<const TrajectoryNode::Data>
+        constant_data;  // 前端匹配用的数据和计算出来的local坐标系下的位姿
     std::vector<std::shared_ptr<const Submap2D>> insertion_submaps;
   };
   // 扫描匹配的结果
   struct MatchingResult {
     common::Time time;
     transform::Rigid3d local_pose;
-    sensor::RangeData range_data_in_local; // 经过扫描匹配校准之后的雷达数据
+    sensor::RangeData range_data_in_local;  // 经过扫描匹配校准之后的雷达数据
     // 'nullptr' if dropped by the motion filter.
     std::unique_ptr<const InsertionResult> insertion_result;
   };

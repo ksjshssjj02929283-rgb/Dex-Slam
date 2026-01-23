@@ -77,12 +77,14 @@ TrajectoryOptions CreateTrajectoryOptions(
   options.landmarks_sampling_ratio =
       lua_parameter_dictionary->GetDouble("landmarks_sampling_ratio");
   // added by hz
-//   options.use_apriltag_pose = lua_parameter_dictionary->GetBool("use_apriltag_pose");
-  options.use_predefined_init_pose = lua_parameter_dictionary->GetBool("use_predefined_init_pose");
-//   options.use_initial_pose =
-//       lua_parameter_dictionary->GetBool("use_initial_pose");
+  //   options.use_apriltag_pose =
+  //   lua_parameter_dictionary->GetBool("use_apriltag_pose");
+  options.use_predefined_init_pose =
+      lua_parameter_dictionary->GetBool("use_predefined_init_pose");
+  //   options.use_initial_pose =
+  //       lua_parameter_dictionary->GetBool("use_initial_pose");
   // added by hz end
-  
+
   CheckTrajectoryOptions(options);
   return options;
 }

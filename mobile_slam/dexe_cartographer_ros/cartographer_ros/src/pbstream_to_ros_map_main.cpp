@@ -4,12 +4,13 @@
  * @brief 读取pbstream文件，融合子地图，生成pgm和yaml格式地图文件
  * @version 0.1
  * @date 2023-05-22
- * 
+ *
  * @copyright Copyright (c) 2023
- * 
+ *
  */
 
 #include <map>
+#include <rclcpp/rclcpp.hpp>
 #include <string>
 
 #include "cartographer/io/proto_stream.h"
@@ -21,7 +22,6 @@
 #include "cartographer_ros/ros_map.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
-#include <rclcpp/rclcpp.hpp>
 
 DEFINE_string(pbstream_filename, "",
               "Filename of a pbstream to draw a map from.");

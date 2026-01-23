@@ -28,50 +28,49 @@ namespace cartographer_ros {
 namespace metrics {
 
 class Gauge : public ::cartographer::metrics::Gauge {
- public:
-  explicit Gauge(const std::map<std::string, std::string>& labels)
-      : labels_(labels), value_(0.) {}
+public:
+    explicit Gauge(const std::map<std::string, std::string>& labels) : labels_(labels), value_(0.) {}
 
-  void Decrement(const double value) override { Add(-1. * value); }
+    void Decrement(const double value) override { Add(-1. * value); }
 
-  void Decrement() override { Decrement(1.); }
+    void Decrement() override { Decrement(1.); }
 
-  void Increment(const double value) override { Add(value); }
+    void Increment(const double value) override { Add(value); }
 
-  void Increment() override { Increment(1.); }
+    void Increment() override { Increment(1.); }
 
-  void Set(double value) override {
-    absl::MutexLock lock(&mutex_);
-    value_ = value;
-  }
-
-  double Value() {
-    absl::MutexLock lock(&mutex_);
-    return value_;
-  }
-
-  cartographer_ros_msgs::msg::Metric ToRosMessage() {
-    cartographer_ros_msgs::msg::Metric msg;
-    msg.type = cartographer_ros_msgs::msg::Metric::TYPE_GAUGE;
-    for (const auto& label : labels_) {
-      cartographer_ros_msgs::msg::MetricLabel label_msg;
-      label_msg.key = label.first;
-      label_msg.value = label.second;
-      msg.labels.push_back(label_msg);
+    void Set(double value) override {
+        absl::MutexLock lock(&mutex_);
+        value_ = value;
     }
-    msg.value = Value();
-    return msg;
-  }
 
- private:
-  void Add(const double value) {
-    absl::MutexLock lock(&mutex_);
-    value_ += value;
-  }
+    double Value() {
+        absl::MutexLock lock(&mutex_);
+        return value_;
+    }
 
-  absl::Mutex mutex_;
-  const std::map<std::string, std::string> labels_;
-  double value_ GUARDED_BY(mutex_);
+    cartographer_ros_msgs::msg::Metric ToRosMessage() {
+        cartographer_ros_msgs::msg::Metric msg;
+        msg.type = cartographer_ros_msgs::msg::Metric::TYPE_GAUGE;
+        for (const auto& label : labels_) {
+            cartographer_ros_msgs::msg::MetricLabel label_msg;
+            label_msg.key = label.first;
+            label_msg.value = label.second;
+            msg.labels.push_back(label_msg);
+        }
+        msg.value = Value();
+        return msg;
+    }
+
+private:
+    void Add(const double value) {
+        absl::MutexLock lock(&mutex_);
+        value_ += value;
+    }
+
+    absl::Mutex mutex_;
+    const std::map<std::string, std::string> labels_;
+    double value_ GUARDED_BY(mutex_);
 };
 
 }  // namespace metrics

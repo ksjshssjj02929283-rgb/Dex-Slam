@@ -21,8 +21,8 @@
 #include <memory>
 #include <vector>
 
-#include "cartographer/common/internal/ceres_solver_options.h"
 #include "cartographer/common/histogram.h"
+#include "cartographer/common/internal/ceres_solver_options.h"
 #include "cartographer/mapping/pose_extrapolator_interface.h"
 #include "cartographer/sensor/imu_data.h"
 #include "cartographer/transform/timestamped_transform.h"

@@ -32,30 +32,27 @@
  */
 
 #include <algorithm>
-#include <string>
 #include <memory>
+#include <rclcpp/rclcpp.hpp>
+#include <robot_localization/ros_filter_types.hpp>
+#include <string>
 #include <vector>
 
-#include <robot_localization/ros_filter_types.hpp>
-#include <rclcpp/rclcpp.hpp>
+int main(int argc, char** argv) {
+    rclcpp::init(argc, argv);
+    rclcpp::NodeOptions options;
+    options.arguments({"robot_localization"});
+    std::shared_ptr<robot_localization::RosUkf> filter = std::make_shared<robot_localization::RosUkf>(options);
+    double alpha = filter->declare_parameter("alpha", 0.001);
+    double kappa = filter->declare_parameter("kappa", 0.0);
+    double beta = filter->declare_parameter("beta", 2.0);
+    filter->getFilter().setConstants(alpha, kappa, beta);
+    filter->initialize();
 
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  rclcpp::NodeOptions options;
-  options.arguments({"robot_localization"});
-  std::shared_ptr<robot_localization::RosUkf> filter =
-    std::make_shared<robot_localization::RosUkf>(options);
-  double alpha = filter->declare_parameter("alpha", 0.001);
-  double kappa = filter->declare_parameter("kappa", 0.0);
-  double beta = filter->declare_parameter("beta", 2.0);
-  filter->getFilter().setConstants(alpha, kappa, beta);
-  filter->initialize();
-  
-  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
-  executor.add_node(filter->get_node_base_interface());
-  executor.spin();
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+    executor.add_node(filter->get_node_base_interface());
+    executor.spin();
 
-  rclcpp::shutdown();
-  return 0;
+    rclcpp::shutdown();
+    return 0;
 }

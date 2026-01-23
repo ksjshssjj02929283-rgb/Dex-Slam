@@ -41,8 +41,7 @@ NodeOptions CreateNodeOptions(
   options.trajectory_publish_period_sec =
       lua_parameter_dictionary->GetDouble("trajectory_publish_period_sec");
   if (lua_parameter_dictionary->HasKey("publish_to_tf")) {
-    options.publish_to_tf =
-        lua_parameter_dictionary->GetBool("publish_to_tf");
+    options.publish_to_tf = lua_parameter_dictionary->GetBool("publish_to_tf");
   }
   if (lua_parameter_dictionary->HasKey("publish_tracked_pose")) {
     options.publish_tracked_pose =
@@ -52,22 +51,24 @@ NodeOptions CreateNodeOptions(
     options.use_pose_extrapolator =
         lua_parameter_dictionary->GetBool("use_pose_extrapolator");
   }
-  // new added by hz: 
+  // new added by hz:
   if (lua_parameter_dictionary->HasKey("publish_local_pose")) {
     options.publish_local_pose =
         lua_parameter_dictionary->GetBool("publish_local_pose");
   }
   if (lua_parameter_dictionary->HasKey("sub_initial_pose")) {
     options.sub_initial_pose =
-      lua_parameter_dictionary->GetBool("sub_initial_pose");
+        lua_parameter_dictionary->GetBool("sub_initial_pose");
   }
   if (lua_parameter_dictionary->HasKey("sub_apriltag_pose")) {
     options.sub_apriltag_pose =
-      lua_parameter_dictionary->GetBool("sub_apriltag_pose");
+        lua_parameter_dictionary->GetBool("sub_apriltag_pose");
   }
-//   options.localization_local_frame = lua_parameter_dictionary->GetString("localization_local_frame");
-  options.localPoseTopic = lua_parameter_dictionary->GetString("localPoseTopic");
-  
+  //   options.localization_local_frame =
+  //   lua_parameter_dictionary->GetString("localization_local_frame");
+  options.localPoseTopic =
+      lua_parameter_dictionary->GetString("localPoseTopic");
+
   return options;
 }
 

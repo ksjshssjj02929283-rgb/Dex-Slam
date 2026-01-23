@@ -100,7 +100,7 @@ class MapBuilderInterface {
   // trajectory_ids.
   virtual std::map<int /* trajectory id in proto */, int /* trajectory id */>
   LoadState(io::ProtoStreamReaderInterface* reader, bool load_frozen_state) = 0;
-    
+
   // Loads the SLAM state from a pbstream file. Returns the remapping of new
   // trajectory_ids.
   virtual std::map<int /* trajectory id in proto */, int /* trajectory id */>

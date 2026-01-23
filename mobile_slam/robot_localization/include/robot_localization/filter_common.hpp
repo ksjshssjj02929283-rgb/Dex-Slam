@@ -33,42 +33,39 @@
 #ifndef ROBOT_LOCALIZATION__FILTER_COMMON_HPP_
 #define ROBOT_LOCALIZATION__FILTER_COMMON_HPP_
 
-namespace robot_localization
-{
+namespace robot_localization {
 
 /**
  * @brief Enumeration that defines the state vector
  */
-enum StateMembers
-{
-  StateMemberX = 0,
-  StateMemberY,
-  StateMemberZ,
-  StateMemberRoll,
-  StateMemberPitch,
-  StateMemberYaw,
-  StateMemberVx,
-  StateMemberVy,
-  StateMemberVz,
-  StateMemberVroll,
-  StateMemberVpitch,
-  StateMemberVyaw,
-  StateMemberAx,
-  StateMemberAy,
-  StateMemberAz
+enum StateMembers {
+    StateMemberX = 0,
+    StateMemberY,
+    StateMemberZ,
+    StateMemberRoll,
+    StateMemberPitch,
+    StateMemberYaw,
+    StateMemberVx,
+    StateMemberVy,
+    StateMemberVz,
+    StateMemberVroll,
+    StateMemberVpitch,
+    StateMemberVyaw,
+    StateMemberAx,
+    StateMemberAy,
+    StateMemberAz
 };
 
 /**
  * @brief Enumeration that defines the control vector
  */
-enum ControlMembers
-{
-  ControlMemberVx,
-  ControlMemberVy,
-  ControlMemberVz,
-  ControlMemberVroll,
-  ControlMemberVpitch,
-  ControlMemberVyaw
+enum ControlMembers {
+    ControlMemberVx,
+    ControlMemberVy,
+    ControlMemberVz,
+    ControlMemberVroll,
+    ControlMemberVpitch,
+    ControlMemberVyaw
 };
 
 /**

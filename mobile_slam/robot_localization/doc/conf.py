@@ -2,8 +2,10 @@ import sys
 import os
 
 import catkin_pkg.package
+
 catkin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-catkin_package = catkin_pkg.package.parse_package(os.path.join(catkin_dir, catkin_pkg.package.PACKAGE_MANIFEST_FILENAME))
+catkin_package = catkin_pkg.package.parse_package(
+    os.path.join(catkin_dir, catkin_pkg.package.PACKAGE_MANIFEST_FILENAME))
 
 extensions = [
     'sphinx.ext.autodoc',
@@ -31,9 +33,7 @@ todo_include_todos = True
 
 html_theme = 'nature'
 
-html_theme_options = {
-  "sidebarwidth": "350"
-}
+html_theme_options = {"sidebarwidth": "350"}
 
 # The name of an image file (relative to this directory) to place at the top
 # of the sidebar.
@@ -63,7 +63,9 @@ html_logo = 'images/rl_small.png'
 #html_use_smartypants = True
 
 # Custom sidebar templates, maps document names to template names.
-html_sidebars = { '**': ['full_globaltoc.html', 'sourcelink.html', 'searchbox.html'], }
+html_sidebars = {
+    '**': ['full_globaltoc.html', 'sourcelink.html', 'searchbox.html'],
+}
 
 # Additional templates that should be rendered to pages, maps page names to
 # template names.
@@ -115,25 +117,25 @@ htmlhelp_basename = 'robot_localizationdoc'
 # -- Options for LaTeX output ---------------------------------------------
 
 latex_elements = {
-# The paper size ('letterpaper' or 'a4paper').
-#'papersize': 'letterpaper',
+    # The paper size ('letterpaper' or 'a4paper').
+    #'papersize': 'letterpaper',
 
-# The font size ('10pt', '11pt' or '12pt').
-#'pointsize': '10pt',
+    # The font size ('10pt', '11pt' or '12pt').
+    #'pointsize': '10pt',
 
-# Additional stuff for the LaTeX preamble.
-#'preamble': '',
+    # Additional stuff for the LaTeX preamble.
+    #'preamble': '',
 
-# Latex figure (float) alignment
-#'figure_align': 'htbp',
+    # Latex figure (float) alignment
+    #'figure_align': 'htbp',
 }
 
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, 'robot_localization.tex', u'robot\\_localization Documentation',
-     u'Tom Moore', 'manual'),
+    (master_doc, 'robot_localization.tex',
+     u'robot\\_localization Documentation', u'Tom Moore', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -156,19 +158,15 @@ latex_documents = [
 # If false, no module index is generated.
 #latex_domain_indices = True
 
-
 # -- Options for manual page output ---------------------------------------
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [
-    (master_doc, 'robot_localization', u'robot_localization Documentation',
-     [author], 1)
-]
+man_pages = [(master_doc, 'robot_localization',
+              u'robot_localization Documentation', [author], 1)]
 
 # If true, show URL addresses after external links.
 #man_show_urls = False
-
 
 # -- Options for Texinfo output -------------------------------------------
 

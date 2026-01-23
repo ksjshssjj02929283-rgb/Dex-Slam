@@ -113,8 +113,8 @@ int main(int argc, char** argv) {
           bag_to_current);
     } else if (message.isType<sensor_msgs::msg::MultiEchoLaserScan>()) {
       PublishWithModifiedTimestamp(
-          message.instantiate<sensor_msgs::msg::MultiEchoLaserScan>(), publisher,
-          bag_to_current);
+          message.instantiate<sensor_msgs::msg::MultiEchoLaserScan>(),
+          publisher, bag_to_current);
     } else if (message.isType<sensor_msgs::msg::LaserScan>()) {
       PublishWithModifiedTimestamp(
           message.instantiate<sensor_msgs::msg::LaserScan>(), publisher,
@@ -123,8 +123,9 @@ int main(int argc, char** argv) {
       PublishWithModifiedTimestamp(message.instantiate<sensor_msgs::msg::Imu>(),
                                    publisher, bag_to_current);
     } else if (message.isType<nav_msgs::msg::Odometry>()) {
-      PublishWithModifiedTimestamp(message.instantiate<nav_msgs::msg::Odometry>(),
-                                   publisher, bag_to_current);
+      PublishWithModifiedTimestamp(
+          message.instantiate<nav_msgs::msg::Odometry>(), publisher,
+          bag_to_current);
     } else if (message.isType<tf2_msgs::TFMessage>()) {
       PublishWithModifiedTimestamp(message.instantiate<tf2_msgs::TFMessage>(),
                                    publisher, bag_to_current);

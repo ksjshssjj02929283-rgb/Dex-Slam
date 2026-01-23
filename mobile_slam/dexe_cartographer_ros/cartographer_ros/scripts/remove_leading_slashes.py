@@ -22,32 +22,32 @@ import rosbag
 
 
 def ParseArgs():
-  argument_parser = argparse.ArgumentParser(
-      description="Removes leading slashes from frame names.")
-  argument_parser.add_argument("input", type=str, help="Input bag")
-  return argument_parser.parse_args()
+    argument_parser = argparse.ArgumentParser(
+        description="Removes leading slashes from frame names.")
+    argument_parser.add_argument("input", type=str, help="Input bag")
+    return argument_parser.parse_args()
 
 
 def RewriteMsg(msg):
-  if hasattr(msg, "header"):
-    if msg.header.frame_id.startswith("/"):
-      msg.header.frame_id = msg.header.frame_id[1:]
-  if hasattr(msg, "child_frame_id"):
-    if msg.child_frame_id.startswith("/"):
-      msg.child_frame_id = msg.child_frame_id[1:]
-  if hasattr(msg, "transforms"):
-    for transform_msg in msg.transforms:
-      RewriteMsg(transform_msg)
+    if hasattr(msg, "header"):
+        if msg.header.frame_id.startswith("/"):
+            msg.header.frame_id = msg.header.frame_id[1:]
+    if hasattr(msg, "child_frame_id"):
+        if msg.child_frame_id.startswith("/"):
+            msg.child_frame_id = msg.child_frame_id[1:]
+    if hasattr(msg, "transforms"):
+        for transform_msg in msg.transforms:
+            RewriteMsg(transform_msg)
 
 
 def Main():
-  options = ParseArgs()
-  with rosbag.Bag(os.path.splitext(options.input)[0] + ".filtered.bag",
-                  "w") as outbag:
-    for topic, msg, t in rosbag.Bag(options.input).read_messages():
-      RewriteMsg(msg)
-      outbag.write(topic, msg, msg.header.stamp if msg._has_header else t)
+    options = ParseArgs()
+    with rosbag.Bag(os.path.splitext(options.input)[0] + ".filtered.bag",
+                    "w") as outbag:
+        for topic, msg, t in rosbag.Bag(options.input).read_messages():
+            RewriteMsg(msg)
+            outbag.write(topic, msg, msg.header.stamp if msg._has_header else t)
 
 
 if __name__ == "__main__":
-  Main()
+    Main()

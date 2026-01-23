@@ -19,8 +19,11 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <rosbag2_cpp/reader.hpp>
+#include <rosbag2_cpp/readers/sequential_reader.hpp>
 
 #include "absl/memory/memory.h"
+#include "builtin_interfaces/msg/time.hpp"
 #include "cartographer/common/configuration_file_resolver.h"
 #include "cartographer/common/math.h"
 #include "cartographer/io/file_writer.h"
@@ -39,9 +42,6 @@
 #include "cartographer_ros/urdf_reader.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
-#include "builtin_interfaces/msg/time.hpp"
-#include <rosbag2_cpp/reader.hpp>
-#include <rosbag2_cpp/readers/sequential_reader.hpp>
 // source code
 //#include "tf2_eigen/tf2_eigen.hpp"
 // modified by hz
@@ -181,7 +181,8 @@ void AssetsWriter::Run(const std::string& configuration_directory,
   const std::string tracking_frame =
       lua_parameter_dictionary->GetString("tracking_frame");
 
-  rclcpp::Clock::SharedPtr clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
+  rclcpp::Clock::SharedPtr clock =
+      std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
   do {
     for (size_t trajectory_id = 0; trajectory_id < bag_filenames_.size();
          ++trajectory_id) {
@@ -193,7 +194,8 @@ void AssetsWriter::Run(const std::string& configuration_directory,
         continue;
       }
 
-      std::shared_ptr<tf2_ros::Buffer> tf_buffer = std::make_shared<tf2_ros::Buffer>(clock);
+      std::shared_ptr<tf2_ros::Buffer> tf_buffer =
+          std::make_shared<tf2_ros::Buffer>(clock);
       tf_buffer->setUsingDedicatedThread(true);
 
       if (!urdf_filename.empty()) {
@@ -205,7 +207,8 @@ void AssetsWriter::Run(const std::string& configuration_directory,
       rosbag2_cpp::Reader bag_reader;
       bag_reader.open(bag_filename);
       rosbag2_storage::BagMetadata bag_metadata = bag_reader.get_metadata();
-      const rclcpp::Time begin_time(bag_metadata.starting_time.time_since_epoch().count());
+      const rclcpp::Time begin_time(
+          bag_metadata.starting_time.time_since_epoch().count());
 
       // We need to keep 'tf_buffer' small because it becomes very inefficient
       // otherwise. We make sure that tf_messages are published before any data
@@ -214,59 +217,70 @@ void AssetsWriter::Run(const std::string& configuration_directory,
       // We publish tf messages one second earlier than other messages. Under
       // the assumption of higher frequency tf this should ensure that tf can
       // always interpolate.
-      const rclcpp::Duration kDelay(1.0,0.0);
+      const rclcpp::Duration kDelay(1.0, 0.0);
       auto serializer = rclcpp::Serialization<tf2_msgs::msg::TFMessage>();
-      auto laser_scan_serializer = rclcpp::Serialization<sensor_msgs::msg::LaserScan>();
-      auto multi_echo_laser_scan_serializer = rclcpp::Serialization<sensor_msgs::msg::MultiEchoLaserScan>();
-      auto pcl2_serializer = rclcpp::Serialization<sensor_msgs::msg::PointCloud2>();
+      auto laser_scan_serializer =
+          rclcpp::Serialization<sensor_msgs::msg::LaserScan>();
+      auto multi_echo_laser_scan_serializer =
+          rclcpp::Serialization<sensor_msgs::msg::MultiEchoLaserScan>();
+      auto pcl2_serializer =
+          rclcpp::Serialization<sensor_msgs::msg::PointCloud2>();
       while (bag_reader.has_next()) {
         auto message = bag_reader.read_next();
-        if (use_bag_transforms && (message->topic_name  == kTfStaticTopic || message->topic_name  == "/tf")) {
+        if (use_bag_transforms && (message->topic_name == kTfStaticTopic ||
+                                   message->topic_name == "/tf")) {
           tf2_msgs::msg::TFMessage tf_message;
           rclcpp::SerializedMessage serialized_msg(*message->serialized_data);
           serializer.deserialize_message(&serialized_msg, &tf_message);
           for (const auto& transform : tf_message.transforms) {
             try {
               tf_buffer->setTransform(transform, "unused_authority",
-                                     message->topic_name == kTfStaticTopic);
+                                      message->topic_name == kTfStaticTopic);
             } catch (const tf2::TransformException& ex) {
               LOG(WARNING) << ex.what();
             }
           }
         }
 
-        while (!delayed_messages.empty() && delayed_messages.front().time_stamp <
-                                                message->time_stamp - kDelay.nanoseconds()) {
-          const auto delayed_message =
-              delayed_messages.front();
+        while (!delayed_messages.empty() &&
+               delayed_messages.front().time_stamp <
+                   message->time_stamp - kDelay.nanoseconds()) {
+          const auto delayed_message = delayed_messages.front();
 
           std::unique_ptr<carto::io::PointsBatch> points_batch;
 
           for (auto topic_info : bag_metadata.topics_with_message_count) {
-            if (topic_info.topic_metadata.name == delayed_message.topic_name){
-              rclcpp::SerializedMessage serialized_msg(*delayed_message.serialized_data);
-              if (topic_info.topic_metadata.type == "sensor_msgs/msg/LaserScan") {
+            if (topic_info.topic_metadata.name == delayed_message.topic_name) {
+              rclcpp::SerializedMessage serialized_msg(
+                  *delayed_message.serialized_data);
+              if (topic_info.topic_metadata.type ==
+                  "sensor_msgs/msg/LaserScan") {
                 sensor_msgs::msg::LaserScan::SharedPtr laser_scan_msg =
                     std::make_shared<sensor_msgs::msg::LaserScan>();
-                laser_scan_serializer.deserialize_message(&serialized_msg, laser_scan_msg.get());
-                points_batch = HandleMessage(
-                    laser_scan_msg,
-                    tracking_frame, tf_buffer, transform_interpolation_buffer);
-              } else if (topic_info.topic_metadata.type == "sensor_msgs/msg/MultiEchoLaserScan") {
-                sensor_msgs::msg::MultiEchoLaserScan::SharedPtr multi_echo_laser_scan_msg =
-                    std::make_shared<sensor_msgs::msg::MultiEchoLaserScan>();
-                multi_echo_laser_scan_serializer.deserialize_message(&serialized_msg, multi_echo_laser_scan_msg.get());
-                points_batch = HandleMessage(
-                    multi_echo_laser_scan_msg,
-                    tracking_frame, tf_buffer, transform_interpolation_buffer);
-              }
-              else if (topic_info.topic_metadata.type == "sensor_msgs/msg/PointCloud2") {
+                laser_scan_serializer.deserialize_message(&serialized_msg,
+                                                          laser_scan_msg.get());
+                points_batch =
+                    HandleMessage(laser_scan_msg, tracking_frame, tf_buffer,
+                                  transform_interpolation_buffer);
+              } else if (topic_info.topic_metadata.type ==
+                         "sensor_msgs/msg/MultiEchoLaserScan") {
+                sensor_msgs::msg::MultiEchoLaserScan::SharedPtr
+                    multi_echo_laser_scan_msg = std::make_shared<
+                        sensor_msgs::msg::MultiEchoLaserScan>();
+                multi_echo_laser_scan_serializer.deserialize_message(
+                    &serialized_msg, multi_echo_laser_scan_msg.get());
+                points_batch =
+                    HandleMessage(multi_echo_laser_scan_msg, tracking_frame,
+                                  tf_buffer, transform_interpolation_buffer);
+              } else if (topic_info.topic_metadata.type ==
+                         "sensor_msgs/msg/PointCloud2") {
                 sensor_msgs::msg::PointCloud2::SharedPtr pcl2_scan_msg =
                     std::make_shared<sensor_msgs::msg::PointCloud2>();
-                pcl2_serializer.deserialize_message(&serialized_msg, pcl2_scan_msg.get());
-                points_batch = HandleMessage(
-                    pcl2_scan_msg,
-                    tracking_frame, tf_buffer, transform_interpolation_buffer);
+                pcl2_serializer.deserialize_message(&serialized_msg,
+                                                    pcl2_scan_msg.get());
+                points_batch =
+                    HandleMessage(pcl2_scan_msg, tracking_frame, tf_buffer,
+                                  transform_interpolation_buffer);
               }
               if (points_batch != nullptr) {
                 points_batch->trajectory_id = trajectory_id;
@@ -279,8 +293,9 @@ void AssetsWriter::Run(const std::string& configuration_directory,
         }
         delayed_messages.push_back(*message);
         LOG_EVERY_N(INFO, 10000)
-            << "Processed " << (message->time_stamp - begin_time.nanoseconds())/1e9
-            << " of " << bag_metadata.duration.count()/1e9 << " bag time seconds...";
+            << "Processed "
+            << (message->time_stamp - begin_time.nanoseconds()) / 1e9 << " of "
+            << bag_metadata.duration.count() / 1e9 << " bag time seconds...";
       }
     }
   } while (pipeline.back()->Flush() ==

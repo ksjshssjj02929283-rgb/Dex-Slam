@@ -33,90 +33,69 @@
 #ifndef ROBOT_LOCALIZATION__FILTER_UTILITIES_HPP_
 #define ROBOT_LOCALIZATION__FILTER_UTILITIES_HPP_
 
-#include <Eigen/Dense>
-
 #include <angles/angles.h>
 
+#include <Eigen/Dense>
 #include <iostream>
 #include <ostream>
-#include <string>
-#include <vector>
-
 #include <rclcpp/duration.hpp>
 #include <rclcpp/time.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <string>
+#include <vector>
 
-#define FB_DEBUG(msg) \
-  if (getDebug()) { \
-    *debug_stream_ << msg; \
-  }
+#define FB_DEBUG(msg)          \
+    if (getDebug()) {          \
+        *debug_stream_ << msg; \
+    }
 
 // Handy methods for debug output
-std::ostream & operator<<(std::ostream & os, const Eigen::MatrixXd & mat);
-std::ostream & operator<<(std::ostream & os, const Eigen::VectorXd & vec);
-std::ostream & operator<<(std::ostream & os, const std::vector<size_t> & vec);
-std::ostream & operator<<(std::ostream & os, const std::vector<int> & vec);
+std::ostream& operator<<(std::ostream& os, const Eigen::MatrixXd& mat);
+std::ostream& operator<<(std::ostream& os, const Eigen::VectorXd& vec);
+std::ostream& operator<<(std::ostream& os, const std::vector<size_t>& vec);
+std::ostream& operator<<(std::ostream& os, const std::vector<int>& vec);
 
-namespace robot_localization
-{
-namespace filter_utilities
-{
+namespace robot_localization {
+namespace filter_utilities {
 
 /**
  * @brief Utility method keeping RPY angles in the range [-pi, pi]
  * @param[in] rotation - The rotation to bind
  * @return the bounded value
  */
-inline double clampRotation(double rotation)
-{
-  return angles::normalize_angle(rotation);
-}
+inline double clampRotation(double rotation) { return angles::normalize_angle(rotation); }
 
 /**
  * @brief Utility method for appending tf2 prefixes cleanly
  * @param[in] tf_prefix - the tf2 prefix to append
  * @param[in, out] frame_id - the resulting frame_id value
  */
-inline void appendPrefix(std::string tf_prefix, std::string & frame_id)
-{
-  // Strip all leading slashes for tf2 compliance
-  if (!frame_id.empty() && frame_id.at(0) == '/') {
-    frame_id = frame_id.substr(1);
-  }
+inline void appendPrefix(std::string tf_prefix, std::string& frame_id) {
+    // Strip all leading slashes for tf2 compliance
+    if (!frame_id.empty() && frame_id.at(0) == '/') {
+        frame_id = frame_id.substr(1);
+    }
 
-  if (!tf_prefix.empty() && tf_prefix.at(0) == '/') {
-    tf_prefix = tf_prefix.substr(1);
-  }
+    if (!tf_prefix.empty() && tf_prefix.at(0) == '/') {
+        tf_prefix = tf_prefix.substr(1);
+    }
 
-  // If we do have a tf prefix, then put a slash in between
-  if (!tf_prefix.empty()) {
-    frame_id = tf_prefix + "/" + frame_id;
-  }
+    // If we do have a tf prefix, then put a slash in between
+    if (!tf_prefix.empty()) {
+        frame_id = tf_prefix + "/" + frame_id;
+    }
 }
 
-inline double nanosecToSec(const rcl_time_point_value_t nanoseconds)
-{
-  return static_cast<double>(nanoseconds) * 1e-9;
-}
+inline double nanosecToSec(const rcl_time_point_value_t nanoseconds) { return static_cast<double>(nanoseconds) * 1e-9; }
 
-inline int secToNanosec(const double seconds)
-{
-  return static_cast<int>(seconds * 1e9);
-}
+inline int secToNanosec(const double seconds) { return static_cast<int>(seconds * 1e9); }
 
-inline double toSec(const rclcpp::Duration & duration)
-{
-  return nanosecToSec(duration.nanoseconds());
-}
+inline double toSec(const rclcpp::Duration& duration) { return nanosecToSec(duration.nanoseconds()); }
 
-inline double toSec(const rclcpp::Time & time)
-{
-  return nanosecToSec(time.nanoseconds());
-}
+inline double toSec(const rclcpp::Time& time) { return nanosecToSec(time.nanoseconds()); }
 
-inline double toSec(const std_msgs::msg::Header::_stamp_type & stamp)
-{
-  return static_cast<double>(stamp.sec) + nanosecToSec(stamp.nanosec);
+inline double toSec(const std_msgs::msg::Header::_stamp_type& stamp) {
+    return static_cast<double>(stamp.sec) + nanosecToSec(stamp.nanosec);
 }
 
 }  // namespace filter_utilities

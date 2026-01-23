@@ -32,102 +32,80 @@
 
 #include <Eigen/Dense>
 #include <functional>
-#include <string>
 #include <memory>
-
 #include <rclcpp/rclcpp.hpp>
+#include <string>
 
 #include "robot_localization/ros_robot_localization_listener.hpp"
 #include "robot_localization/srv/get_state.hpp"
 
-namespace robot_localization
-{
+namespace robot_localization {
 
-class RobotLocalizationListenerNode : public rclcpp::Node
-{
+class RobotLocalizationListenerNode : public rclcpp::Node {
 public:
-  RobotLocalizationListenerNode()
-  : rclcpp::Node("robot_localization_listener_node")
-  {
-    service_ = this->create_service<robot_localization::srv::GetState>(
-      "get_state",
-      std::bind(
-        &RobotLocalizationListenerNode::getStateCallback, this,
-        std::placeholders::_1, std::placeholders::_2));
-  }
+    RobotLocalizationListenerNode() : rclcpp::Node("robot_localization_listener_node") {
+        service_ = this->create_service<robot_localization::srv::GetState>(
+            "get_state", std::bind(&RobotLocalizationListenerNode::getStateCallback, this, std::placeholders::_1,
+                                   std::placeholders::_2));
+    }
 
-  std::string getService()
-  {
-    return std::string(service_->get_service_name());
-  }
+    std::string getService() { return std::string(service_->get_service_name()); }
 
-  void setRosRobotLocalizationListener(
-    std::shared_ptr<robot_localization::RosRobotLocalizationListener> rll)
-  {
-    rll_ = rll;
-  }
+    void setRosRobotLocalizationListener(std::shared_ptr<robot_localization::RosRobotLocalizationListener> rll) {
+        rll_ = rll;
+    }
 
 private:
-  std::shared_ptr<RosRobotLocalizationListener> rll_;
-  rclcpp::Service<robot_localization::srv::GetState>::SharedPtr service_;
+    std::shared_ptr<RosRobotLocalizationListener> rll_;
+    rclcpp::Service<robot_localization::srv::GetState>::SharedPtr service_;
 
-  bool getStateCallback(
-    const std::shared_ptr<robot_localization::srv::GetState::Request> req,
-    const std::shared_ptr<robot_localization::srv::GetState::Response> res)
-  {
-    Eigen::VectorXd state(STATE_SIZE);
-    Eigen::MatrixXd covariance(STATE_SIZE, STATE_SIZE);
+    bool getStateCallback(const std::shared_ptr<robot_localization::srv::GetState::Request> req,
+                          const std::shared_ptr<robot_localization::srv::GetState::Response> res) {
+        Eigen::VectorXd state(STATE_SIZE);
+        Eigen::MatrixXd covariance(STATE_SIZE, STATE_SIZE);
 
-    if (!rll_->getState(req->time_stamp, req->frame_id, state, covariance)) {
-      RCLCPP_ERROR(
-        this->get_logger(),
-        "Robot Localization Listener Node: Listener instance returned false at "
-        "getState call.");
-      return false;
+        if (!rll_->getState(req->time_stamp, req->frame_id, state, covariance)) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "Robot Localization Listener Node: Listener instance returned false at "
+                         "getState call.");
+            return false;
+        }
+
+        for (size_t i = 0; i < STATE_SIZE; i++) {
+            res->state[i] = (*(state.data() + i));
+        }
+
+        for (size_t i = 0; i < STATE_SIZE * STATE_SIZE; i++) {
+            res->covariance[i] = (*(covariance.data() + i));
+        }
+
+        RCLCPP_DEBUG(this->get_logger(),
+                     "Robot Localization Listener Node: Listener responded with state and "
+                     "covariance at the requested time.");
+        return true;
     }
-
-    for (size_t i = 0; i < STATE_SIZE; i++) {
-      res->state[i] = (*(state.data() + i));
-    }
-
-    for (size_t i = 0; i < STATE_SIZE * STATE_SIZE; i++) {
-      res->covariance[i] = (*(covariance.data() + i));
-    }
-
-    RCLCPP_DEBUG(
-      this->get_logger(),
-      "Robot Localization Listener Node: Listener responded with state and "
-      "covariance at the requested time.");
-    return true;
-  }
 };
 
 }  // namespace robot_localization
 
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  auto rlln = std::make_shared<
-    robot_localization::RobotLocalizationListenerNode>();
+int main(int argc, char** argv) {
+    rclcpp::init(argc, argv);
+    auto rlln = std::make_shared<robot_localization::RobotLocalizationListenerNode>();
 
-  auto rll = std::make_shared<
-    robot_localization::RosRobotLocalizationListener>(rlln);
-  rlln->setRosRobotLocalizationListener(rll);
+    auto rll = std::make_shared<robot_localization::RosRobotLocalizationListener>(rlln);
+    rlln->setRosRobotLocalizationListener(rll);
 
-  RCLCPP_INFO(
-    rlln->get_logger(),
-    "Robot Localization Listener Node: Ready to handle GetState requests at %s",
-    rlln->getService().c_str());
+    RCLCPP_INFO(rlln->get_logger(), "Robot Localization Listener Node: Ready to handle GetState requests at %s",
+                rlln->getService().c_str());
 
-  // 使用多线程执行器以提高服务响应速度
-  // 2个线程：处理服务请求
-  rclcpp::executors::MultiThreadedExecutor executor(
-      rclcpp::ExecutorOptions(), 
-      2  // Listener 节点只需要较少线程
-  );
-  
-  executor.add_node(rlln);
-  executor.spin();
+    // 使用多线程执行器以提高服务响应速度
+    // 2个线程：处理服务请求
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(),
+                                                      2  // Listener 节点只需要较少线程
+    );
 
-  return 0;
+    executor.add_node(rlln);
+    executor.spin();
+
+    return 0;
 }

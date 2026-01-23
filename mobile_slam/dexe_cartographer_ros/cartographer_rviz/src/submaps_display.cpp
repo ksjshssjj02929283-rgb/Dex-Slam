@@ -16,22 +16,22 @@
 
 #include "cartographer_rviz/submaps_display.h"
 
-#include "OgreResourceGroupManager.h"
-#include "absl/memory/memory.h"
-#include "absl/synchronization/mutex.h"
-
-#include "cartographer/mapping/id.h"
-#include "cartographer_ros_msgs/msg/submap_list.hpp"
-#include "cartographer_ros_msgs/srv/submap_query.hpp"
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rviz_common/display_context.hpp>
 #include <rviz_common/frame_manager_iface.hpp>
+#include <rviz_common/message_filter_display.hpp>
 #include <rviz_common/properties/bool_property.hpp>
 #include <rviz_common/properties/string_property.hpp>
-#include <rviz_common/message_filter_display.hpp>
-#include <ament_index_cpp/get_package_share_directory.hpp>
+
+#include "OgreResourceGroupManager.h"
+#include "absl/memory/memory.h"
+#include "absl/synchronization/mutex.h"
+#include "cartographer/mapping/id.h"
+#include "cartographer_ros_msgs/msg/submap_list.hpp"
+#include "cartographer_ros_msgs/srv/submap_query.hpp"
 
 namespace cartographer_rviz {
 
@@ -47,9 +47,10 @@ constexpr char kDefaultSubmapQueryServiceName[] = "/submap_query";
 }  // namespace
 
 SubmapsDisplay::SubmapsDisplay() : rclcpp::Node("submaps_display") {
-  submap_query_service_property_ = new ::rviz_common::properties::StringProperty(
-      "Submap query service", kDefaultSubmapQueryServiceName,
-      "Submap query service to connect to.", this, SLOT(Reset()));
+  submap_query_service_property_ =
+      new ::rviz_common::properties::StringProperty(
+          "Submap query service", kDefaultSubmapQueryServiceName,
+          "Submap query service to connect to.", this, SLOT(Reset()));
   tracking_frame_property_ = new ::rviz_common::properties::StringProperty(
       "Tracking frame", kDefaultTrackingFrame,
       "Tracking frame, used for fading out submaps.", this);
@@ -61,15 +62,14 @@ SubmapsDisplay::SubmapsDisplay() : rclcpp::Node("submaps_display") {
       SLOT(ResolutionToggled()), this);
 
   callback_group_ = this->create_callback_group(
-    rclcpp::CallbackGroupType::MutuallyExclusive,
-    false);
-  callback_group_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
-  callback_group_executor_->add_callback_group(callback_group_, this->get_node_base_interface());
+      rclcpp::CallbackGroupType::MutuallyExclusive, false);
+  callback_group_executor_ =
+      std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  callback_group_executor_->add_callback_group(callback_group_,
+                                               this->get_node_base_interface());
   client_ = this->create_client<::cartographer_ros_msgs::srv::SubmapQuery>(
-        kDefaultSubmapQueryServiceName,
-        rmw_qos_profile_services_default,
-        callback_group_
-        );
+      kDefaultSubmapQueryServiceName, rmw_qos_profile_services_default,
+      callback_group_);
   trajectories_category_ = new ::rviz_common::properties::Property(
       "Submaps", QVariant(), "List of all submaps, organized by trajectories.",
       this);
@@ -82,11 +82,13 @@ SubmapsDisplay::SubmapsDisplay() : rclcpp::Node("submaps_display") {
       "Whether submap pose markers should be displayed or not.",
       trajectories_category_, SLOT(PoseMarkersEnabledToggled()), this);
   fade_out_start_distance_in_meters_ =
-      new ::rviz_common::properties::FloatProperty("Fade-out distance", 1.f,
-                                "Distance in meters in z-direction beyond "
-                                "which submaps will start to fade out.",
-                                this);
-  const std::string package_path = ament_index_cpp::get_package_share_directory("cartographer_rviz");
+      new ::rviz_common::properties::FloatProperty(
+          "Fade-out distance", 1.f,
+          "Distance in meters in z-direction beyond "
+          "which submaps will start to fade out.",
+          this);
+  const std::string package_path =
+      ament_index_cpp::get_package_share_directory("cartographer_rviz");
   Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
       package_path + kMaterialsDirectory, "FileSystem", "cartographer_rviz");
   Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
@@ -112,9 +114,7 @@ void SubmapsDisplay::Reset() { reset(); }
 void SubmapsDisplay::CreateClient() {
   client_ = this->create_client<::cartographer_ros_msgs::srv::SubmapQuery>(
       submap_query_service_property_->getStdString(),
-      rmw_qos_profile_services_default,
-      callback_group_
-      );
+      rmw_qos_profile_services_default, callback_group_);
 }
 
 void SubmapsDisplay::onInitialize() {
@@ -131,12 +131,14 @@ void SubmapsDisplay::reset() {
   CreateClient();
 }
 
-void SubmapsDisplay::processMessage( const ::cartographer_ros_msgs::msg::SubmapList::ConstSharedPtr msg) {
+void SubmapsDisplay::processMessage(
+    const ::cartographer_ros_msgs::msg::SubmapList::ConstSharedPtr msg) {
   absl::MutexLock locker(&mutex_);
   map_frame_ = absl::make_unique<std::string>(msg->header.frame_id);
   // In case Cartographer node is relaunched, destroy trajectories from the
   // previous instance.
-  for (const ::cartographer_ros_msgs::msg::SubmapEntry& submap_entry : msg->submap) {
+  for (const ::cartographer_ros_msgs::msg::SubmapEntry& submap_entry :
+       msg->submap) {
     const size_t trajectory_id = submap_entry.trajectory_id;
     if (trajectories_.count(trajectory_id) == 0) {
       continue;
@@ -153,7 +155,8 @@ void SubmapsDisplay::processMessage( const ::cartographer_ros_msgs::msg::SubmapL
   using ::cartographer::mapping::SubmapId;
   std::set<SubmapId> listed_submaps;
   std::set<int> listed_trajectories;
-  for (const ::cartographer_ros_msgs::msg::SubmapEntry& submap_entry : msg->submap) {
+  for (const ::cartographer_ros_msgs::msg::SubmapEntry& submap_entry :
+       msg->submap) {
     const SubmapId id{submap_entry.trajectory_id, submap_entry.submap_index};
     listed_submaps.insert(id);
     listed_trajectories.insert(submap_entry.trajectory_id);
@@ -218,7 +221,7 @@ void SubmapsDisplay::processMessage( const ::cartographer_ros_msgs::msg::SubmapL
   }
 }
 
-void SubmapsDisplay::update(const float , const float) {
+void SubmapsDisplay::update(const float, const float) {
   absl::MutexLock locker(&mutex_);
   // Schedule fetching of new submap textures.
   for (const auto& trajectory_by_id : trajectories_) {
@@ -246,7 +249,8 @@ void SubmapsDisplay::update(const float , const float) {
   try {
     const ::geometry_msgs::msg::TransformStamped transform_stamped =
         tf_buffer_->lookupTransform(
-            *map_frame_, tracking_frame_property_->getStdString(), tf2::TimePointZero,std::chrono::milliseconds(100));
+            *map_frame_, tracking_frame_property_->getStdString(),
+            tf2::TimePointZero, std::chrono::milliseconds(100));
     for (auto& trajectory_by_id : trajectories_) {
       for (auto& submap_entry : trajectory_by_id.second->submaps) {
         submap_entry.second->SetAlpha(
@@ -255,7 +259,8 @@ void SubmapsDisplay::update(const float , const float) {
       }
     }
   } catch (const tf2::TransformException& ex) {
-    RCLCPP_WARN(this->get_logger(), "Could not compute submap fading: %s", ex.what());
+    RCLCPP_WARN(this->get_logger(), "Could not compute submap fading: %s",
+                ex.what());
   }
   // Update the map frame to fixed frame transform.
   Ogre::Vector3 position;
@@ -310,17 +315,19 @@ void Trajectory::PoseMarkersEnabledToggled() {
   }
 }
 
-Trajectory::Trajectory(std::unique_ptr<::rviz_common::properties::BoolProperty> property,
-                       const bool pose_markers_enabled)
+Trajectory::Trajectory(
+    std::unique_ptr<::rviz_common::properties::BoolProperty> property,
+    const bool pose_markers_enabled)
     : visibility(std::move(property)) {
   ::QObject::connect(visibility.get(), SIGNAL(changed()), this,
                      SLOT(AllEnabledToggled()));
   // Add toggle for submap pose markers as the first entry of the visibility
   // property list of this trajectory.
-  pose_markers_visibility = absl::make_unique<::rviz_common::properties::BoolProperty>(
-      QString("Submap Pose Markers"), pose_markers_enabled,
-      QString("Toggles the submap pose markers of this trajectory."),
-      visibility.get());
+  pose_markers_visibility =
+      absl::make_unique<::rviz_common::properties::BoolProperty>(
+          QString("Submap Pose Markers"), pose_markers_enabled,
+          QString("Toggles the submap pose markers of this trajectory."),
+          visibility.get());
   ::QObject::connect(pose_markers_visibility.get(), SIGNAL(changed()), this,
                      SLOT(PoseMarkersEnabledToggled()));
 }
