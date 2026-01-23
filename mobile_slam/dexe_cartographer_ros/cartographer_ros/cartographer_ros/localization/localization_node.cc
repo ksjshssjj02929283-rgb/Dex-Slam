@@ -345,6 +345,32 @@ void LocalizationNode::PublishLocalizationState()
       }
     }
   }
+
+  // 检测定位失败状态并调用 stop filter
+  if (loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_FAILED || 
+      loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_INIT_FAILED) {
+    
+    // 只在状态改变时调用 stop filter，避免重复调用
+    if (last_localization_status_ != loc_state_msg.status && !filter_stopped_) {
+      RCLCPP_ERROR(node_->get_logger(), 
+                   "Localization failed with status %d, calling stop_filter service",
+                   loc_state_msg.status);
+      StopFilter();
+    }
+  } else {
+    // 如果状态恢复正常，重置 filter_stopped_ 标志
+    if (filter_stopped_ && 
+        (loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_SUCCESS ||
+         loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_INITIALIZED)) {
+      RCLCPP_INFO(node_->get_logger(), 
+                  "Localization status recovered to %d, resetting filter_stopped flag",
+                  loc_state_msg.status);
+      filter_stopped_ = false;
+    }
+  }
+  
+  last_localization_status_ = loc_state_msg.status;
+  
   localization_state_publisher_->publish(loc_state_msg);
 }
 
@@ -1073,6 +1099,67 @@ bool LocalizationNode::SetInitialPoseInFilter(
   need_set_pose_in_filter_ = false;
   RCLCPP_WARN(node_->get_logger(), "SetPose service called successfully");
   return result->success;
+}
+
+bool LocalizationNode::StopFilter()
+{
+  RCLCPP_INFO(node_->get_logger(), "Stopping robot localization filter");
+  
+  try {
+    // 创建临时节点进行服务调用
+    auto temp_node = std::make_shared<rclcpp::Node>(
+        "temp_stop_filter_client",
+        rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
+    
+    // 创建临时客户端
+    auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(
+        "/robot_localization/stop_filter");
+    
+    if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
+      RCLCPP_WARN(node_->get_logger(), "Timed out waiting for stop_filter service");
+      return false;
+    }
+    
+    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto future = temp_client->async_send_request(request);
+    
+    // 使用临时 executor 来处理响应
+    rclcpp::executors::SingleThreadedExecutor temp_executor;
+    temp_executor.add_node(temp_node);
+    
+    auto timeout = std::chrono::seconds(5);
+    auto start_time = std::chrono::steady_clock::now();
+    
+    while (rclcpp::ok() && 
+           future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+      temp_executor.spin_some();
+      
+      if (std::chrono::steady_clock::now() - start_time > timeout) {
+        RCLCPP_ERROR(node_->get_logger(), "Failed to call service stop_filter - timeout");
+        return false;
+      }
+    }
+    
+    auto result = future.get();
+    if (!result) {
+      RCLCPP_ERROR(node_->get_logger(), "Failed to call service stop_filter - no response");
+      return false;
+    }
+    
+    if (result->success) {
+      RCLCPP_WARN(node_->get_logger(), "StopFilter service called successfully");
+      filter_stopped_ = true;
+    } else {
+      RCLCPP_ERROR(node_->get_logger(), "StopFilter service returned failure: %s", 
+                   result->message.c_str());
+    }
+    
+    return result->success;
+    
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(node_->get_logger(), "Exception while calling stop_filter: %s", e.what());
+    return false;
+  }
 }
 
 // TODO: linfeng.guo 后面把这个client写到构造函数中

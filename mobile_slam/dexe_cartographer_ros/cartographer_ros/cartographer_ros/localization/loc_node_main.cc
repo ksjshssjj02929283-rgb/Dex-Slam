@@ -91,7 +91,7 @@ public:
           auto_start_timer_->cancel();  // 只执行一次
           RCLCPP_INFO(get_logger(), "Auto-starting localization...");
           std::lock_guard<std::mutex> lock(state_mutex_);
-          if (StartLocalization()) {
+          if (StartFilter() && StartLocalization()) {
             RCLCPP_INFO(get_logger(), "Localization auto-started successfully");
           } else {
             RCLCPP_ERROR(get_logger(), "Failed to auto-start localization");
@@ -191,11 +191,11 @@ private:
       return;
     }
 
-    // if (!StartFilter()) {
-    //   response->success = false;
-    //   response->message = "Failed to start robot localization filter";
-    //   return;
-    // }
+    if (!StartFilter()) {
+      response->success = false;
+      response->message = "Failed to start robot localization filter";
+      return;
+    }
 
     response->success = StartLocalization();
     response->message = response->success ? 
@@ -445,9 +445,63 @@ private:
   bool CallRobotLocalizationService(const std::string& service_name) {
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client;
     
+    // 对于 start_filter，创建临时节点进行调用
     if (service_name.find("start_filter") != std::string::npos) {
-      client = start_filter_client_;
-    } else if (service_name.find("stop_filter") != std::string::npos) {
+      try {
+        RCLCPP_INFO(get_logger(), "Creating temporary node to call %s", service_name.c_str());
+        
+        // 创建临时节点
+        auto temp_node = std::make_shared<rclcpp::Node>(
+            "temp_start_filter_client",
+            rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
+        
+        // 创建临时客户端
+        auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(service_name);
+        
+        if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
+          RCLCPP_ERROR(get_logger(), "Service %s not available", service_name.c_str());
+          return false;
+        }
+        
+        auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+        auto future = temp_client->async_send_request(request);
+        
+        // 使用临时 executor 来处理响应
+        rclcpp::executors::SingleThreadedExecutor temp_executor;
+        temp_executor.add_node(temp_node);
+        
+        auto timeout = std::chrono::seconds(5);
+        auto start_time = std::chrono::steady_clock::now();
+        
+        while (rclcpp::ok() && 
+               future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+          temp_executor.spin_some();
+          
+          if (std::chrono::steady_clock::now() - start_time > timeout) {
+            RCLCPP_ERROR(get_logger(), "Service %s call timeout", service_name.c_str());
+            return false;
+          }
+        }
+        
+        auto response = future.get();
+        if (!response->success) {
+          RCLCPP_ERROR(get_logger(), "Service %s call failed: %s", 
+                       service_name.c_str(), response->message.c_str());
+          return false;
+        }
+        
+        RCLCPP_INFO(get_logger(), "Service %s call successful", service_name.c_str());
+        return true;
+        
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "Exception while calling %s: %s", 
+                     service_name.c_str(), e.what());
+        return false;
+      }
+    }
+    
+    // 对于其他服务，使用已有的客户端
+    if (service_name.find("stop_filter") != std::string::npos) {
       client = stop_filter_client_;
     } else if (service_name.find("reset_filter") != std::string::npos) {
       client = reset_filter_client_;

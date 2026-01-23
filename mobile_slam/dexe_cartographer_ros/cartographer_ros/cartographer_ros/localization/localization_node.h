@@ -152,6 +152,7 @@ private:
 
   // Helpers
   bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);
+  bool StopFilter();
 
   std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>
   ComputeExpectedSensorIds(const TrajectoryOptions& options) const;
@@ -269,6 +270,8 @@ private:
 
   // Flags
   bool need_set_pose_in_filter_ = false;
+  int last_localization_status_ = nav_interfaces::msg::LocalizationState::LOC_NOT_INIT;
+  bool filter_stopped_ = false;
 };
 
 }  // namespace localization

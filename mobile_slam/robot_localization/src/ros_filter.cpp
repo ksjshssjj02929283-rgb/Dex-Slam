@@ -66,7 +66,7 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   publish_transform_(true),
   reset_on_time_jump_(false),
   smooth_lagged_data_(false),
-  toggled_on_(true),
+  toggled_on_(false),
   two_d_mode_(false),
   use_control_(false),
   stamped_control_(false),
@@ -1307,20 +1307,20 @@ void RosFilter<T>::loadParams()
   // Create a subscriber for manually setting/resetting pose
   set_pose_sub_ =
     this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-    "set_pose", rclcpp::QoS(1),
+    "/robot_localization/set_pose", rclcpp::QoS(1),
     std::bind(&RosFilter<T>::setPoseCallback, this, std::placeholders::_1));
 
   // Create a service for manually setting/resetting pose
   set_pose_service_ =
     this->create_service<robot_localization::srv::SetPose>(
-    "set_pose", std::bind(
+    "/robot_localization/set_pose", std::bind(
       &RosFilter<T>::setPoseSrvCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Create a service for manually enabling the filter
   enable_filter_srv_ =
     this->create_service<std_srvs::srv::Empty>(
-    "enable", std::bind(
+    "/robot_localization/enable", std::bind(
       &RosFilter::enableFilterSrvCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
@@ -1328,21 +1328,21 @@ void RosFilter<T>::loadParams()
   // publishing
   toggle_filter_processing_srv_ =
     this->create_service<robot_localization::srv::ToggleFilterProcessing>(
-    "toggle", std::bind(
+    "/robot_localization/toggle", std::bind(
       &RosFilter<T>::toggleFilterProcessingCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Create a service for starting filter (convenience wrapper)
   start_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "start_filter", std::bind(
+    "/robot_localization/start_filter", std::bind(
       &RosFilter<T>::startFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Create a service for stopping filter (convenience wrapper)
   stop_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "stop_filter", std::bind(
+    "/robot_localization/stop_filter", std::bind(
       &RosFilter<T>::stopFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
