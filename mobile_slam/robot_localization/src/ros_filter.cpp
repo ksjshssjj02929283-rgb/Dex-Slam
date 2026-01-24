@@ -1347,7 +1347,7 @@ void RosFilter<T>::loadParams()
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Init the last measurement time so we don't get a huge initial delta
-  filter_.setLastMeasurementTime(this->now());
+  filter_.setLastMeasurementTime(rclcpp::Time(0, 0, RCL_ROS_TIME));
 
   // Now pull in each topic to which we want to subscribe.
   // Start with odom.
