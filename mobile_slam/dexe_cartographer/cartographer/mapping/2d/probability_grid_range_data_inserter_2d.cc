@@ -53,8 +53,9 @@ void CastRays(const sensor::RangeData& range_data,
               const std::vector<uint16>& hit_table,
               const std::vector<uint16>& miss_table,
               const bool insert_free_space, ProbabilityGrid* probability_grid) {
+  // 增长地图边界
   GrowAsNeeded(range_data, probability_grid);
-
+  // 获取增加地图边界后的地图limits
   const MapLimits& limits = probability_grid->limits();
   const double superscaled_resolution = limits.resolution() / kSubpixelScale;
   const MapLimits superscaled_limits(

@@ -55,6 +55,51 @@ class Rigid2 {
     return Rigid2(vector, Rotation2D::Identity());
   }
 
+  /**
+   * @brief 将Rigid类型位姿变换为Vector3类型位姿
+   * @param rigid Rigid2形式的位姿
+   * @return Vector3类型位姿(translation.x,y,rotation)
+   */
+  static Eigen::Matrix<FloatType, 3, 1> ToVector(
+    const Rigid2<FloatType> & rigid)
+  {
+    return Eigen::Matrix<FloatType, 3, 1>(
+      rigid.translation().x(),
+      rigid.translation().y(),
+      rigid.rotation().angle());
+  }
+
+  Eigen::Matrix<FloatType, 3, 1> ToVector() const
+  {
+    return Eigen::Matrix<FloatType, 3, 1>(
+      translation().x(), translation().y(),
+      rotation().angle());
+  }
+
+  /**
+   * @brief 将Vector3类型位姿变换为Rigid类型位姿
+   * @param vector Vector3类型位姿变换 (translation.x,y,rotation)
+   * @return Rigid2类型位姿
+   */
+  static Rigid2<FloatType> FromVector(
+    const Eigen::Matrix<FloatType, 3, 1> & vector)
+  {
+    return Rigid2<FloatType>(
+      Eigen::Matrix<FloatType, 2, 1>(vector.x(), vector.y()), vector.z());
+  }
+  
+  /**
+   * @brief 通过Vector3类型改变内部旋转和平移成员
+   * @param vector Vector3类型位姿变换 (translation.x,y,rotation)
+   * @return null
+   */
+  void UpdateFromVector(const Eigen::Matrix<FloatType, 3, 1> & vector)
+  {
+    translation_.x() = vector.x();
+    translation_.y() = vector.y();
+    rotation_.angle() = vector.z();
+  }
+
   static Rigid2<FloatType> Identity() { return Rigid2<FloatType>(); }
 
   template <typename OtherType>
@@ -80,6 +125,11 @@ class Rigid2 {
   std::string DebugString() const {
     return absl::Substitute("{ t: [$0, $1], r: [$2] }", translation().x(),
                             translation().y(), rotation().angle());
+  }
+
+  bool IsValid() const {
+    return !std::isnan(translation_.x()) && !std::isnan(translation_.y()) &&
+           !std::isnan(rotation_.angle());
   }
 
  private:

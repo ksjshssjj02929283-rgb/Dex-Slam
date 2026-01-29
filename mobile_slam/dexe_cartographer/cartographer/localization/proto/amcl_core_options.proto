@@ -1,0 +1,40 @@
+// Copyright 2016 The Cartographer Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package cartographer.localization.proto;
+
+message AMCLCoreOptions {
+  int32 min_particles = 1;
+  int32 max_particles = 2;
+  float kld_err = 3;
+  float kld_z = 4;
+  float recovery_alpha_slow = 5;
+  float recovery_alpha_fast = 6;
+  int32 resample_interval = 7;
+
+  int32 max_beams = 8;
+
+  string odom_model_type = 9;
+  float odom_alpha1 = 10;
+  float odom_alpha2 = 11;
+  float odom_alpha3 = 12;
+  float odom_alpha4 = 13;
+  float odom_alpha5 = 14;
+
+  float initial_cov_xx = 15;
+  float initial_cov_yy = 16;
+  float initial_cov_aa = 17;
+}

@@ -64,6 +64,29 @@ class MapBuilder : public MapBuilderInterface {
   std::map<int, int> LoadStateFromFile(const std::string &filename,
                                        const bool load_frozen_state) override;
 
+  // // 全局一致的二维码地图
+  // const std::shared_ptr<std::vector<sensor::CodeData>> GetCodeMap() const override
+  // {
+  //   return code_map_;
+  // }
+  // // 全局一致的Tag地图
+  // const std::shared_ptr<std::vector<sensor::CodeData>> GetTagMap() const override
+  // {
+  //   return tag_map_;
+  // }
+  // 全局一致的反光板地图
+  const std::shared_ptr<std::vector<Eigen::Vector2d>>
+  GetReflectorMap() const override
+  {
+    return reflector_map_;
+  }
+  // 全局一致的线特征地图
+  const std::shared_ptr<sensor::LineMapData>
+  GetLineMap()const override
+  {
+    return line_map_;
+  }
+
   mapping::PoseGraphInterface *pose_graph() override {
     return pose_graph_.get();
   }
@@ -88,7 +111,17 @@ class MapBuilder : public MapBuilderInterface {
 
   std::unique_ptr<PoseGraph> pose_graph_;
 
+  // 全局统一的二维码地图`
+  // std::shared_ptr<std::vector<sensor::CodeData>> code_map_;
+  // // 全局统一的TAG地图
+  // std::shared_ptr<std::vector<sensor::CodeData>> tag_map_;
+  // 全局统一的反光板地图
+  std::shared_ptr<std::vector<Eigen::Vector2d>> reflector_map_;
+  // 全局统一的反光板地图
+  std::shared_ptr<sensor::LineMapData> line_map_;
+
   std::unique_ptr<sensor::CollatorInterface> sensor_collator_;
+  // 保存全局轨迹的构建器
   std::vector<std::unique_ptr<mapping::TrajectoryBuilderInterface>>
       trajectory_builders_;
   std::vector<proto::TrajectoryBuilderOptionsWithSensorIds>

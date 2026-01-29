@@ -100,11 +100,24 @@ class MapBuilderInterface {
   // trajectory_ids.
   virtual std::map<int /* trajectory id in proto */, int /* trajectory id */>
   LoadState(io::ProtoStreamReaderInterface* reader, bool load_frozen_state) = 0;
-    
+
   // Loads the SLAM state from a pbstream file. Returns the remapping of new
   // trajectory_ids.
   virtual std::map<int /* trajectory id in proto */, int /* trajectory id */>
   LoadStateFromFile(const std::string& filename, bool load_frozen_state) = 0;
+
+//   // 全局统一的二维码地图
+//   virtual const std::shared_ptr<std::vector<sensor::CodeData>>
+//   GetCodeMap() const = 0;
+//   // 全局统一的Tag地图
+//   virtual const std::shared_ptr<std::vector<sensor::CodeData>>
+//   GetTagMap() const = 0;
+  // 全局统一的反光板地图
+  virtual const std::shared_ptr<std::vector<Eigen::Vector2d>>
+  GetReflectorMap() const = 0;
+  // 全局统一的标线地图
+  virtual const std::shared_ptr<sensor::LineMapData>
+  GetLineMap()const = 0;
 
   virtual int num_trajectory_builders() const = 0;
 

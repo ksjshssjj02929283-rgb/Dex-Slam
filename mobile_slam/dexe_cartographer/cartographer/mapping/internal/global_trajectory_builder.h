@@ -25,6 +25,7 @@
 #include "cartographer/mapping/internal/3d/pose_graph_3d.h"
 #include "cartographer/mapping/internal/local_slam_result_data.h"
 #include "cartographer/mapping/trajectory_builder_interface.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/metrics/family_factory.h"
 
 namespace cartographer {
@@ -40,6 +41,13 @@ std::unique_ptr<TrajectoryBuilderInterface> CreateGlobalTrajectoryBuilder2D(
 std::unique_ptr<TrajectoryBuilderInterface> CreateGlobalTrajectoryBuilder3D(
     std::unique_ptr<LocalTrajectoryBuilder3D> local_trajectory_builder,
     const int trajectory_id, mapping::PoseGraph3D* const pose_graph,
+    const TrajectoryBuilderInterface::LocalSlamResultCallback&
+        local_slam_result_callback,
+    const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter);
+
+std::unique_ptr<TrajectoryBuilderInterface> CreateGlobalTrajectoryBuilder2D(
+    std::unique_ptr<localization::PoseEstimator2D> local_trajectory_builder,
+    const int trajectory_id, mapping::PoseGraph2D* const pose_graph,
     const TrajectoryBuilderInterface::LocalSlamResultCallback&
         local_slam_result_callback,
     const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter);

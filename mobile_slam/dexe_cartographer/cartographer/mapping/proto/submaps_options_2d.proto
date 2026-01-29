@@ -26,4 +26,9 @@ message SubmapsOptions2D {
   int32 num_range_data = 1;
   GridOptions2D grid_options_2d = 2;
   RangeDataInserterOptions range_data_inserter_options = 3;
+  double cloud_culling_prob = 4;
+  double min_line_length = 5;
+  double max_line_length = 6;
+  int32 line_culling_obs = 7;
+  int32 culling_interval = 8;
 }

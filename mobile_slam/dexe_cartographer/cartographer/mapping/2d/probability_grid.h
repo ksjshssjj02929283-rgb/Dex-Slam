@@ -18,6 +18,9 @@
 #define CARTOGRAPHER_MAPPING_2D_PROBABILITY_GRID_H_
 
 #include <vector>
+#include <string>
+
+#include <boost/filesystem.hpp>
 
 #include "cartographer/common/port.h"
 #include "cartographer/mapping/2d/grid_2d.h"
@@ -54,6 +57,7 @@ class ProbabilityGrid : public Grid2D {
 
   // Returns the probability of the cell with 'cell_index'.
   float GetProbability(const Eigen::Array2i& cell_index) const;
+  float GetCorrespondenceCost(const Eigen::Array2i& cell_index) const;
 
   proto::Grid2D ToProto() const override;
   std::unique_ptr<Grid2D> ComputeCroppedGrid() const override;

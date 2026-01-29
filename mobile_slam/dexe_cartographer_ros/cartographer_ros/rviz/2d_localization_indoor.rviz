@@ -1,0 +1,789 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 138
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /RobotModel1/Description Topic1
+        - /TF1/Tree1
+        - /MappingMap1/Topic1
+        - /SubmapsDisplay1/Submaps1
+        - /Trajectories1/Namespaces1
+        - /Constraints1/Namespaces1
+        - /Odometry1/ChassisOdom1/Shape1
+        - /Odometry1/FilteredOdom1/Shape1
+      Splitter Ratio: 0.42203986644744873
+    Tree Height: 2348
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Tool Properties
+    Expanded:
+      - /2D Goal Pose1
+      - /Publish Point1
+    Name: Tool Properties
+    Splitter Ratio: 0.5886790156364441
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+  - Class: teleop_panel/Teleop
+    Name: Teleop
+    Topic: /rt_cmd_vel
+  - Class: wyca_rviz_plugin/Wyca
+    Name: Wyca
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: LaserRear
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: RobotModel
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: false
+        ankle:
+          Value: true
+        base_footprint:
+          Value: true
+        base_link:
+          Value: true
+        buttock:
+          Value: true
+        chassis_base_link:
+          Value: true
+        front_depth:
+          Value: true
+        front_rgb:
+          Value: true
+        head_base_link:
+          Value: true
+        imu_chassis_link:
+          Value: true
+        knee:
+          Value: true
+        laser_back_link:
+          Value: true
+        laser_forward_link:
+          Value: true
+        left_arm_base:
+          Value: true
+        left_base_link:
+          Value: true
+        left_base_to_left_arm_connector:
+          Value: true
+        left_ee:
+          Value: true
+        left_j1:
+          Value: true
+        left_j2:
+          Value: true
+        left_j3:
+          Value: true
+        left_j4:
+          Value: true
+        left_j5:
+          Value: true
+        left_j6:
+          Value: true
+        left_j7:
+          Value: true
+        left_l_base_link:
+          Value: true
+        left_l_index_dist:
+          Value: true
+        left_l_index_prox:
+          Value: true
+        left_l_little_dist:
+          Value: true
+        left_l_little_prox:
+          Value: true
+        left_l_middle_dist:
+          Value: true
+        left_l_middle_prox:
+          Value: true
+        left_l_ring_dist:
+          Value: true
+        left_l_ring_prox:
+          Value: true
+        left_l_thumb_dist:
+          Value: true
+        left_l_thumb_prox:
+          Value: true
+        map:
+          Value: true
+        merged_laser_link:
+          Value: true
+        neck1:
+          Value: true
+        neck2:
+          Value: true
+        neck_base:
+          Value: true
+        odom:
+          Value: true
+        rear_depth:
+          Value: true
+        rear_rgb:
+          Value: true
+        right_arm_base:
+          Value: true
+        right_base_link:
+          Value: true
+        right_base_to_right_arm_connector:
+          Value: true
+        right_ee:
+          Value: true
+        right_j1:
+          Value: true
+        right_j2:
+          Value: true
+        right_j3:
+          Value: true
+        right_j4:
+          Value: true
+        right_j5:
+          Value: true
+        right_j6:
+          Value: true
+        right_j7:
+          Value: true
+        right_r_base_link:
+          Value: true
+        right_r_index_dist:
+          Value: true
+        right_r_index_prox:
+          Value: true
+        right_r_little_dist:
+          Value: true
+        right_r_little_prox:
+          Value: true
+        right_r_middle_dist:
+          Value: true
+        right_r_middle_prox:
+          Value: true
+        right_r_ring_dist:
+          Value: true
+        right_r_ring_prox:
+          Value: true
+        right_r_thumb_dist:
+          Value: true
+        right_r_thumb_prox:
+          Value: true
+        torso_base_link:
+          Value: true
+        waist:
+          Value: true
+        wheel_left:
+          Value: true
+        wheel_right:
+          Value: true
+      Marker Scale: 0.30000001192092896
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree:
+        map:
+          odom:
+            base_footprint:
+              base_link:
+                chassis_base_link:
+                  torso_base_link:
+                    ankle:
+                      knee:
+                        buttock:
+                          waist:
+                            head_base_link:
+                              neck_base:
+                                neck1:
+                                  neck2:
+                                    {}
+                            left_base_link:
+                              left_base_to_left_arm_connector:
+                                left_arm_base:
+                                  left_j1:
+                                    left_j2:
+                                      left_j3:
+                                        left_j4:
+                                          left_j5:
+                                            left_j6:
+                                              left_j7:
+                                                left_ee:
+                                                  left_l_base_link:
+                                                    left_l_index_prox:
+                                                      left_l_index_dist:
+                                                        {}
+                                                    left_l_little_prox:
+                                                      left_l_little_dist:
+                                                        {}
+                                                    left_l_middle_prox:
+                                                      left_l_middle_dist:
+                                                        {}
+                                                    left_l_ring_prox:
+                                                      left_l_ring_dist:
+                                                        {}
+                                                    left_l_thumb_prox:
+                                                      left_l_thumb_dist:
+                                                        {}
+                            right_base_link:
+                              right_base_to_right_arm_connector:
+                                right_arm_base:
+                                  right_j1:
+                                    right_j2:
+                                      right_j3:
+                                        right_j4:
+                                          right_j5:
+                                            right_j6:
+                                              right_j7:
+                                                right_ee:
+                                                  right_r_base_link:
+                                                    right_r_index_prox:
+                                                      right_r_index_dist:
+                                                        {}
+                                                    right_r_little_prox:
+                                                      right_r_little_dist:
+                                                        {}
+                                                    right_r_middle_prox:
+                                                      right_r_middle_dist:
+                                                        {}
+                                                    right_r_ring_prox:
+                                                      right_r_ring_dist:
+                                                        {}
+                                                    right_r_thumb_prox:
+                                                      right_r_thumb_dist:
+                                                        {}
+                  wheel_left:
+                    {}
+                  wheel_right:
+                    {}
+                front_depth:
+                  {}
+                front_rgb:
+                  {}
+                imu_chassis_link:
+                  {}
+                laser_back_link:
+                  {}
+                laser_forward_link:
+                  {}
+                merged_laser_link:
+                  {}
+                rear_depth:
+                  {}
+                rear_rgb:
+                  {}
+      Update Interval: 0
+      Value: true
+    - Alpha: 0.699999988079071
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: false
+      Enabled: false
+      Name: MappingMap
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /map
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map_updates
+      Use Timestamp: false
+      Value: false
+    - Class: cartographer_rviz/SubmapsDisplay
+      Enabled: true
+      Fade-out distance: 1
+      High Resolution: true
+      Low Resolution: false
+      Name: SubmapsDisplay
+      Submap query service: /submap_query
+      Submaps:
+        All: true
+        All Submap Pose Markers: true
+        Trajectory 0:
+          0.100: true
+          1.100: true
+          10.100: true
+          11.100: true
+          12.100: true
+          13.100: true
+          14.100: true
+          15.100: true
+          16.73: true
+          17.23: true
+          2.100: true
+          3.100: true
+          4.100: true
+          5.100: true
+          6.100: true
+          7.100: true
+          8.100: true
+          9.100: true
+          Submap Pose Markers: true
+          Value: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /submap_list
+      Tracking frame: map
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: Trajectories
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /trajectory_node_list
+      Value: false
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Constraints
+      Namespaces:
+        Inter constraints, different trajectories: true
+        Inter constraints, same trajectory: true
+        Inter residuals, different trajectories: true
+        Inter residuals, same trajectory: true
+        Intra constraints: true
+        Intra residuals: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /constraint_list
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Landmarks
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /landmark_poses_list
+      Value: true
+    - Class: rviz_common/Group
+      Displays:
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/LaserScan
+          Color: 255; 255; 255
+          Color Transformer: Intensity
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 165
+          Min Color: 0; 0; 0
+          Min Intensity: 4
+          Name: LaserFront
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.03999999910593033
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /laser_scan/front
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/LaserScan
+          Color: 255; 255; 255
+          Color Transformer: Intensity
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 255
+          Min Color: 0; 0; 0
+          Min Intensity: 3
+          Name: LaserRear
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.03999999910593033
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /laser_scan/rear
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+      Enabled: true
+      Name: LaserScan
+    - Class: rviz_common/Group
+      Displays:
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: Intensity
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 4096
+          Min Color: 0; 0; 0
+          Min Intensity: 0
+          Name: GlobalCloudMap
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.03999999910593033
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /global_cloud_map
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: Intensity
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 4096
+          Min Color: 0; 0; 0
+          Min Intensity: 0
+          Name: LocalCloudMap
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.03999999910593033
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /local_cloud_map
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: GlobalFeatureMap
+          Namespaces:
+            {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /global_feature_map
+          Value: true
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: LocalFeatureMap
+          Namespaces:
+            {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /local_feature_map
+          Value: true
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: MatchedFeature
+          Namespaces:
+            {}
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /matched_feature
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 25; 255; 0
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: false
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 4096
+          Min Color: 0; 0; 0
+          Min Intensity: 0
+          Name: MatchedCloud
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.05000000074505806
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /scan_matched_points2
+          Use Fixed Frame: true
+          Use rainbow: false
+          Value: false
+      Enabled: false
+      Name: FeatureMap
+    - Class: rviz_common/Group
+      Displays:
+        - Angle Tolerance: 0.10000000149011612
+          Class: rviz_default_plugins/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 0.10000000149011612
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 0.10000000149011612
+              Value: true
+            Value: true
+          Enabled: false
+          Keep: 100
+          Name: ChassisOdom
+          Position Tolerance: 0.10000000149011612
+          Shape:
+            Alpha: 1
+            Axes Length: 1
+            Axes Radius: 0.10000000149011612
+            Color: 255; 25; 0
+            Head Length: 0.10000000149011612
+            Head Radius: 0.05000000074505806
+            Shaft Length: 0.029999999329447746
+            Shaft Radius: 0.02199999988079071
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /feedback/odom
+          Value: false
+        - Angle Tolerance: 0.10000000149011612
+          Class: rviz_default_plugins/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 0.10000000149011612
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 0.10000000149011612
+              Value: true
+            Value: true
+          Enabled: true
+          Keep: 100
+          Name: FilteredOdom
+          Position Tolerance: 0.10000000149011612
+          Shape:
+            Alpha: 1
+            Axes Length: 1
+            Axes Radius: 0.10000000149011612
+            Color: 0; 255; 0
+            Head Length: 0.10000000149011612
+            Head Radius: 0.05000000074505806
+            Shaft Length: 0.029999999329447746
+            Shaft Radius: 0.02199999988079071
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /odometry/filtered
+          Value: true
+      Enabled: true
+      Name: Odometry
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+    - Class: rviz_default_plugins/SetInitialPose
+      Covariance x: 0.25
+      Covariance y: 0.25
+      Covariance yaw: 0.06853891909122467
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /clicked_point
+    - Class: nav2_rviz_plugins/GoalTool
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Angle: -1.5350004434585571
+      Class: rviz_default_plugins/TopDownOrtho
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Scale: 233.41656494140625
+      Target Frame: map
+      Value: TopDownOrtho (rviz_default_plugins)
+      X: 1.377928614616394
+      Y: -0.06965888291597366
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 2752
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd00000004000000000000041200000a24fc020000000cfb0000001200530065006c0065006300740069006f006e00000001e10000009b000000b000fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000006e00000a240000018200fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb00000018004e0061007600690067006100740069006f006e002000320000000324000000b70000000000000000fb0000000c00540065006c0065006f007000000002af00000164000000d400fffffffb00000008005700790063006100000003a500000100000000d400fffffffb0000000800540069006d00650000000484000000bf0000005a00ffffff000000010000015f00000a24fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073010000006e00000a240000013200fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000004420000003efc0100000001fb0000000800540069006d0065010000000000000450000000000000000000000deb00000a2400000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Selection:
+    collapsed: false
+  Teleop:
+    collapsed: false
+  Time:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 4980
+  Wyca:
+    collapsed: false
+  X: 5260
+  Y: 54

@@ -35,11 +35,13 @@
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/ceres_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/pose_graph_interface.h"
 #include "cartographer/mapping/proto/pose_graph/constraint_builder_options.pb.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer/sensor/point_cloud.h"
+#include "cartographer/ikd_tree/ikd_tree.h"
 
 namespace cartographer {
 namespace mapping {
@@ -109,6 +111,8 @@ class ConstraintBuilder2D {
  private:
   struct SubmapScanMatcher {
     const Grid2D* grid = nullptr;
+    const LineMap2DList* line_map_2d_list = nullptr;
+    ikd_tree::iKdTree<pcl::PointXYZ>* cloud_ikdtree = nullptr;
     std::unique_ptr<scan_matching::FastCorrelativeScanMatcher2D>
         fast_correlative_scan_matcher;
     std::weak_ptr<common::Task> creation_task_handle;
@@ -117,7 +121,9 @@ class ConstraintBuilder2D {
   // The returned 'grid' and 'fast_correlative_scan_matcher' must only be
   // accessed after 'creation_task_handle' has completed.
   const SubmapScanMatcher* DispatchScanMatcherConstruction(
-      const SubmapId& submap_id, const Grid2D* grid)
+      const SubmapId& submap_id, const Grid2D* grid,
+      const LineMap2DList* line_map_2d_list,
+      ikd_tree::iKdTree<pcl::PointXYZ>* cloud_ikdtree)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Runs in a background thread and does computations for an additional
@@ -164,6 +170,8 @@ class ConstraintBuilder2D {
   std::map<SubmapId, common::FixedRatioSampler> per_submap_sampler_;
 
   scan_matching::CeresScanMatcher2D ceres_scan_matcher_;
+
+  scan_matching::LineMatcher2D line_matcher_2d_;
 
   // Histogram of scan matcher scores.
   common::Histogram score_histogram_ GUARDED_BY(mutex_);

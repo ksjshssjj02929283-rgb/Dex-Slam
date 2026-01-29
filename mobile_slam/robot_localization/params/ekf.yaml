@@ -252,3 +252,16 @@ ekf_filter_node:
                                       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    1e-9, 0.0,
                                       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,     0.0,     0.0,     0.0,    0.0,    1e-9]
 
+# ============================
+# Filter Reset Configuration
+# ============================
+# Threshold for pose distance error (in meters) to trigger filter reset
+# When the distance error between filtered position and pose0 measurement exceeds this value,
+# the filter will be completely reset. Defaults to 0.2 if unspecified.
+        pose_reset_threshold: 0.1
+
+# Threshold for angle error (in degrees) to trigger filter reset
+# When the yaw angle error between filtered orientation and pose0 measurement exceeds this value,
+# the filter will be completely reset. Defaults to 3.0 if unspecified.
+        angle_reset_threshold: 3.0
+

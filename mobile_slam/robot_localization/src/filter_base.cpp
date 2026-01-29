@@ -212,7 +212,12 @@ void FilterBase::processMeasurement(const Measurement & measurement)
         std::setprecision(20) << measurement.time_.nanoseconds() <<
         ", last measurement time is " << last_measurement_time_.nanoseconds() <<
         ", delta is " << delta.nanoseconds() << "\n");
-
+    if (delta > rclcpp::Duration::from_seconds(0.1)) {
+      std::cout << std::fixed << std::setprecision(20)
+                << "Processing measurement from topic: " << measurement.topic_name_
+                << " at time: " << measurement.time_.seconds()
+                << " with delta: " << delta.seconds() << " seconds." << std::endl;
+    }
     // Only want to carry out a prediction if it's
     // forward in time. Otherwise, just correct.
     if (delta > rclcpp::Duration(0, 0u)) {
@@ -334,19 +339,18 @@ void FilterBase::setSensorTimeout(const rclcpp::Duration & sensor_timeout)
 
 void FilterBase::setState(const Eigen::VectorXd & state) {state_ = state;}
 
-void FilterBase::validateDelta(rclcpp::Duration & /*delta*/)
+void FilterBase::validateDelta(rclcpp::Duration & delta)
 {
   // TODO(someone): Need to verify this condition B'Coz
   // rclcpp::Duration::from_seconds(100000.0) value is 0.00010000000000000000479
   // This handles issues with ROS time when use_sim_time is on and we're playing
   // from bags.
-  /* if (delta > rclcpp::Duration::from_seconds(100000.0))
+  if (delta > rclcpp::Duration::from_seconds(0.1))
   {
-    FB_DEBUG("Delta was very large. Suspect playing from bag file. Setting to
-  0.01\n");
-
-    delta = rclcpp::Duration::from_seconds(0.01);
-  } */
+    std::cout << "Large time delta detected (" <<
+      delta.seconds() << " seconds). Capping to 0.05 seconds." << std::endl;
+    delta = rclcpp::Duration::from_seconds(0.05);
+  }
 }
 
 void FilterBase::prepareControl(

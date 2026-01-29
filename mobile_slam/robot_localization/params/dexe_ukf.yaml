@@ -51,7 +51,7 @@ robot_localization:
 
 # Whether to use lagged data smoothing
         smooth_lagged_data: true
-        history_length: 2.
+        history_length: 0.5
         # predict_to_current_time: true
 
 # REP-105 (http://www.ros.org/reps/rep-0105.html) specifies four principal coordinate frames: base_link, odom, map, and
@@ -75,7 +75,7 @@ robot_localization:
 #         estimation node from robot_localization! However, that instance should *not* fuse the global data.
         map_frame: map                  # Defaults to "map" if unspecified
         odom_frame: odom                # Defaults to "odom" if unspecified
-        base_link_frame: base_link # Defaults to "base_link" if unspecified
+        base_link_frame: base_footprint # Defaults to "base_link" if unspecified
         world_frame: map                # Defaults to the value of odom_frame if unspecified
 
 # The filter accepts an arbitrary number of inputs from each input message type (nav_msgs/Odometry,
@@ -127,30 +127,27 @@ robot_localization:
         # odom0_twist_rejection_threshold: 1.0
 
 # ============================
-# Cartographer Localization Pose Input Configuration
+# Localization Pose Input Configuration
 # ============================
-# Cartographer provides high-accuracy localization in map frame
-# This pose source contains position and orientation with covariance
-        pose0: /cartographer/loc_pose
+        pose0: /loc_pose
         pose0_config: [true,  true,  false,
                        false, false, true,
                        false, false, false,
                        false, false, false,
                        false, false, false]
 
-# Custom covariance for Cartographer localization pose [x, y, yaw]
-# Cartographer SLAM-based localization has:
-# Position: ~5cm accuracy -> (0.05)^2 = 0.0025
-# Yaw: ~2 degree accuracy -> (0.034rad)^2 ≈ 0.0012
-        pose0_covariance: [0.0025, 0.0,    0.0,
-                           0.0,    0.0025, 0.0,
-                           0.0,    0.0,    0.0012]
+# Custom covariance for localization pose [x, y, yaw]
+# SLAM-based localization typically has:
+# Position: ~3cm accuracy -> (0.03)^2 = 0.0009
+# Yaw: ~2 degree accuracy -> (0.034rad)^2 ≈ 0.0009
+        pose0_covariance: [0.0009, 0.0,    0.0,
+                           0.0,    0.0009, 0.0,
+                           0.0,    0.0,    0.0009]
 
-# Cartographer provides absolute pose, not differential
         pose0_differential: false
         pose0_relative: false
-        pose0_queue_size: 10  # Lower frequency than wheel odometry (~10-50Hz)
-        pose0_rejection_threshold: 2.0  # 大于2个sigma的值将被忽略
+        pose0_queue_size: 10  # Optimized for low-frequency pose updates (~5Hz)
+        pose0_rejection_threshold: 2.0  # Note the difference in parameter name (大于2个sigma的值将被忽略)
 
 # ============================
 # IMU Input Configuration
@@ -307,3 +304,18 @@ robot_localization:
 # Whether to automatically enable and start the filter when setPose is called
         enable_on_set_pose: true
         start_localization_on_set_pose: true
+
+# ============================
+# Filter Reset Configuration
+# ============================
+# Threshold for pose distance error (in meters) to trigger filter reset
+# When the distance error between filtered position and pose0 measurement exceeds this value,
+# the filter will be completely reset. Defaults to 0.2 if unspecified.
+# 提高到 0.5m 以减少频繁重置，0.15m 的误差在定位中是可接受的
+        pose_reset_threshold: 0.2
+
+# Threshold for angle error (in degrees) to trigger filter reset
+# When the yaw angle error between filtered orientation and pose0 measurement exceeds this value,
+# the filter will be completely reset. Defaults to 3.0 if unspecified.
+# 提高到 5° 以减少频繁重置，1° 的误差对大多数应用来说不是问题
+        angle_reset_threshold: 30.0

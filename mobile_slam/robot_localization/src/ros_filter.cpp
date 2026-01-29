@@ -66,7 +66,7 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   publish_transform_(true),
   reset_on_time_jump_(false),
   smooth_lagged_data_(false),
-  toggled_on_(true),
+  toggled_on_(false),
   two_d_mode_(false),
   use_control_(false),
   stamped_control_(false),
@@ -84,12 +84,13 @@ RosFilter<T>::RosFilter(const rclcpp::NodeOptions & options)
   last_diag_time_(0, 0, RCL_ROS_TIME),
   last_published_stamp_(0, 0, RCL_ROS_TIME),
   predict_to_current_time_(false),
+  is_initialized_(false),
+  pose_reset_threshold_(0.1), // 0.1 meters
+  angle_reset_threshold_(3.0 * M_PI / 180.0),  // 3 degrees in radians
   last_set_pose_time_(0, 0, RCL_ROS_TIME),
   latest_control_time_(0, 0, RCL_ROS_TIME),
   tf_timeout_(0ns),
-  tf_time_offset_(0ns),
-  is_initialized_(false),
-  pose_reset_threshold_(0.2)
+  tf_time_offset_(0ns)
 {
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
@@ -190,46 +191,46 @@ void RosFilter<T>::toggleFilterProcessingCallback(
 }
 
 template<typename T>
-void RosFilter<T>::startLocalizationCallback(
+void RosFilter<T>::startFilterCallback(
   const std::shared_ptr<rmw_request_id_t>/*request_header*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
 {
   if (toggled_on_) {
     resp->success = false;
-    resp->message = "Localization is already running.";
+    resp->message = "Filter is already running.";
     RCLCPP_WARN(
       this->get_logger(),
-      "Start localization service called but localization is already running.");
+      "Start filter service called but filter is already running.");
   } else {
     RCLCPP_INFO(
       this->get_logger(),
-      "Starting localization filter processing.");
+      "Starting filter processing.");
     toggled_on_ = true;
     resp->success = true;
-    resp->message = "Localization started successfully.";
+    resp->message = "Filter started successfully.";
   }
 }
 
 template<typename T>
-void RosFilter<T>::stopLocalizationCallback(
+void RosFilter<T>::stopFilterCallback(
   const std::shared_ptr<rmw_request_id_t>/*request_header*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Request>/*req*/,
   const std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
 {
   if (!toggled_on_) {
     resp->success = false;
-    resp->message = "Localization is already stopped.";
+    resp->message = "Filter is already stopped.";
     RCLCPP_WARN(
       this->get_logger(),
-      "Stop localization service called but localization is already stopped.");
+      "Stop filter service called but filter is already stopped.");
   } else {
     RCLCPP_INFO(
       this->get_logger(),
-      "Stopping localization filter processing.");
+      "Stopping filter processing.");
     toggled_on_ = false;
     resp->success = true;
-    resp->message = "Localization stopped successfully.";
+    resp->message = "Filter stopped successfully.";
   }
 }
 
@@ -388,6 +389,8 @@ void RosFilter<T>::enqueueMeasurement(
   meas->mahalanobis_thresh_ = mahalanobis_thresh;
   meas->latest_control_ = latest_control_;
   meas->latest_control_time_ = latest_control_time_;
+  
+  std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
   measurement_queue_.push(meas);
 }
 
@@ -663,60 +666,108 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
 
   bool predict_to_current_time = predict_to_current_time_;
 
+  // Create a local copy of the measurement queue to minimize lock holding time
+  // This allows new measurements to be enqueued while we process the current batch
+  std::priority_queue<MeasurementPtr, std::vector<MeasurementPtr>, Measurement> measurement_queue_copy;
+  
+  // Only hold the lock during the swap operation (minimal lock time)
+  {
+    std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
+    measurement_queue_copy.swap(measurement_queue_);
+  }
+
   // If we have any measurements in the queue, process them
-  if (!measurement_queue_.empty()) {
+  if (!measurement_queue_copy.empty()) {
+    // ========== 智能测量丢弃策略（精准版）==========
+    // 策略：只丢弃那些会触发 revertTo 的过旧测量（时间 < 滤波器当前时间）
+    // 保留时间 >= 滤波器当前时间的测量，因为它们可以正常处理
+    // 这样可以避免频繁的 revertTo 操作，同时保留有效数据
+    const MeasurementPtr & first_measurement = measurement_queue_copy.top();
+    const rclcpp::Time first_measurement_time = first_measurement->time_;
+    
+    // 计算第一个测量与滤波器当前时间的差异
+    rclcpp::Duration time_lag = filter_.getLastMeasurementTime() - first_measurement_time;
+    
+    // 最大可接受延迟：如果设置了 history_length，使用它；否则使用 2 * sensor_timeout
+    const rclcpp::Duration max_acceptable_lag = 
+      (history_length_ > rclcpp::Duration(0ns)) ? 
+      history_length_ : 
+      (filter_.getSensorTimeout() * 2);
+    
+    // 只有当 smooth_lagged_data_ 启用且延迟超过阈值时，才丢弃过旧测量
+    if (smooth_lagged_data_ && time_lag > max_acceptable_lag) {
+      // 关键修改：只丢弃时间早于滤波器当前时间的测量（这些会触发 revertTo）
+      // 不丢弃时间晚于或等于滤波器当前时间的测量（这些可以正常处理）
+      rclcpp::Time filter_current_time = filter_.getLastMeasurementTime();
+      
+      while (!measurement_queue_copy.empty() && 
+             measurement_queue_copy.top()->time_ < filter_current_time) {
+        measurement_queue_copy.pop();
+      }
+    }
+    
     // Check if the first measurement we're going to process is older than the
     // filter's last measurement. This means we have received an out-of-sequence
     // message (one with an old timestamp), and we need to revert both the
     // filter state and measurement queue to the first state that preceded the
     // time stamp of our first measurement.
-    const MeasurementPtr & first_measurement = measurement_queue_.top();
     int restored_measurement_count = 0;
-    if (smooth_lagged_data_ &&
-      first_measurement->time_ < filter_.getLastMeasurementTime())
-    {
-      RF_DEBUG(
-        "Received a measurement that was " <<
-          filter_utilities::toSec(
-          filter_.getLastMeasurementTime() -
-          first_measurement->time_) <<
-          " seconds in the past. Reverting filter state and "
-          "measurement queue...");
-
-      int original_count = static_cast<int>(measurement_queue_.size());
-      const rclcpp::Time first_measurement_time = first_measurement->time_;
-      const std::string first_measurement_topic =
-        first_measurement->topic_name_;
-      // revertTo may invalidate first_measurement
-      if (!revertTo(first_measurement_time - rclcpp::Duration(1ns))) {
+    if (!measurement_queue_copy.empty() && smooth_lagged_data_) {
+      const MeasurementPtr & remaining_first = measurement_queue_copy.top();
+      if (remaining_first->time_ < filter_.getLastMeasurementTime()) {
         RF_DEBUG(
-          "ERROR: history interval is too small to revert to time " <<
-            filter_utilities::toSec(first_measurement_time) << "\n");
-        // ROS_WARN_STREAM_DELAYED_THROTTLE(history_length_,
-        //   "Received old measurement for topic " << first_measurement_topic <<
-        //   ", but history interval is insufficiently sized. "
-        //   "Measurement time is " << std::setprecision(20) <<
-        //   first_measurement_time <<
-        //   ", current time is " << current_time <<
-        //   ", history length is " << history_length_ << ".");
-        restored_measurement_count = 0;
-      }
+          "Received a measurement that was " <<
+            filter_utilities::toSec(
+            filter_.getLastMeasurementTime() -
+            remaining_first->time_) <<
+            " seconds in the past. Reverting filter state and "
+            "measurement queue...");
 
-      restored_measurement_count =
-        static_cast<int>(measurement_queue_.size()) - original_count;
+        int original_count = static_cast<int>(measurement_queue_copy.size());
+        const rclcpp::Time remaining_first_time = remaining_first->time_;
+        const std::string remaining_first_topic = remaining_first->topic_name_;
+        
+        // revertTo may invalidate first_measurement
+        // Pass measurement_queue_copy so restored measurements go to the copy queue
+        if (!revertTo(remaining_first_time - rclcpp::Duration(1ns), measurement_queue_copy)) {
+          RF_DEBUG(
+            "ERROR: history interval is too small to revert to time " <<
+              filter_utilities::toSec(remaining_first_time) << "\n");
+          RCLCPP_WARN(
+            this->get_logger(),
+            "Received old measurement for topic %s, but history interval is "
+            "insufficiently sized. Measurement time is %.20f, current time is "
+            "%.20f, history length is %.20f.",
+            remaining_first_topic.c_str(),
+            filter_utilities::toSec(remaining_first_time),
+            filter_utilities::toSec(current_time),
+            filter_utilities::toSec(history_length_));
+          restored_measurement_count = 0;
+        }
+
+        restored_measurement_count =
+          static_cast<int>(measurement_queue_copy.size()) - original_count;
+      }
     }
 
-    while (!measurement_queue_.empty() && rclcpp::ok()) {
-      MeasurementPtr measurement = measurement_queue_.top();
+    while (!measurement_queue_copy.empty() && rclcpp::ok()) {
+      MeasurementPtr measurement = measurement_queue_copy.top();
 
       // If we've reached a measurement that has a time later than now, it
       // should wait until a future iteration. Since measurements are stored in
       // a priority queue, all remaining measurements will be in the future.
       if (current_time < measurement->time_) {
+        // Put unprocessed future measurements back into the original queue
+        // Need to lock to safely move remaining measurements back
+        std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
+        while (!measurement_queue_copy.empty()) {
+          measurement_queue_.push(measurement_queue_copy.top());
+          measurement_queue_copy.pop();
+        }
         break;
       }
 
-      measurement_queue_.pop();
+      measurement_queue_copy.pop();
 
       // When we receive control messages, we call this directly in the control
       // callback. However, we also associate a control with each sensor message
@@ -753,11 +804,11 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
         filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
         is_initialized_ = true;
 
-        RCLCPP_INFO(
-          this->get_logger(),
-          "Initialized filter with pose0 at [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-          initial_state_(StateMemberX), initial_state_(StateMemberY), initial_state_(StateMemberZ),
-          initial_state_(StateMemberRoll), initial_state_(StateMemberPitch), initial_state_(StateMemberYaw));
+        RF_DEBUG(
+          "Initialized filter with pose0 at [" <<
+          initial_state_(StateMemberX) << ", " << initial_state_(StateMemberY) << ", " << 
+          initial_state_(StateMemberZ) << ", " << initial_state_(StateMemberRoll) << ", " << 
+          initial_state_(StateMemberPitch) << ", " << initial_state_(StateMemberYaw) << "]\n");
       }
 
       // Check if we need to reset the filter (pose0 with large error)
@@ -777,25 +828,65 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
           double err_y = filtered_position.pose.pose.position.y - measurement->measurement_(StateMemberY);
           double err_dist = std::sqrt(err_x * err_x + err_y * err_y);
 
-          if (err_dist > pose_reset_threshold_) {
+          // Calculate angle error (yaw)
+          tf2::Quaternion filtered_quat(
+            filtered_position.pose.pose.orientation.x,
+            filtered_position.pose.pose.orientation.y,
+            filtered_position.pose.pose.orientation.z,
+            filtered_position.pose.pose.orientation.w);
+          double filtered_yaw = robot_localization::ros_filter_utilities::getYaw(filtered_quat);
+          double measured_yaw = measurement->measurement_(StateMemberYaw);
+          double err_yaw = std::abs(filtered_yaw - measured_yaw);
+          // Normalize angle error to [-pi, pi]
+          while (err_yaw > M_PI) err_yaw -= 2.0 * M_PI;
+          while (err_yaw < -M_PI) err_yaw += 2.0 * M_PI;
+          err_yaw = std::abs(err_yaw);
+
+          bool need_reset = (err_dist > pose_reset_threshold_) || (err_yaw > angle_reset_threshold_);
+
+          if (need_reset) {
             RCLCPP_WARN(
               this->get_logger(),
-              "Large pose error detected (%.3f m). Resetting filter state.", err_dist);
+              "Large pose error detected (dist: %.3f m, yaw: %.3f deg). Performing complete filter reset.", 
+              err_dist, err_yaw * 180.0 / M_PI);
             RCLCPP_INFO(
               this->get_logger(),
-              "Filtered position: [%.3f, %.3f], Measured position: [%.3f, %.3f]",
-              filtered_position.pose.pose.position.x, filtered_position.pose.pose.position.y,
-              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY));
+              "Filtered position: [%.3f, %.3f, %.3f deg], Measured position: [%.3f, %.3f, %.3f deg]",
+              filtered_position.pose.pose.position.x, filtered_position.pose.pose.position.y, filtered_yaw * 180.0 / M_PI,
+              measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY), measured_yaw * 180.0 / M_PI);
 
+            // 彻底重置滤波器：清空所有历史数据和测量队列
+            // Clear both the copy queue and the original queue
+            while (!measurement_queue_copy.empty()) {
+              measurement_queue_copy.pop();
+            }
+            clearMeasurementQueue();
+            filter_state_history_.clear();
+            measurement_history_.clear();
+            previous_measurements_.clear();
+            previous_measurement_covariances_.clear();
+            
+            // 重置滤波器内部状态
+            filter_.reset();
+            
+            // 设置新的初始状态
             filter_.setState(measurement->measurement_);
             filter_.setEstimateErrorCovariance(initial_estimate_covariance_);
+            filter_.setLastMeasurementTime(measurement->time_);
+            
+            // 标记滤波器已重新初始化
+            is_initialized_ = true;
 
             RCLCPP_INFO(
               this->get_logger(),
-              "Reset filter pose to [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+              "Complete filter reset: state, covariance, and all history cleared. "
+              "New pose: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
               measurement->measurement_(StateMemberX), measurement->measurement_(StateMemberY),
               measurement->measurement_(StateMemberZ), measurement->measurement_(StateMemberRoll),
               measurement->measurement_(StateMemberPitch), measurement->measurement_(StateMemberYaw));
+            
+            // 重置后应该跳过当前测量的processMeasurement，因为已经设置了状态
+            continue;
           }
         }
       }
@@ -806,12 +897,12 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
       // Store old states and measurements if we're smoothing
       if (smooth_lagged_data_) {
         // Invariant still holds: measurementHistoryDeque_.back().time_ <
-        // measurement_queue_.top().time_
+        // measurement_queue_copy.top().time_
         measurement_history_.push_back(measurement);
 
         // We should only save the filter state once per unique timstamp
-        if (measurement_queue_.empty() ||
-          measurement_queue_.top()->time_ !=
+        if (measurement_queue_copy.empty() ||
+          measurement_queue_copy.top()->time_ !=
           filter_.getLastMeasurementTime())
         {
           saveFilterState(filter_);
@@ -844,13 +935,44 @@ void RosFilter<T>::integrateMeasurements(const rclcpp::Time & current_time)
     rclcpp::Duration last_update_delta =
       current_time - filter_.getLastMeasurementTime();
 
-    filter_.validateDelta(last_update_delta);
-    filter_.predict(current_time, last_update_delta);
+    // ========== 预测步长限制策略 ==========
+    // 当时间差过大时（例如 loc_pose 延迟），限制单次预测步长
+    // 避免大步长预测导致的误差积累和定位剧烈变化
+    const double max_predict_step = 0.1;  // 最大单次预测步长：200ms
+    const double delta_sec = filter_utilities::toSec(last_update_delta);
+    
+    if (delta_sec > max_predict_step) {
+      // 分步预测：将大步长分解为多个小步长
+      int num_steps = static_cast<int>(std::ceil(delta_sec / max_predict_step));
+      rclcpp::Duration step_delta = rclcpp::Duration::from_seconds(delta_sec / num_steps);
+      
+      RF_DEBUG(
+        "Large prediction delta: " << delta_sec << " s. Splitting into " << 
+        num_steps << " steps.\n");
+      
+      for (int i = 0; i < num_steps; ++i) {
+        rclcpp::Time step_time = filter_.getLastMeasurementTime() + step_delta;
+        
+        // 最后一步直接预测到当前时间，避免累积误差
+        if (i == num_steps - 1) {
+          step_time = current_time;
+          step_delta = current_time - filter_.getLastMeasurementTime();
+        }
+        
+        filter_.validateDelta(step_delta);
+        filter_.predict(step_time, step_delta);
+        filter_.setLastMeasurementTime(step_time);
+      }
+    } else {
+      // 正常情况：单步预测
+      filter_.validateDelta(last_update_delta);
+      filter_.predict(current_time, last_update_delta);
 
-    // Update the last measurement time and last update time
-    filter_.setLastMeasurementTime(
-      filter_.getLastMeasurementTime() +
-      last_update_delta);
+      // Update the last measurement time and last update time
+      filter_.setLastMeasurementTime(
+        filter_.getLastMeasurementTime() +
+        last_update_delta);
+    }
   }
 
   RF_DEBUG("\n----- /RosFilter<T>::integrateMeasurements ------\n");
@@ -1185,20 +1307,20 @@ void RosFilter<T>::loadParams()
   // Create a subscriber for manually setting/resetting pose
   set_pose_sub_ =
     this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-    "set_pose", rclcpp::QoS(1),
+    "/robot_localization/set_pose", rclcpp::QoS(1),
     std::bind(&RosFilter<T>::setPoseCallback, this, std::placeholders::_1));
 
   // Create a service for manually setting/resetting pose
   set_pose_service_ =
     this->create_service<robot_localization::srv::SetPose>(
-    "set_pose", std::bind(
+    "/robot_localization/set_pose", std::bind(
       &RosFilter<T>::setPoseSrvCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Create a service for manually enabling the filter
   enable_filter_srv_ =
     this->create_service<std_srvs::srv::Empty>(
-    "enable", std::bind(
+    "/robot_localization/enable", std::bind(
       &RosFilter::enableFilterSrvCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
@@ -1206,26 +1328,26 @@ void RosFilter<T>::loadParams()
   // publishing
   toggle_filter_processing_srv_ =
     this->create_service<robot_localization::srv::ToggleFilterProcessing>(
-    "toggle", std::bind(
+    "/robot_localization/toggle", std::bind(
       &RosFilter<T>::toggleFilterProcessingCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-  // Create a service for starting localization (convenience wrapper)
-  start_localization_srv_ =
+  // Create a service for starting filter (convenience wrapper)
+  start_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "start_localization", std::bind(
-      &RosFilter<T>::startLocalizationCallback, this,
+    "/robot_localization/start_filter", std::bind(
+      &RosFilter<T>::startFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-  // Create a service for stopping localization (convenience wrapper)
-  stop_localization_srv_ =
+  // Create a service for stopping filter (convenience wrapper)
+  stop_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "stop_localization", std::bind(
-      &RosFilter<T>::stopLocalizationCallback, this,
+    "/robot_localization/stop_filter", std::bind(
+      &RosFilter<T>::stopFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Init the last measurement time so we don't get a huge initial delta
-  filter_.setLastMeasurementTime(this->now());
+  filter_.setLastMeasurementTime(rclcpp::Time(0, 0, RCL_ROS_TIME));
 
   // Now pull in each topic to which we want to subscribe.
   // Start with odom.
@@ -1390,10 +1512,9 @@ void RosFilter<T>::loadParams()
           std::placeholders::_1, odom_topic_name,
           pose_callback_data, twist_callback_data);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
         topic_subs_.push_back(
           this->create_subscription<nav_msgs::msg::Odometry>(
-            odom_topic, custom_qos,
+            odom_topic, rclcpp::SystemDefaultsQoS(),
             odom_callback));
       } else {
         std::stringstream stream;
@@ -1559,12 +1680,10 @@ void RosFilter<T>::loadParams()
           &RosFilter<T>::poseCallback, this, std::placeholders::_1,
           callback_data, world_frame_id_, false);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
-
         topic_subs_.push_back(
           this->create_subscription<
             geometry_msgs::msg::PoseWithCovarianceStamped>(
-            pose_topic, custom_qos, pose_callback));
+            pose_topic, rclcpp::SystemDefaultsQoS(), pose_callback));
         std::cout << "Subscribed to pose topic " << pose_topic << "\n";
 
         if (differential) {
@@ -1656,11 +1775,10 @@ void RosFilter<T>::loadParams()
           std::placeholders::_1, callback_data,
           base_link_frame_id_);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
         topic_subs_.push_back(
           this->create_subscription<
             geometry_msgs::msg::TwistWithCovarianceStamped>(
-            twist_topic, custom_qos, twist_callback));
+            twist_topic, rclcpp::SystemDefaultsQoS(), twist_callback));
 
         twist_var_counts[StateMemberVx] += twist_update_vec[StateMemberVx];
         twist_var_counts[StateMemberVy] += twist_update_vec[StateMemberVy];
@@ -1966,10 +2084,9 @@ void RosFilter<T>::loadParams()
           imu_topic_name, pose_callback_data,
           twist_callback_data, accel_callback_data);
 
-        auto custom_qos = rclcpp::SensorDataQoS(rclcpp::KeepLast(queue_size));
         topic_subs_.push_back(
           this->create_subscription<sensor_msgs::msg::Imu>(
-            imu_topic, custom_qos, imu_callback));
+            imu_topic, rclcpp::SystemDefaultsQoS(), imu_callback));
       } else {
         std::cerr << "Warning: " << imu_topic <<
           " is listed as an input topic, "
@@ -2164,6 +2281,10 @@ void RosFilter<T>::loadParams()
 
   // Load pose reset threshold parameter
   pose_reset_threshold_ = this->declare_parameter<double>("pose_reset_threshold", 0.2);
+  
+  // Load angle reset threshold parameter (in degrees, convert to radians)
+  double angle_reset_threshold_deg = this->declare_parameter<double>("angle_reset_threshold", 3.0);
+  angle_reset_threshold_ = angle_reset_threshold_deg * M_PI / 180.0;
 }
 
 template<typename T>
@@ -3729,7 +3850,7 @@ void RosFilter<T>::saveFilterState(T & filter)
 }
 
 template<typename T>
-bool RosFilter<T>::revertTo(const rclcpp::Time & time)
+bool RosFilter<T>::revertTo(const rclcpp::Time & time, MeasurementQueue & measurement_queue)
 {
   RF_DEBUG("\n----- RosFilter<T>::revertTo -----\n");
   RF_DEBUG(
@@ -3796,7 +3917,7 @@ bool RosFilter<T>::revertTo(const rclcpp::Time & time)
     {
       // Don't need to restore measurements that predate our earliest state time
       if (state->last_measurement_time_ <= measurement_history_.back()->time_) {
-        measurement_queue_.push(measurement_history_.back());
+        measurement_queue.push(measurement_history_.back());
         restored_measurements++;
       }
 
@@ -3881,6 +4002,7 @@ void RosFilter<T>::clearMeasurementQueue()
 {
   // Clear the measurement queue.
   // This prevents us from immediately undoing our reset.
+  std::lock_guard<std::recursive_mutex> lock(measurement_queue_mutex_);
   while (!measurement_queue_.empty() && rclcpp::ok()) {
     measurement_queue_.pop();
   }

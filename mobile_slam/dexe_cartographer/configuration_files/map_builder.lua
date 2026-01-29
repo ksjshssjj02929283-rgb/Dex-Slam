@@ -19,5 +19,5 @@ MAP_BUILDER = {
   use_trajectory_builder_3d = false,
   num_background_threads = 4,
   pose_graph = POSE_GRAPH,
-  collate_by_trajectory = false,     -- 是否根据轨迹将多个激光雷达数据整合成一个
+  collate_by_trajectory = false,
 }

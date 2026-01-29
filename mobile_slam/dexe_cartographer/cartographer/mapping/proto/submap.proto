@@ -20,12 +20,64 @@ import "cartographer/mapping/proto/grid_2d.proto";
 import "cartographer/mapping/proto/hybrid_grid.proto";
 import "cartographer/transform/proto/transform.proto";
 
+// Task 2: 添加线段地图数据结构支持
+// 线段数据
+message LineData {
+  // 起点坐标
+  double begin_x = 1;
+  double begin_y = 2;
+  // 终点坐标
+  double end_x = 3;
+  double end_y = 4;
+  // 权重
+  double weight = 5;
+  // 是否有法向量
+  bool has_normal = 6;
+  // 法向量（可选）
+  double normal_x = 7;
+  double normal_y = 8;
+}
+
+// 地图线段数据
+message MapLine2D {
+  int32 global_id = 1;
+  int32 local_id = 2;
+  LineData line_data = 3;
+  repeated LineData line_data_list = 4;
+  int32 lose_time = 5;
+  int32 inliers = 6;
+}
+
+// 线段地图列表
+message LineMap2DList {
+  int32 latest_local_id = 1;
+  repeated MapLine2D line_map_data = 2;
+}
+
+// 点云数据（RangefinderPoint）
+message Point3D {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+// 点云数据
+message PointCloudData {
+  repeated Point3D points = 1;
+  repeated float intensities = 2;  // 可选的强度信息
+}
+
 // Serialized state of a Submap2D.
 message Submap2D {
   transform.proto.Rigid3d local_pose = 1;
   int32 num_range_data = 2;
   bool finished = 3;
   Grid2D grid = 4;
+  // Task 2: 添加线段地图数据到 Submap2D
+  LineMap2DList line_map_2d_list = 5;
+  // 添加点云数据到 Submap2D
+  PointCloudData cloud = 6;
+  PointCloudData highlight_cloud = 7;
 }
 
 // Serialized state of a Submap3D.

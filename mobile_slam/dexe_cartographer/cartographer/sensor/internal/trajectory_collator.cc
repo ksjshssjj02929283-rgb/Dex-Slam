@@ -46,11 +46,20 @@ void TrajectoryCollator::FinishTrajectory(const int trajectory_id) {
   }
 }
 
+/**
+ * @brief 将不同的传感器数据加入到不同的队列中
+ * 
+ * @param trajectory_id 
+ * @param data 
+ */
 void TrajectoryCollator::AddSensorData(const int trajectory_id,
                                        std::unique_ptr<Data> data) {
+  // 每个传感器数据都会有一个对应的队列，这里获取数据对应队列的key
   QueueKey queue_key{trajectory_id, data->GetSensorId()};
+  // 传感器数据统计信息，计数器+1
   auto* metric = GetOrCreateSensorMetric(data->GetSensorId(), trajectory_id);
   metric->Increment();
+  // 向该传感器的数据队列中添加数据
   trajectory_to_queue_.at(trajectory_id)
       .Add(std::move(queue_key), std::move(data));
 }

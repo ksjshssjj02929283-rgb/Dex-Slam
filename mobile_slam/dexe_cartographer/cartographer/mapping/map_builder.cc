@@ -46,17 +46,25 @@ std::vector<std::string> SelectRangeSensorIds(
     const std::set<MapBuilder::SensorId>& expected_sensor_ids) {
   std::vector<std::string> range_sensor_ids;
   for (const MapBuilder::SensorId& sensor_id : expected_sensor_ids) {
-    if (sensor_id.type == MapBuilder::SensorId::SensorType::RANGE) { // 如果是laser
-      range_sensor_ids.push_back(sensor_id.id); // 存入topic
+    if (sensor_id.type == MapBuilder::SensorId::SensorType::RANGE) {
+      range_sensor_ids.push_back(sensor_id.id);
     }
   }
   return range_sensor_ids;
 }
 
+/**
+ * @brief 纯定位模式下，向pose graph中添加修正器
+ * 
+ * @param trajectory_id 
+ * @param trajectory_options 
+ * @param pose_graph 
+ */
 void MaybeAddPureLocalizationTrimmer(
     const int trajectory_id,
     const proto::TrajectoryBuilderOptions& trajectory_options,
     PoseGraph* pose_graph) {
+  // 有参数 pure_localization 时，增加默认参数的trimmer（高优先级）
   if (trajectory_options.pure_localization()) {
     LOG(WARNING)
         << "'TrajectoryBuilderOptions::pure_localization' field is deprecated. "
@@ -65,7 +73,8 @@ void MaybeAddPureLocalizationTrimmer(
         trajectory_id, 3 /* max_submaps_to_keep */));
     return;
   }
-  if (trajectory_options.has_pure_localization_trimmer()) { // 参数配置里面是否设置了纯定位修建器
+  // 有参数 pure_localization_trimmer 时，增加指定参数的trimmer
+  if (trajectory_options.has_pure_localization_trimmer()) {
     pose_graph->AddTrimmer(absl::make_unique<PureLocalizationTrimmer>(
         trajectory_id,
         trajectory_options.pure_localization_trimmer().max_submaps_to_keep()));
@@ -73,11 +82,19 @@ void MaybeAddPureLocalizationTrimmer(
 }
 
 }  // namespace
-// 初始化地图构建器，根据参数配置2d/3d 位姿图，优化问题 以及是否将多激光雷达整合成一个
+
+/**
+ * @brief Construct a new Map Builder:: Map Builder object
+ *        构建2D/3D轨迹优化器，构建修正器
+ * 
+ * @param options 
+ */
 MapBuilder::MapBuilder(const proto::MapBuilderOptions& options)
     : options_(options), thread_pool_(options.num_background_threads()) {
+  // 1. 判断是否有配置参数
   CHECK(options.use_trajectory_builder_2d() ^
         options.use_trajectory_builder_3d());
+  // 2. 根据配置，创建轨迹优化器（pose graph）
   if (options.use_trajectory_builder_2d()) {
     pose_graph_ = absl::make_unique<PoseGraph2D>(
         options_.pose_graph_options(),
@@ -92,28 +109,37 @@ MapBuilder::MapBuilder(const proto::MapBuilderOptions& options)
             options_.pose_graph_options().optimization_problem_options()),
         &thread_pool_);
   }
-  // 根据参数配置，判断是否将多个激光雷达整合成一个
+  // 构建修正器
+  // TODO：修正器的作用是什么？？
   if (options.collate_by_trajectory()) {
     sensor_collator_ = absl::make_unique<sensor::TrajectoryCollator>();
   } else {
     sensor_collator_ = absl::make_unique<sensor::Collator>();
   }
 }
-// 
+/**
+ * @brief 根据传感器类型id和配置，创建LocalTrajectoryBuilder和CreateGlobalTrajectoryBuilder
+ * 
+ * @param expected_sensor_ids 传感器类型列表
+ * @param trajectory_options  轨迹构建器配置
+ * @param local_slam_result_callback local slam结果回调函数
+ * @return int 轨迹id
+ */
 int MapBuilder::AddTrajectoryBuilder(
     const std::set<SensorId>& expected_sensor_ids,
     const proto::TrajectoryBuilderOptions& trajectory_options,
     LocalSlamResultCallback local_slam_result_callback) {
   const int trajectory_id = trajectory_builders_.size();
 
+  // 1. 构造一个motion filter，用来筛选pose_graph的关键帧
   absl::optional<MotionFilter> pose_graph_odometry_motion_filter;
   if (trajectory_options.has_pose_graph_odometry_motion_filter()) {
     LOG(INFO) << "Using a motion filter for adding odometry to the pose graph.";
-    // 向运动滤波器的容器中插入一个运动滤波器对象，该对象通过配置参数进行构造
     pose_graph_odometry_motion_filter.emplace(
         MotionFilter(trajectory_options.pose_graph_odometry_motion_filter()));
   }
-  // 在这里根据lua文件里面使用的trajectory_builder字段类型，选择2D/3D版本
+
+  // 2. 创建全局和local的位姿求解器
   if (options_.use_trajectory_builder_3d()) {
     std::unique_ptr<LocalTrajectoryBuilder3D> local_trajectory_builder;
     if (trajectory_options.has_trajectory_builder_3d_options()) {
@@ -129,19 +155,16 @@ int MapBuilder::AddTrajectoryBuilder(
             std::move(local_trajectory_builder), trajectory_id,
             static_cast<PoseGraph3D*>(pose_graph_.get()),
             local_slam_result_callback, pose_graph_odometry_motion_filter)));
-  }
-  // B1使用的是2d版本 
-  else 
-  {
+  } else {
+    // 创建local trajectory builder 2d
     std::unique_ptr<LocalTrajectoryBuilder2D> local_trajectory_builder;
     if (trajectory_options.has_trajectory_builder_2d_options()) {
       local_trajectory_builder = absl::make_unique<LocalTrajectoryBuilder2D>(
           trajectory_options.trajectory_builder_2d_options(),
-          SelectRangeSensorIds(expected_sensor_ids)); // 选出laser的topics
+          SelectRangeSensorIds(expected_sensor_ids));
     }
+    // 创建全局轨迹优化器
     DCHECK(dynamic_cast<PoseGraph2D*>(pose_graph_.get()));
-    // 向 trajectory_builders_ 添加 CollatedTrajectoryBuilder
-    // tag: 并在CollatedTrajectoryBuilder的初始化中，初始化GlobalTrajectoryBuilder，开始 建图流程
     trajectory_builders_.push_back(absl::make_unique<CollatedTrajectoryBuilder>(
         trajectory_options, sensor_collator_.get(), trajectory_id,
         expected_sensor_ids,
@@ -150,11 +173,11 @@ int MapBuilder::AddTrajectoryBuilder(
             static_cast<PoseGraph2D*>(pose_graph_.get()),
             local_slam_result_callback, pose_graph_odometry_motion_filter)));
   }
-  // 如果参数配置文件里设置了 纯定位模式的最大子图个数，位姿图里添加子图裁剪器
+  // 3. 向pose_graph中添加纯定位的trimmer
   MaybeAddPureLocalizationTrimmer(trajectory_id, trajectory_options,
                                   pose_graph_.get());
-  // 判断trajectory_options中是否有initial_trajectory_pose()字段，即判断是否设置了初始位姿
-  // 在node中的 start_trajectory_server_ 中有设置initial_trajectory_pose()字段的操作，但是
+
+  // 4. 如果有初始位姿，设置初始位姿
   if (trajectory_options.has_initial_trajectory_pose()) {
     const auto& initial_trajectory_pose =
         trajectory_options.initial_trajectory_pose();
@@ -163,6 +186,7 @@ int MapBuilder::AddTrajectoryBuilder(
         transform::ToRigid3(initial_trajectory_pose.relative_pose()),
         common::FromUniversal(initial_trajectory_pose.timestamp()));
   }
+  // 5. 接下来，将轨迹跟踪器的配置信息和传感器配置信息保存到容器all_trajectory_builder_options_中。
   proto::TrajectoryBuilderOptionsWithSensorIds options_with_sensor_ids_proto;
   for (const auto& sensor_id : expected_sensor_ids) {
     *options_with_sensor_ids_proto.add_sensor_id() = ToProto(sensor_id);
@@ -170,6 +194,7 @@ int MapBuilder::AddTrajectoryBuilder(
   *options_with_sensor_ids_proto.mutable_trajectory_builder_options() =
       trajectory_options;
   all_trajectory_builder_options_.push_back(options_with_sensor_ids_proto);
+  // 6. 最后检查一下轨迹跟踪器对象和对应的配置是否都构建成功，之后返回新建的跟踪器对象的索引。
   CHECK_EQ(trajectory_builders_.size(), all_trajectory_builder_options_.size());
   return trajectory_id;
 }
@@ -222,6 +247,13 @@ bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
   return (writer.Close());
 }
 
+/**
+ * @brief 从pbstream中读取数据
+ * 
+ * @param reader 
+ * @param load_frozen_state 
+ * @return std::map<int, int> 
+ */
 std::map<int, int> MapBuilder::LoadState(
     io::ProtoStreamReaderInterface* const reader, bool load_frozen_state) {
   io::ProtoStreamDeserializer deserializer(reader);
@@ -278,6 +310,7 @@ std::map<int, int> MapBuilder::LoadState(
     }
   }
 
+  // 向pose_graph中，加入文件中的约束信息
   // Set global poses of landmarks.
   for (const auto& landmark : pose_graph_proto.landmark_poses()) {
     pose_graph_->SetLandmarkPose(landmark.landmark_id(),
@@ -392,6 +425,13 @@ std::map<int, int> MapBuilder::LoadState(
   return trajectory_remapping;
 }
 
+/**
+ * @brief 从文件中加载状态，从.pbstream文件中，加载成ProtoStream数据流
+ * 
+ * @param state_filename 文件路径
+ * @param load_frozen_state 
+ * @return std::map<int, int> 老轨迹的trajectory_id, 新轨迹的new_trajectory_id
+ */
 std::map<int, int> MapBuilder::LoadStateFromFile(
     const std::string& state_filename, const bool load_frozen_state) {
   const std::string suffix = ".pbstream";
@@ -405,6 +445,12 @@ std::map<int, int> MapBuilder::LoadStateFromFile(
   return LoadState(&stream, load_frozen_state);
 }
 
+/**
+ * @brief Create a Map Builder object
+ * 
+ * @param options 
+ * @return std::unique_ptr<MapBuilderInterface> 
+ */
 std::unique_ptr<MapBuilderInterface> CreateMapBuilder(
     const proto::MapBuilderOptions& options) {
   return absl::make_unique<MapBuilder>(options);

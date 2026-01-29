@@ -28,6 +28,7 @@
 #include "cartographer/mapping/internal/local_slam_result_data.h"
 #include "cartographer/mapping/submaps.h"
 #include "cartographer/mapping/trajectory_builder_interface.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/sensor/collator_interface.h"
 #include "cartographer/sensor/internal/dispatchable.h"
 
@@ -51,22 +52,29 @@ class CollatedTrajectoryBuilder : public TrajectoryBuilderInterface {
   CollatedTrajectoryBuilder& operator=(const CollatedTrajectoryBuilder&) =
       delete;
 
+  bool SetInitialPose(const transform::Rigid3d &initial_pose) override;
+  std::optional<localization::LocalizationState> GetLocalizationState() const override;
+
+  // 加入雷达数据
   void AddSensorData(
       const std::string& sensor_id,
       const sensor::TimedPointCloudData& timed_point_cloud_data) override {
     AddData(sensor::MakeDispatchable(sensor_id, timed_point_cloud_data));
   }
 
+  // 加入IMU数据
   void AddSensorData(const std::string& sensor_id,
                      const sensor::ImuData& imu_data) override {
     AddData(sensor::MakeDispatchable(sensor_id, imu_data));
   }
 
+  // 加入里程计数据
   void AddSensorData(const std::string& sensor_id,
                      const sensor::OdometryData& odometry_data) override {
     AddData(sensor::MakeDispatchable(sensor_id, odometry_data));
   }
 
+  // 加入GPS类数据
   void AddSensorData(
       const std::string& sensor_id,
       const sensor::FixedFramePoseData& fixed_frame_pose_data) override {
@@ -78,6 +86,7 @@ class CollatedTrajectoryBuilder : public TrajectoryBuilderInterface {
                                                fixed_frame_pose_data);
   }
 
+  // 加入landmark数据
   void AddSensorData(const std::string& sensor_id,
                      const sensor::LandmarkData& landmark_data) override {
     if (collate_landmarks_) {
