@@ -27,25 +27,28 @@ namespace mapping {
 
 constexpr float RangeDataCollator::kDefaultIntensityValue;
 
+/**
+ * @brief 
+ * 
+ * @param sensor_id 
+ * @param timed_point_cloud_data 
+ * @return sensor::TimedPointCloudOriginData 
+ */
 sensor::TimedPointCloudOriginData RangeDataCollator::AddRangeData(
     const std::string& sensor_id,
     sensor::TimedPointCloudData timed_point_cloud_data) {
-  // 检查expected_sensor_ids_中是否存在传入的传感器id
   CHECK_NE(expected_sensor_ids_.count(sensor_id), 0);
-  // 将点云数据的强度之填充为默认强度值 0
+  // 1. 把所有的点的反射率设置为默认值（0.0f）
   timed_point_cloud_data.intensities.resize(
       timed_point_cloud_data.ranges.size(), kDefaultIntensityValue);
   // TODO(gaschler): These two cases can probably be one.
-  // 检查id_to_pending_data_中是否存在出入的传感器id，如果有，表示之前已经收到过该传感器数据
+  // 这个逻辑是：
   if (id_to_pending_data_.count(sensor_id) != 0) {
-    // 将之前数据集的current_end_设置为当前数据集的current_start_
     current_start_ = current_end_;
     // When we have two messages of the same sensor, move forward the older of
     // the two (do not send out current).
-    // 将最新传感器数据的时间赋值到current_end_
     current_end_ = id_to_pending_data_.at(sensor_id).time;
     auto result = CropAndMerge();
-    // 高效地将点云插入id_to_pending_data_
     id_to_pending_data_.emplace(sensor_id, std::move(timed_point_cloud_data));
     return result;
   }
@@ -63,8 +66,13 @@ sensor::TimedPointCloudOriginData RangeDataCollator::AddRangeData(
   return CropAndMerge();
 }
 
+/**
+ * @brief 对多个激光数据进行裁剪和融合
+ * 
+ * @return sensor::TimedPointCloudOriginData 
+ */
 sensor::TimedPointCloudOriginData RangeDataCollator::CropAndMerge() {
-  sensor::TimedPointCloudOriginData result{current_end_, {}, {}};
+  sensor::TimedPointCloudOriginData result{current_end_, {}, {}, {}};
   bool warned_for_dropped_points = false;
   for (auto it = id_to_pending_data_.begin();
        it != id_to_pending_data_.end();) {
@@ -94,6 +102,7 @@ sensor::TimedPointCloudOriginData RangeDataCollator::CropAndMerge() {
     if (overlap_begin < overlap_end) {
       std::size_t origin_index = result.origins.size();
       result.origins.push_back(data.origin);
+      result.sensor_to_trackings.push_back(data.sensor_to_tracking);
       const float time_correction =
           static_cast<float>(common::ToSeconds(data.time - current_end_));
       auto intensities_overlap_it =
@@ -120,7 +129,7 @@ sensor::TimedPointCloudOriginData RangeDataCollator::CropAndMerge() {
       const auto intensities_overlap_end =
           intensities.begin() + (overlap_end - ranges.begin());
       data = sensor::TimedPointCloudData{
-          data.time, data.origin,
+          data.time, data.origin, data.sensor_to_tracking,
           sensor::TimedPointCloud(overlap_end, ranges.end()),
           std::vector<float>(intensities_overlap_end, intensities.end())};
       ++it;

@@ -24,9 +24,15 @@
 namespace cartographer {
 namespace sensor {
 
+struct Twist {
+  Eigen::Vector3d linear;
+  Eigen::Vector3d angular;
+};
+
 struct OdometryData {
   common::Time time;
   transform::Rigid3d pose;
+  Twist twist;
 };
 
 // Converts 'odometry_data' to a proto::OdometryData.

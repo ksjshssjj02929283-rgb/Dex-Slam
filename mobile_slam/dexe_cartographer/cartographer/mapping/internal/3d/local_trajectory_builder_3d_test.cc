@@ -241,7 +241,7 @@ class LocalTrajectoryBuilderTest : public ::testing::Test {
           0.};
       returns_in_world_frame.push_back(return_point);
     }
-    return {time, Eigen::Vector3f::Zero(),
+    return {time, Eigen::Vector3f::Zero(), transform::Rigid3d::Identity(),
             sensor::TransformTimedPointCloud(returns_in_world_frame,
                                              pose.inverse().cast<float>())};
   }

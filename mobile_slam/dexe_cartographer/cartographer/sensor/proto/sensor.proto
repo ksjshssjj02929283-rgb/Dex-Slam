@@ -39,9 +39,10 @@ message CompressedPointCloud {
 message TimedPointCloudData {
   int64 timestamp = 1;
   transform.proto.Vector3f origin = 2;
-  repeated transform.proto.Vector4f point_data_legacy = 3;
-  repeated TimedRangefinderPoint point_data = 4;
-  repeated float intensities = 5;
+  transform.proto.Rigid3d sensor_to_tracking = 3;
+  repeated transform.proto.Vector4f point_data_legacy = 4;
+  repeated TimedRangefinderPoint point_data = 5;
+  repeated float intensities = 6;
 }
 
 // Proto representation of ::cartographer::sensor::RangeData.
@@ -64,6 +65,9 @@ message ImuData {
 message OdometryData {
   int64 timestamp = 1;
   transform.proto.Rigid3d pose = 2;
+  transform.proto.Vector3d linear_velocity = 3;
+  transform.proto.Vector3d angular_velocity = 4;
+  repeated double pose_covariance = 5;
 }
 
 // Proto representation of ::cartographer::sensor::FixedFramePoseData.
@@ -82,4 +86,93 @@ message LandmarkData {
   }
   int64 timestamp = 1;
   repeated LandmarkObservation landmark_observations = 2;
+}
+
+
+// Proto representation of ::cartographer::sensor::LaneData.
+message LaneData {
+  message Line {
+    transform.proto.Vector2d begin = 1;
+    transform.proto.Vector2d end = 2;
+  }
+  int64 timestamp = 1;
+  Line line = 2;
+}
+
+// Proto representation of ::cartographer::sensor::LaneData.
+message LineData {
+  transform.proto.Vector2d begin = 1;
+  transform.proto.Vector2d end = 2;
+}
+
+// Proto representation of ::cartographer::sensor::LandmarkPointData.
+message LandmarkPointData {
+  int64 timestamp = 1;
+  transform.proto.Vector2d point = 2;
+}
+
+//Proto representation of ::cartographer::sensor::AngleStructData
+message AngleStructData{
+  int64 timestamp = 1;
+  transform.proto.Vector3d point = 2;
+  double theta = 3;
+}
+
+// Proto representation of ::cartographer::sensor::QRCodeData.
+message CodeData {
+  enum CodeType
+  {
+      QRCode = 0;
+      VisTag = 1;
+  }
+  CodeType codetype = 1;
+  int64 timestamp = 2;
+  int32 code = 3;
+  transform.proto.Rigid2d pose = 4;
+}
+
+
+
+
+message TimedPointCloudWithIntensities {
+    repeated sensor.proto.TimedRangefinderPoint points = 1;
+    repeated float intensities = 2;
+}
+
+message SyncTimedPointCloudData
+{
+    int64 time = 1;
+    transform.proto.Rigid3d origin = 2;
+    sensor.proto.TimedPointCloudWithIntensities point_cloud = 3;
+}
+
+message PointCloudWithOrigin
+{
+  transform.proto.Vector3d origin = 1;
+  repeated transform.proto.Vector3f sync_points_base_link = 2;
+  repeated transform.proto.Vector3f  origin_points_odom = 3;
+  repeated float intensities = 4;
+}
+
+message SyncPointCloudWithOdom
+{
+  int64 stamp = 1;
+  sensor.proto.OdometryData odom = 2;
+  repeated sensor.proto.PointCloudWithOrigin sync_point_clouds = 3;
+}
+
+message SyncRangeData
+{
+  //transform.proto.Vector3d origin = 1;
+  transform.proto.Vector3f origin = 1;
+  repeated transform.proto.Vector3f hits = 2;
+  repeated transform.proto.Vector3f misses = 3;
+  repeated transform.proto.Vector3f origin_points_odom = 4;
+}
+
+message RangeDataWithOdom
+{
+  int64 stamp = 1;
+  sensor.proto.OdometryData odom = 2;
+  repeated sensor.proto.SyncRangeData range_datas = 3;
 }

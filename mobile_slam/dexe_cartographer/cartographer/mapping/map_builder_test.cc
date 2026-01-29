@@ -95,7 +95,10 @@ class MapBuilderTestBase : public T {
     map_builder_options_.mutable_pose_graph_options()
         ->set_optimize_every_n_nodes(3);
     trajectory_builder_options_.mutable_trajectory_builder_2d_options()
-        ->mutable_motion_filter_options()
+        ->mutable_keyframe_motion_filter_options()
+        ->set_max_distance_meters(0);
+    trajectory_builder_options_.mutable_trajectory_builder_2d_options()
+        ->mutable_map_insertion_motion_filter_options()
         ->set_max_distance_meters(0);
   }
 
@@ -103,6 +106,7 @@ class MapBuilderTestBase : public T {
     return [=](const int trajectory_id, const ::cartographer::common::Time time,
                const ::cartographer::transform::Rigid3d local_pose,
                ::cartographer::sensor::RangeData range_data_in_local,
+                std::map<int, std::vector<::cartographer::sensor::LineData>>  line_data_in_local,
                const std::unique_ptr<
                    const cartographer::mapping::TrajectoryBuilderInterface::
                        InsertionResult>) {

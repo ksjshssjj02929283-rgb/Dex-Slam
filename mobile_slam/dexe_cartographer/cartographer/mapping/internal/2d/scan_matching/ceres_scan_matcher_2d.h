@@ -23,8 +23,11 @@
 #include "Eigen/Core"
 #include "cartographer/common/lua_parameter_dictionary.h"
 #include "cartographer/mapping/2d/grid_2d.h"
+#include "cartographer/sensor/line_data.h"
+#include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/mapping/proto/scan_matching/ceres_scan_matcher_options_2d.pb.h"
 #include "cartographer/sensor/point_cloud.h"
+#include "cartographer/ikd_tree/ikd_tree.h"
 #include "ceres/ceres.h"
 
 namespace cartographer {
@@ -46,11 +49,73 @@ class CeresScanMatcher2D {
   // Aligns 'point_cloud' within the 'grid' given an
   // 'initial_pose_estimate' and returns a 'pose_estimate' and the solver
   // 'summary'.
+  // grid, local line, global line, local cloud, global cloud, highlight_point_cloud
+  void Match(const Eigen::Vector2d & target_translation,
+             const transform::Rigid2d & initial_pose_estimate,
+             const sensor::PointCloud & point_cloud,
+             const sensor::PointCloud & highlight_point_cloud,
+             const std::map<int, std::vector<sensor::LineData>> & local_tracked_line_data,
+             const std::map<int, std::vector<sensor::LineData>> & global_tracked_line_data,
+             const Grid2D & local_grid,
+             const Grid2D & global_grid,
+             const LineMap2DList & local_line_map,
+             const LineMap2DList & global_line_map,
+             ikd_tree::iKdTree<pcl::PointXYZ> & local_cloud_ikdtree,
+             ikd_tree::iKdTree<pcl::PointXYZ> & global_cloud_ikdtree,
+             ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
+             transform::Rigid2d * const pose_estimate,
+             Eigen::Matrix3d& cov,
+             ceres::Solver::Summary * const summary) const;
+
+  // gird, line, point cloud
+  void Match(const Eigen::Vector2d & target_translation,
+            const transform::Rigid2d & initial_pose_estimate,
+            const sensor::PointCloud & point_cloud,
+            const std::map<int, std::vector<sensor::LineData>> & line_data,
+            const Grid2D & grid, const LineMap2DList & line_map,
+            ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
+            transform::Rigid2d * const pose_estimate,
+            ceres::Solver::Summary * const summary) const;
+
+  // gird, line, point cloud, highlight_point_cloud
+  void Match(const Eigen::Vector2d & target_translation,
+            const transform::Rigid2d & initial_pose_estimate,
+            const sensor::PointCloud & point_cloud,
+            const sensor::PointCloud & highlight_point_cloud,
+            const std::map<int, std::vector<sensor::LineData>> & line_data,
+            const Grid2D & grid, const LineMap2DList & line_map,
+            ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
+            ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
+            transform::Rigid2d * const pose_estimate,
+            ceres::Solver::Summary * const summary) const;
+
+  // gird, point cloud, highlight_point_cloud
+  void Match(const Eigen::Vector2d & target_translation,
+            const transform::Rigid2d & initial_pose_estimate,
+            const sensor::PointCloud & point_cloud,
+            const sensor::PointCloud & highlight_point_cloud,
+            const Grid2D & grid,
+            ikd_tree::iKdTree<pcl::PointXYZ> & cloud_ikdtree,
+            ikd_tree::iKdTree<pcl::PointXYZ> & highlight_cloud_ikdtree,
+            transform::Rigid2d * const pose_estimate,
+            ceres::Solver::Summary * const summary) const;
+
+  // grid, line
+  void Match(const Eigen::Vector2d & target_translation,
+            const transform::Rigid2d & initial_pose_estimate,
+            const sensor::PointCloud & point_cloud,
+            const std::map<int, std::vector<sensor::LineData>> & line_data,
+            const Grid2D & grid, const LineMap2DList & line_map,
+            transform::Rigid2d * const pose_estimate,
+            ceres::Solver::Summary * const summary) const;
+
+  // grid
   void Match(const Eigen::Vector2d& target_translation,
-             const transform::Rigid2d& initial_pose_estimate,
-             const sensor::PointCloud& point_cloud, const Grid2D& grid,
-             transform::Rigid2d* pose_estimate,
-             ceres::Solver::Summary* summary) const;
+            const transform::Rigid2d& initial_pose_estimate,
+            const sensor::PointCloud& point_cloud,
+            const Grid2D& grid,
+            transform::Rigid2d* const pose_estimate,
+            ceres::Solver::Summary* const summary) const;
 
  private:
   const proto::CeresScanMatcherOptions2D options_;
@@ -61,4 +126,4 @@ class CeresScanMatcher2D {
 }  // namespace mapping
 }  // namespace cartographer
 
-#endif  // CARTOGRAPHER_MAPPING_INTERNAL_2D_SCAN_MATCHING_CERES_SCAN_MATCHER_2D_H_
+#endif  // CARTOGRAPHER_MAPPINGcloud_kdtree

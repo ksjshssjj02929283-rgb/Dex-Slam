@@ -75,7 +75,7 @@ GenerateFakeRangeMeasurements(const Eigen::Vector3f& translation,
         cartographer::sensor::TransformTimedPointCloud(point_cloud,
                                                        global_pose.inverse());
     measurements.emplace_back(cartographer::sensor::TimedPointCloudData{
-        time, Eigen::Vector3f::Zero(), ranges});
+        time, Eigen::Vector3f::Zero(), transform::Rigid3d::Identity(), ranges});
   }
   return measurements;
 }

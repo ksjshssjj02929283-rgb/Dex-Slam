@@ -24,6 +24,10 @@ message CeresScanMatcherOptions2D {
   double occupied_space_weight = 1;
   double translation_weight = 2;
   double rotation_weight = 3;
+  double line_weight = 4;
+  double point_weight = 5;
+  double max_correspondence_distance = 7;
+  double local_weight_factor = 6;
 
   // Configure the Ceres solver. See the Ceres documentation for more
   // information: https://code.google.com/p/ceres-solver/

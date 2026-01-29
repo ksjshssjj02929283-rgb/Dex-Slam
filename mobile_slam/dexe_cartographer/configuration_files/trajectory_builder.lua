@@ -14,10 +14,12 @@
 
 include "trajectory_builder_2d.lua"
 include "trajectory_builder_3d.lua"
+include "pose_estimator_2d.lua"
 
 TRAJECTORY_BUILDER = {
   trajectory_builder_2d = TRAJECTORY_BUILDER_2D,
   trajectory_builder_3d = TRAJECTORY_BUILDER_3D,
+  pose_estimator_2d = POSE_ESTIMATOR_2D,
 --  pure_localization_trimmer = {
 --    max_submaps_to_keep = 3,
 --  },

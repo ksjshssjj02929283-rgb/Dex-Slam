@@ -1,0 +1,1155 @@
+/*
+ * Copyright 2016 The Cartographer Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
+
+#include <limits>
+#include <memory>
+#include <cmath>
+
+#include "pcl/common/transforms.h"
+#include "pcl/io/pcd_io.h"
+
+#include "absl/memory/memory.h"
+#include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/metrics/family_factory.h"
+#include "cartographer/sensor/range_data.h"
+#include "cartographer/sensor/sync_point_cloud.h"
+#include "cartographer/common/tic_toc.h"
+
+namespace cartographer {
+namespace localization {
+
+static auto* kLocalSlamLatencyMetric = metrics::Gauge::Null();
+static auto* kLocalSlamRealTimeRatio = metrics::Gauge::Null();
+static auto* kLocalSlamCpuRealTimeRatio = metrics::Gauge::Null();
+static auto* kRealTimeCorrelativeScanMatcherScoreMetric =
+    metrics::Histogram::Null();
+static auto* kCeresScanMatcherCostMetric = metrics::Histogram::Null();
+static auto* kScanMatcherResidualDistanceMetric = metrics::Histogram::Null();
+static auto* kScanMatcherResidualAngleMetric = metrics::Histogram::Null();
+
+PoseEstimator2D::PoseEstimator2D(
+    const proto::PoseEstimatorOptions2D& options,
+    const std::vector<std::string>& expected_range_sensor_ids)
+    : options_(options),
+      active_submaps_(options.submaps_options()),
+      keyframe_motion_filter_(options_.keyframe_motion_filter_options()),
+      map_insertion_motion_filter_(options_.map_insertion_motion_filter_options()),
+      real_time_correlative_scan_matcher_(
+          options_.real_time_correlative_scan_matcher_options()),
+      ceres_scan_matcher_(options_.ceres_scan_matcher_options()),
+      range_data_collator_(expected_range_sensor_ids),
+      laser_synchronizer_(expected_range_sensor_ids),
+      expected_range_sensor_ids_(expected_range_sensor_ids)
+{
+  LOG(INFO) << "Creating single data preprocessor for all sensors";
+  data_preprocessor_ = absl::make_unique<preprocess::DataPreprocessor>(
+      options_.data_preprocessor_options());
+
+  laser_perception_ =
+      std::make_unique<laser_perception::LaserPerception>(
+          options_.laser_perception_options());
+
+  line_matcher_ =
+      std::make_unique<mapping::scan_matching::LineMatcher2D>(
+            options_.line_matcher_options());
+
+  local_map_updater_ =
+      std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options());
+
+  loc_state_ = LocalizationState::NOT_INITIALIZED;
+
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // time_file_.open(home_dir + "/.dexe/data/time.txt", std::ios::out);
+}
+
+PoseEstimator2D::~PoseEstimator2D() {
+  // 1. 停止 pose_initializer（如果有后台线程）
+  if (pose_initializer_) {
+    pose_initializer_->stop();
+    pose_initializer_.reset();
+  }
+  
+  // 2. 清空 active_submaps，确保不再有新的插入操作
+  active_submaps_.clear();
+  
+  // 3. 显式释放 ikd-tree（可能有后台线程或缓存）
+  if (global_highlight_cloud_ikdtree_) {
+    global_highlight_cloud_ikdtree_.reset();
+  }
+  
+  // 4. 释放地图数据（shared_ptr 会处理引用计数）
+  global_grid_map_.reset();
+  global_cloud_map_.reset();
+  global_highlight_cloud_map_.reset();
+  global_line_map_.reset();
+  
+  // 5. 释放其他资源
+  local_map_updater_.reset();
+  data_preprocessor_.reset();
+  laser_perception_.reset();
+  line_matcher_.reset();
+}
+
+void PoseEstimator2D::InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map)
+{
+  global_grid_map_ = grid_map;
+  local_map_updater_->SetGlobalGridMap(grid_map);
+
+  loc_state_ = LocalizationState::INITIALIZED;
+}
+
+void PoseEstimator2D::InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map)
+{
+  if (global_grid_map_ == nullptr) {
+    LOG(ERROR) << "Global grid map is not iUpdateLocalCloudMapnitialized!";
+    return;
+  }
+
+  global_cloud_map_ = cloud_map;
+  // insert成功，就获取submap的cloud，并将其加入的gicp的target中
+    // 这个过程的平均时间是0.25~0.5ms
+  pcl::PointCloud<pcl::PointXYZ>::Ptr global_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+  for (const auto& point : global_cloud_map_->cloud()->points()) {
+    pcl::PointXYZ p;
+    p.x = point.position.x();
+    p.y = point.position.y();
+    p.z = 0.0;
+    global_map_cloud->push_back(p);
+  }
+
+  local_map_updater_->SetGlobalCloudMap(cloud_map);
+  // box_filter_->SetOrigin(pose_estimate.translation().cast<float>());
+  // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_submap(new pcl::PointCloud<pcl::PointXYZ>());
+  // box_filter_->Filter(submap_cloud, filtered_sub
+}
+
+void PoseEstimator2D::InitGlobalHighlightCloudMap(std::shared_ptr<CloudMap2D> highlight_cloud_map)
+{
+  global_highlight_cloud_map_ = highlight_cloud_map;
+  // insert成功，就获取submap的cloud，并将其加入的gicp的target中
+    // 这个过程的平均时间是0.25~0.5ms
+  pcl::PointCloud<pcl::PointXYZ>::Ptr global_highlight_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+  for (const auto& point : global_cloud_map_->cloud()->points()) {
+    pcl::PointXYZ p;
+    p.x = point.position.x();
+    p.y = point.position.y();
+    p.z = 0.0;
+    global_highlight_map_cloud->push_back(p);
+  }
+
+  global_highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+
+  float resolution = global_grid_map_->limits().resolution();
+  global_highlight_cloud_ikdtree_->set_downsample_param(resolution);
+  global_highlight_cloud_ikdtree_->Build(global_highlight_map_cloud->points);
+}
+
+void PoseEstimator2D::InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2DList>& line_map)
+{
+  global_line_map_ = line_map;
+}
+
+bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
+{
+  if (!initial_pose.IsValid()) {
+    LOG(ERROR) << "Invalid initial pose: " << initial_pose;
+    return false;
+  }
+  
+  // 初始化pose_initializer_
+  if (!pose_initializer_) {
+    pose_initializer_ = std::make_unique<PoseInitializer>(
+                                  options_.pose_initializer_options());
+    pose_initializer_->InitGlobalLineMap(global_line_map_);
+  }
+
+  local_map_updater_->UpdateRobotPose(transform::Project2D(initial_pose));
+  if (!local_map_updater_->IsLocalMapUpdated()) {
+    LOG(WARNING) << "There is no need to update local map for initial pose setting!";
+  }
+
+  pose_initializer_->InitGlobalGridMap(local_map_updater_->local_grid_map());
+  pose_initializer_->InitGlobalCloudMap(local_map_updater_->local_cloud_map());
+
+  pose_initializer_->SetInitialPose(transform::Project2D(initial_pose));
+  pose_initializer_->start();
+  loc_state_ = LocalizationState::RELOCALIZING;
+  
+  // 重置全局重定位尝试标志，因为现在有了新的初始位姿
+  has_tried_global_relocalization_ = false;
+
+  return true;
+}
+
+void PoseEstimator2D::TriggerGlobalRelocalization()
+{
+  if (global_grid_map_ == nullptr) {
+    LOG(ERROR) << "Global grid map is not initialized, cannot trigger global relocalization.";
+    return;
+  }
+  
+  // 初始化pose_initializer_（如果还没有）
+  if (!pose_initializer_) {
+    pose_initializer_ = std::make_unique<PoseInitializer>(
+                                  options_.pose_initializer_options());
+    pose_initializer_->InitGlobalLineMap(global_line_map_);
+  }
+
+  // 设置全局地图用于全局重定位
+  pose_initializer_->InitGlobalGridMap(global_grid_map_);
+  pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+
+  // 触发全局重定位
+  pose_initializer_->TriggerGlobalRelocalization();
+  pose_initializer_->start();
+  loc_state_ = LocalizationState::RELOCALIZING;
+
+  LOG(INFO) << "Triggered global relocalization without initial pose";
+}
+
+sensor::RangeData
+PoseEstimator2D::TransformToGravityAlignedFrameAndFilter(
+    const transform::Rigid3f& transform_to_gravity_aligned_frame,
+    const sensor::RangeData& range_data) const {
+  const sensor::RangeData cropped =
+      sensor::CropRangeData(sensor::TransformRangeData(
+                                range_data, transform_to_gravity_aligned_frame),
+                            options_.min_z(), options_.max_z());
+  return sensor::RangeData{
+      cropped.origin,
+      sensor::VoxelFilter(cropped.returns, options_.voxel_filter_size()),
+      sensor::VoxelFilter(cropped.misses, options_.voxel_filter_size())};
+}
+
+sensor::RangeData
+PoseEstimator2D::FilterRangeData(
+    const sensor::RangeData& range_data) const {
+  return sensor::RangeData{
+      range_data.origin,
+      sensor::VoxelFilter(range_data.returns, options_.voxel_filter_size()),
+      sensor::VoxelFilter(range_data.misses, options_.voxel_filter_size())};
+}
+
+/**
+ * @brief ScanMatch进行位姿估计
+ * 
+ * @param time 时间
+ * @param pose_prediction 预测的位姿 
+ * @param filtered_gravity_aligned_point_cloud 重力对齐的激光点云
+ * @param highlight_point_cloud 高亮点云
+ * @param line_data 线数据
+ * @param tracked_lane_data 跟踪的车道线数据
+ * @param cov 协方差矩阵
+ * @return std::unique_ptr<transform::Rigid2d> 位姿估计结果
+ */
+std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
+    const common::Time time, const transform::Rigid2d& pose_prediction,
+    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
+    const std::vector<sensor::LineData> & line_data,
+    std::map<int, std::vector<sensor::LineData>> & tracked_lane_data)
+{
+  // 1. 如果active_submaps_中没有submap，则直接返回pose_prediction
+  //    一般情况下，第一帧激光数据进来时，active_submaps_中没有submap
+  if (active_submaps_.submaps().empty()) {
+    return absl::make_unique<transform::Rigid2d>(pose_prediction);
+  }
+  // 2. 读取active_submaps_中的第一个submap，作为匹配的地图
+  std::shared_ptr<const mapping::Submap2D> matching_submap =
+      active_submaps_.submaps().front();
+  
+  // 3. 安全性检查：确保 submap 的关键成员已初始化
+  if (!matching_submap || !matching_submap->grid() || 
+      !matching_submap->cloud_ikdtree() ||
+      !matching_submap->line_map_2d_list()) {
+    LOG(WARNING) << "Matching submap has null components, using prediction";
+    return absl::make_unique<transform::Rigid2d>(pose_prediction);
+  }
+  // The online correlative scan matcher will refine the initial estimate for
+  // the Ceres scan matcher.
+
+  // LOG(INFO) << "Initial prediction: " << pose_prediction;
+
+  // 3. 进行correlative scan matching以获得更好的初始位姿估计
+  transform::Rigid2d optimized_pose_prediction = pose_prediction;
+  bool correlative_success = false;
+  
+  if (options_.use_online_correlative_scan_matching()) {
+    common::TicToc tic_correlative;
+    transform::Rigid2d correlative_pose = pose_prediction;
+    const double score = real_time_correlative_scan_matcher_.Match(
+        pose_prediction, filtered_gravity_aligned_point_cloud,
+        *matching_submap->grid(), &correlative_pose);
+    
+    kRealTimeCorrelativeScanMatcherScoreMetric->Observe(score);
+    
+    // 根据匹配分数决定是否使用correlative结果
+    if (score > 0.4 && correlative_pose.IsValid()) {
+      // 使用correlative的旋转，但保持预测的位置（更保守的策略）
+      optimized_pose_prediction = transform::Rigid2d(
+          pose_prediction.translation(), 
+          correlative_pose.rotation());
+      correlative_success = true;
+      // LOG(INFO) << "Correlative matching successful, score: " << score 
+      //           << ", optimized pose: " << optimized_pose_prediction;
+    } else {
+      LOG(WARNING) << "Correlative matching failed or low score: " << score 
+                   << ", using original prediction";
+    }
+    double correlative_time = tic_correlative.toc();
+    // LOG(INFO) << "Correlative scan matcher cost: " << correlative_time << " ms";
+  }
+  
+  // 最终用于Ceres优化的初始位姿
+  transform::Rigid2d initial_ceres_pose = optimized_pose_prediction;
+
+  // LOG(INFO) << "csm: " << initial_ceres_pose;
+  std::map<int, std::vector<sensor::LineData>> global_tracked_lane_data;
+  if (active_submaps_.submaps().size() != 0) {
+    line_matcher_->TrackLineFromMap(initial_ceres_pose,
+                                    line_data,
+                                    *active_submaps_.line_map_2d_list(),
+                                    tracked_lane_data);
+    line_matcher_->TrackLineFromMap(initial_ceres_pose,
+                                    line_data,
+                                    *global_line_map_,
+                                    global_tracked_lane_data);
+  }
+
+  // 4. 使用ceres进行位姿估计，得到pose_observation
+  //    使用点到地图的误差作为cost function
+  auto pose_observation = absl::make_unique<transform::Rigid2d>();
+  ceres::Solver::Summary summary;
+
+  auto local_grid_map = local_map_updater_->local_grid_map();
+  auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
+  
+  // ⚠️ 安全性检查：确保所有地图资源在使用前都已初始化且有效
+  if (!local_grid_map || !local_cloud_ikdtree || !global_highlight_cloud_ikdtree_) {
+    LOG(ERROR) << "Local map resources not initialized, cannot perform scan matching";
+    return absl::make_unique<transform::Rigid2d>(initial_ceres_pose);
+  }
+  
+  common::TicToc tic_toc;
+
+  Eigen::Matrix3d cov;
+  ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
+                          filtered_gravity_aligned_point_cloud,
+                          highlight_point_cloud,
+                          tracked_lane_data,
+                          global_tracked_lane_data,
+                          *matching_submap->grid(), *local_grid_map,
+                          *matching_submap->line_map_2d_list(), *global_line_map_,
+                          *matching_submap->cloud_ikdtree(),
+                          *local_cloud_ikdtree,
+                          *global_highlight_cloud_ikdtree_,
+                          pose_observation.get(), cov,
+                          &summary);
+  double match_time = tic_toc.toc();
+  // LOG(INFO) << "ceres scan matcher cost time: " << match_time << " ms";
+  // time_file_ << match_time << std::endl;
+  if (!summary.IsSolutionUsable() || summary.final_cost == -1 ||
+      std::isinf(summary.final_cost) || std::isnan(summary.final_cost))
+  {
+    LOG(WARNING) << "Normal matching failed, use correlative scan matcher help localization.";
+    transform::Rigid2d check_pose;
+    real_time_correlative_scan_matcher_.Match(
+      initial_ceres_pose, filtered_gravity_aligned_point_cloud,
+      *local_grid_map, &initial_ceres_pose);
+
+    ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
+                              filtered_gravity_aligned_point_cloud,
+                              highlight_point_cloud,
+                              *local_grid_map,
+                              *local_cloud_ikdtree,
+                              *global_highlight_cloud_ikdtree_,
+                              pose_observation.get(),
+                              &summary);
+
+    active_submaps_.clear();
+    if (!summary.IsSolutionUsable() || summary.final_cost == -1 ||
+        std::isinf(summary.final_cost) || std::isnan(summary.final_cost))
+    {
+      LOG(ERROR) << "Localization failed !!!!!" <<std::endl;
+      loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+    }
+  }
+
+  // std::cout << "cov: \n" << cov.matrix() << std::endl;
+  // LOG(INFO) << "scan match: " << *pose_observation;
+
+  // 5. 如果匹配成功，向Metric中增加观测信息
+  if (pose_observation) {
+    kCeresScanMatcherCostMetric->Observe(summary.final_cost);
+    const double residual_distance =
+        (pose_observation->translation() - pose_prediction.translation())
+            .norm();
+    kScanMatcherResidualDistanceMetric->Observe(residual_distance);
+    const double residual_angle =
+        std::abs(pose_observation->rotation().angle() -
+                 pose_prediction.rotation().angle());
+    kScanMatcherResidualAngleMetric->Observe(residual_angle);
+  }
+  // 6. 返回位姿估计结果（Rigid2d）
+  return pose_observation;
+}
+
+/**
+ * @brief 验证位姿估计质量
+ * 
+ * 分两步验证：
+ * 1. 在动态地图(active_submaps_.front())上验证位姿和得分
+ * 2. 在静态地图(local_map_updater的局部地图)上验证得分
+ * 
+ * @param estimated_pose scan match估计得到的位姿
+ * @param point_cloud 用于验证的点云
+ * @return PoseValidationResult 包含验证结果、验证位姿和评分
+ */
+PoseEstimator2D::PoseValidationResult PoseEstimator2D::ValidatePoseEstimate(
+    const transform::Rigid2d& estimated_pose,
+    const sensor::PointCloud& point_cloud)
+{
+  PoseValidationResult result;
+  result.validated_pose = estimated_pose;
+  result.validation_score = 0.0;
+  result.is_valid = true;
+
+  // 检查是否启用位姿验证
+  if (!options_.enable_pose_validation()) {
+    return result;  // 验证功能未启用，直接通过
+  }
+
+  // 从配置文件读取参数
+  const double kMinValidationScore = options_.pose_validation_min_score();
+  const double kMaxTranslationError = options_.pose_validation_max_translation_error();
+  const double kMaxRotationError = options_.pose_validation_max_rotation_error();
+
+  // ========== 第一步：在动态地图上验证位姿和得分 ==========
+  bool dynamic_map_valid = false;
+  bool has_dynamic_map = false;  // 标记动态地图是否可用
+  double dynamic_validation_score = 0.0;
+  transform::Rigid2d dynamic_validation_pose = estimated_pose;
+  double dynamic_translation_error = 0.0;
+  double dynamic_rotation_error = 0.0;
+  std::shared_ptr<const mapping::Submap2D> dynamic_submap = nullptr;
+
+  if (!active_submaps_.submaps().empty()) {
+    dynamic_submap = active_submaps_.submaps().front();
+    
+    if (dynamic_submap &&
+        dynamic_submap->grid() &&
+        dynamic_submap->num_range_data() > 0)
+    {
+      has_dynamic_map = true;
+      
+      // 在动态地图上进行correlative scan matching
+      dynamic_validation_score = real_time_correlative_scan_matcher_.Match(
+          estimated_pose, 
+          point_cloud, 
+          *dynamic_submap->grid(),
+          &dynamic_validation_pose);
+
+      // 计算位姿误差
+      dynamic_translation_error = 
+          (dynamic_validation_pose.translation() - estimated_pose.translation()).norm();
+      dynamic_rotation_error = 
+          std::abs(dynamic_validation_pose.rotation().angle() - estimated_pose.rotation().angle());
+
+      // 动态地图验证：同时检查得分和位姿误差
+      const bool dynamic_score_valid = dynamic_validation_score >= kMinValidationScore;
+      const bool dynamic_translation_valid = dynamic_translation_error <= kMaxTranslationError;
+      const bool dynamic_rotation_valid = dynamic_rotation_error <= kMaxRotationError;
+
+      dynamic_map_valid = dynamic_score_valid && dynamic_translation_valid && dynamic_rotation_valid;
+
+      // LOG(INFO) << "Dynamic map validation - Score: " << dynamic_validation_score
+      //           << ", Translation error: " << dynamic_translation_error << " m"
+      //           << ", Rotation error: " << dynamic_rotation_error << " rad"
+      //           << ", Valid: " << (dynamic_map_valid ? "YES" : "NO");
+    }
+  } else {
+    LOG(INFO) << "No active submaps available, will use static map only";
+  }
+
+  // ========== 第二步：在静态地图上验证得分 ==========
+  bool static_map_valid = false;
+  double static_validation_score = 0.0;
+  transform::Rigid2d static_validation_pose = estimated_pose;
+
+  auto local_static_map = local_map_updater_->local_grid_map();
+  if (local_static_map != nullptr) {
+    // 在静态地图上进行correlative scan matching
+    static_validation_score = real_time_correlative_scan_matcher_.Match(
+        estimated_pose, 
+        point_cloud, 
+        *local_static_map,
+        &static_validation_pose);
+
+    // 静态地图验证：仅检查得分
+    static_map_valid = static_validation_score >= kMinValidationScore;
+
+    // LOG(INFO) << "Static map validation - Score: " << static_validation_score
+    //           << ", Valid: " << (static_map_valid ? "YES" : "NO");
+  } else {
+    LOG(WARNING) << "Local static grid map not available for validation";
+  }
+
+  // ========== 综合判断 ==========
+  // 如果动态地图可用，需要同时通过动态地图和静态地图验证
+  // 如果动态地图不可用，只需要通过静态地图验证
+  if (has_dynamic_map) {
+    result.is_valid = dynamic_map_valid && static_map_valid;
+  } else {
+    result.is_valid = static_map_valid;
+  }
+  
+  // 优先使用动态地图的验证位姿和得分（因为动态地图更实时）
+  if (has_dynamic_map) {
+    result.validated_pose = dynamic_validation_pose;
+    result.validation_score = dynamic_validation_score;
+  } else {
+    result.validated_pose = static_validation_pose;
+    result.validation_score = static_validation_score;
+  }
+
+  // 记录验证信息
+  if (!result.is_valid) {
+    LOG(WARNING) << "Pose validation failed!";
+    
+    if (has_dynamic_map) {
+      LOG(WARNING) << "\n  === Dynamic Map Validation ==="
+                   << "\n    Score: " << dynamic_validation_score 
+                   << " (threshold: " << kMinValidationScore << ")"
+                   << "\n    Translation error: " << dynamic_translation_error << " m"
+                   << " (threshold: " << kMaxTranslationError << " m)"
+                   << "\n    Rotation error: " << dynamic_rotation_error << " rad"
+                   << " (threshold: " << kMaxRotationError << " rad)"
+                   << "\n    Valid: " << (dynamic_map_valid ? "YES" : "NO");
+    }
+    
+    LOG(WARNING) << "\n  === Static Map Validation ==="
+                 << "\n    Score: " << static_validation_score
+                 << " (threshold: " << kMinValidationScore << ")"
+                 << "\n    Valid: " << (static_map_valid ? "YES" : "NO")
+                 << "\n  === Poses ==="
+                 << "\n    Scan match pose: " << estimated_pose;
+    
+    if (has_dynamic_map) {
+      LOG(WARNING) << "    Dynamic validation pose: " << dynamic_validation_pose;
+    }
+    
+    LOG(WARNING) << "    Static validation pose: " << static_validation_pose;
+  }
+  
+  return result;
+}
+
+/**
+ * @brief 向PoseEstimator2D中加入激光雷达数据，使用激光同步器进行同步
+ * 
+ * @param sensor_id 
+ * @param unsynchronized_data 
+ * @return std::unique_ptr<PoseEstimator2D::MatchingResult> 激光匹配的结果
+ */
+std::unique_ptr<PoseEstimator2D::MatchingResult>
+PoseEstimator2D::AddRangeData(
+    const std::string& sensor_id,
+    const sensor::TimedPointCloudData& unsynchronized_data) {
+  // 1. 将激光雷达数据添加到同步器
+  if (!laser_synchronizer_.AddLaserData(sensor_id, unsynchronized_data)) {
+    LOG(ERROR) << "Failed to add laser data for sensor: " << sensor_id;
+    return nullptr;
+  }
+
+  // 2. 尝试获取同步后的激光数据
+  auto synchronized_data = laser_synchronizer_.GetSynchronizedData();
+  if (!synchronized_data.is_valid) {
+    // LOG(INFO) << "Laser synchronizer filling buffer, waiting for more data.";
+    return nullptr;
+  }
+
+  // 3. 处理同步后的激光数据
+  return ProcessSynchronizedLaserData(synchronized_data);
+}
+
+/**
+ * @brief 处理同步后的激光数据（简化版本，使用DataPreprocessor）
+ * 
+ * @param synchronized_data 同步后的激光数据
+ * @return std::unique_ptr<PoseEstimator2D::MatchingResult> 处理结果
+ */
+std::unique_ptr<PoseEstimator2D::MatchingResult>
+PoseEstimator2D::ProcessSynchronizedLaserData(
+    const preprocess::LaserSynchronizer::SynchronizedLaserData& synchronized_data) {
+  
+  const common::Time& sync_time = synchronized_data.sync_time;
+  
+  // 使用数据预处理器来处理所有传感器数据
+  if (!data_preprocessor_) {
+    LOG(ERROR) << "Data preprocessor not initialized";
+    return nullptr;
+  }
+  
+  // 从里程计缓冲区获取同步时间对应的里程计数据
+  auto odom_at_sync_time = data_preprocessor_->GetOdometryAtTime(sync_time);
+  if (!odom_at_sync_time.has_value()) {
+    LOG(WARNING) << "No odometry data available for sync time: " << sync_time;
+    return nullptr;
+  }
+  
+  // 如果还没有初始化且没有进行重定位，根据配置决定是否自动触发全局重定位
+  if (loc_state_ == LocalizationState::INITIALIZED && !pose_initializer_ && 
+      options_.auto_trigger_global_relocalization())
+  {
+    LOG(INFO) << "No initial pose provided, triggering global relocalization automatically...";
+    TriggerGlobalRelocalization();
+  }
+  
+  // 只有在定位模式下才会用关键帧策略
+  if (loc_state_ == LocalizationState::LOCALIZED) {
+    if (keyframe_motion_filter_.IsSimilar(sync_time, odom_at_sync_time->pose)) {
+      return nullptr;
+    }
+  }
+  
+  // 使用DataPreprocessor处理多传感器数据
+  preprocess::MergedData merged_data = data_preprocessor_->ProcessMultipleSensorData(
+      synchronized_data.laser_data_map, sync_time);
+  
+  if (merged_data.IsEmpty()) {
+    LOG(WARNING) << "Merged data from DataPreprocessor is empty";
+    return nullptr;
+  }
+  
+  // 更新传感器时间信息
+  const common::Time current_sensor_time = sync_time;
+  absl::optional<common::Duration> sensor_duration;
+  if (last_sensor_time_.has_value()) {
+    sensor_duration = current_sensor_time - last_sensor_time_.value();
+  }
+  last_sensor_time_ = current_sensor_time;
+  
+  // 重定位逻辑
+  if (loc_state_ == LocalizationState::RELOCALIZING) {
+    CHECK(pose_initializer_ != nullptr);
+    pose_initializer_->UpdateSensorData(merged_data.merged_filtered_cloud,
+                                        merged_data.merged_line_data);
+
+    PoseInitializerStatus initializer_status =
+                              pose_initializer_->GetInitializerStatus();
+    if (initializer_status == PoseInitializerStatus::Success) {
+      auto initial_pose = pose_initializer_->GetEstimatedPose();
+      if (initial_pose) {
+        LOG(WARNING) << "Relocalization succeeded! Initial pose: " << *initial_pose;
+        local_pose_ = transform::Embed3D(*initial_pose);
+        // 更新用于计算delta pose的基准里程计数据
+        UpdateLastOdomForDelta(sync_time);
+        loc_state_ = LocalizationState::LOCALIZED;
+        pose_initializer_->stop();
+        active_submaps_.clear();
+        local_map_updater_->UpdateRobotPose(transform::Project2D(local_pose_));
+        
+        // 重置全局重定位尝试标志
+        has_tried_global_relocalization_ = false;
+      }
+    } else if (initializer_status == PoseInitializerStatus::Failed) {
+      LOG(WARNING) << "Pose initializer failed.";
+      
+      // 检查当前是否是局部重定位失败，如果是，尝试全局重定位
+      if (!has_tried_global_relocalization_) {
+        LOG(INFO) << "Local relocalization failed, trying global relocalization...";
+        pose_initializer_->stop();
+        
+        // 触发全局重定位
+        pose_initializer_->InitGlobalGridMap(global_grid_map_);
+        pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+        pose_initializer_->TriggerGlobalRelocalization();
+        pose_initializer_->start();
+        
+        has_tried_global_relocalization_ = true;
+        // 保持RELOCALIZING状态，等待全局重定位结果
+      } else {
+        LOG(ERROR) << "Both local and global relocalization failed.";
+        loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+        pose_initializer_->stop();
+        has_tried_global_relocalization_ = false;  // 重置标志，以便下次尝试
+      }
+    }
+  }
+
+  if (loc_state_ != LocalizationState::LOCALIZED) {
+    return nullptr;
+  }
+  
+  // 使用融合后的数据进行位姿估计和地图更新
+  return ProcessDataAndEstimatePose(
+      "merged_sensors",  // 使用一个标识来表示这是合并的传感器数据
+      current_sensor_time,
+      merged_data,
+      transform::Rigid3d::Identity(), 
+      sensor_duration,
+      data_preprocessor_.get());
+}
+
+/**
+ * @brief 处理融合数据并进行位姿估计和地图更新
+ * 
+ * @param sensor_id 传感器ID标识符
+ * @param time 时间戳
+ * @param merged_data 融合后的传感器数据
+ * @param gravity_alignment 重力对齐变换
+ * @param sensor_duration 传感器持续时间
+ * @return std::unique_ptr<PoseEstimator2D::MatchingResult> 
+ */
+std::unique_ptr<PoseEstimator2D::MatchingResult>
+PoseEstimator2D::ProcessDataAndEstimatePose(
+    const std::string& sensor_id,
+    const common::Time& time,
+    const preprocess::MergedData& merged_data,
+    const transform::Rigid3d& gravity_alignment,
+    const absl::optional<common::Duration>& sensor_duration,
+    preprocess::DataPreprocessor* data_preprocessor) {
+  
+  if (merged_data.merged_range_data.returns.empty()) {
+    LOG(WARNING) << "Dropped empty merged range data.";
+    return nullptr;
+  }
+
+  // 计算位姿预测值，确保有效性
+  transform::Rigid2d pose_prediction;
+  bool pose_prediction_valid = false;
+  
+  // 从里程计获取delta pose预测
+  const transform::Rigid3d odom_delta_pose = GetOdomDeltaPose(time);
+  if (local_pose_.IsValid() && odom_delta_pose.IsValid()) {
+    const auto pose_prediction_odom = transform::Project2D(local_pose_ * odom_delta_pose);
+    if (pose_prediction_odom.IsValid()) {
+      pose_prediction = pose_prediction_odom;
+      pose_prediction_valid = true;
+      // LOG(INFO) << "Using odometry prediction: " << pose_prediction;
+    }
+  }
+  
+  // 如果没有有效的预测位姿，使用上次的位姿作为初始值
+  if (!pose_prediction_valid) {
+    if (local_pose_.IsValid()) {
+      pose_prediction = transform::Project2D(local_pose_);
+      LOG(WARNING) << "Using last known pose as prediction: " << pose_prediction;
+    } else {
+      LOG(ERROR) << "No valid pose prediction available, using identity";
+      pose_prediction = transform::Rigid2d::Identity();
+    }
+  }
+
+  const sensor::PointCloud& filtered_gravity_aligned_point_cloud = merged_data.merged_filtered_cloud;
+  if (filtered_gravity_aligned_point_cloud.empty()) {
+    return nullptr;
+  }
+
+  // ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
+  std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
+  std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
+      ScanMatch(time, pose_prediction,
+                filtered_gravity_aligned_point_cloud,
+                merged_data.merged_highlight_cloud,
+                merged_data.merged_line_data,
+                tracked_lane_data);
+  
+  if (pose_estimate_2d == nullptr) {
+    LOG(WARNING) << "Scan matching failed.";
+    return nullptr;
+  }
+  
+  const transform::Rigid3d pose_estimate =
+      transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
+
+  // 验证位姿估计质量，通过real time matcher在局部地图上匹配
+  PoseValidationResult validation_result = ValidatePoseEstimate(
+      *pose_estimate_2d, 
+      filtered_gravity_aligned_point_cloud);
+  
+  if (!validation_result.is_valid)
+  {
+    LOG(WARNING) << "Pose validation failed! Validation score: " 
+                 << validation_result.validation_score 
+                 << ", attempting recovery with global map...";
+    
+    bool recovery_successful = false;
+    
+    // 尝试使用验证得到的位姿和全局地图进行恢复性匹配
+    transform::Rigid2d recovery_pose = validation_result.validated_pose;
+    const double recovery_score = real_time_correlative_scan_matcher_.Match(
+        validation_result.validated_pose,
+        filtered_gravity_aligned_point_cloud,
+        *global_grid_map_,
+        &recovery_pose);
+    
+    LOG(INFO) << "Recovery correlative matching score: " << recovery_score;
+    
+    // 如果恢复匹配分数足够高，尝试ceres优化
+    if (recovery_score > options_.pose_validation_min_score()) {
+      LOG(INFO) << "Recovery correlative match successful, performing ceres refinement...";
+      
+      auto recovery_pose_refined = absl::make_unique<transform::Rigid2d>();
+      ceres::Solver::Summary recovery_summary;
+      
+      ceres_scan_matcher_.Match(
+          recovery_pose.translation(),
+          recovery_pose,
+          filtered_gravity_aligned_point_cloud,
+          merged_data.merged_highlight_cloud,
+          *global_grid_map_,
+          *local_map_updater_->local_cloud_map_ikdtree(),
+          *global_highlight_cloud_ikdtree_,
+          recovery_pose_refined.get(),
+          &recovery_summary);
+      
+      // 检查恢复的位姿是否可用
+      if (recovery_summary.IsSolutionUsable() && 
+          recovery_summary.final_cost != -1 &&
+          !std::isinf(recovery_summary.final_cost) && 
+          !std::isnan(recovery_summary.final_cost))
+      {
+        LOG(WARNING) << "Recovery successful! Using recovered pose: " << *recovery_pose_refined;
+        
+        // 更新位姿为恢复后的位姿
+        pose_estimate_2d = std::move(recovery_pose_refined);
+        const transform::Rigid3d recovered_pose_estimate =
+            transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
+        local_pose_ = recovered_pose_estimate;
+        
+        // 清空active_submaps，使用恢复后的位姿重新开始
+        active_submaps_.clear();
+        
+        recovery_successful = true;
+        LOG(INFO) << "Cleared active submaps, continuing with recovered pose";
+      } else {
+        LOG(ERROR) << "Recovery ceres optimization failed (cost: " << recovery_summary.final_cost << ")";
+      }
+    } else {
+      LOG(ERROR) << "Recovery correlative match score too low: " << recovery_score;
+    }
+    
+    // 统一处理恢复失败的情况：触发重定位
+    if (!recovery_successful) {
+      LOG(WARNING) << "Recovery failed, triggering relocalization with validation pose...";
+      
+      const transform::Rigid3d relocalization_initial_pose = 
+          transform::Embed3D(validation_result.validated_pose);
+      
+      if (SetInitialPose(relocalization_initial_pose)) {
+        LOG(WARNING) << "Triggered relocalization with validation pose: " 
+                     << validation_result.validated_pose;
+        return nullptr;  // 等待重定位完成
+      } else {
+        LOG(ERROR) << "Failed to trigger relocalization! Localization lost.";
+        loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+        active_submaps_.clear();
+        return nullptr;
+      }
+    }
+  }
+
+  local_pose_ = pose_estimate;
+
+  // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
+  UpdateLastOdomForDelta(time);
+
+  local_map_updater_->UpdateRobotPose(*pose_estimate_2d);
+
+  sensor::RangeData range_data_in_local =
+      sensor::TransformRangeData(merged_data.merged_range_data,
+                         transform::Embed3D(pose_estimate_2d->cast<float>()));
+
+  // 将线数据转换到local坐标系
+  std::map<int, std::vector<sensor::LineData>> lines_in_local;
+  for (const auto& data_vec: tracked_lane_data) {
+    for (const auto& line: data_vec.second) {
+      lines_in_local[data_vec.first].push_back(sensor::TransformLineData(*pose_estimate_2d, line));
+    }
+  }
+
+  // 使用merged_data中的数据进行插入
+  std::unique_ptr<InsertionResult> insertion_result = InsertIntoSubmap(
+      time,
+      merged_data,
+      tracked_lane_data,
+      pose_estimate,gravity_alignment.rotation());
+
+  // 计算local slam的频率
+  const auto wall_time = std::chrono::steady_clock::now();
+  if (last_wall_time_.has_value()) {
+    const auto wall_time_duration = wall_time - last_wall_time_.value();
+    kLocalSlamLatencyMetric->Set(common::ToSeconds(wall_time_duration));
+    if (sensor_duration.has_value()) {
+      kLocalSlamRealTimeRatio->Set(common::ToSeconds(sensor_duration.value()) /
+                                   common::ToSeconds(wall_time_duration));
+    }
+  }
+
+  const double thread_cpu_time_seconds = common::GetThreadCpuTimeSeconds();
+  if (last_thread_cpu_time_seconds_.has_value()) {
+    const double thread_cpu_duration_seconds =
+        thread_cpu_time_seconds - last_thread_cpu_time_seconds_.value();
+    if (sensor_duration.has_value()) {
+      kLocalSlamCpuRealTimeRatio->Set(
+          common::ToSeconds(sensor_duration.value()) /
+          thread_cpu_duration_seconds);
+    }
+  }
+  last_wall_time_ = wall_time;
+  last_thread_cpu_time_seconds_ = thread_cpu_time_seconds;
+  
+  // 返回匹配结果
+  return absl::make_unique<MatchingResult>(
+      MatchingResult{time, local_pose_,
+                     std::move(range_data_in_local),
+                     std::move(lines_in_local),
+                     std::move(insertion_result)});
+}
+
+
+
+sensor::FeatureData PoseEstimator2D::GetFeatureData(
+  const common::Time & time,
+  const std::vector<laser_perception::FeatureMsgWithOrigin> & feature_data)
+{
+  sensor::FeatureData res;
+  // std::cout << "feature_data.size(): " << feature_data.size() << std::endl;
+  for (size_t i = 0; i < feature_data.size(); i++) {
+    // LineData(feature_data[i].)
+    transform::Rigid2d origin = transform::Rigid2d::FromVector(feature_data[i].origin);
+    for (auto it : feature_data[i].MsgVec) {
+      if (it.target_name == "line") {
+        Eigen::Vector2d begin = origin * it.line.first.cast<double>().head<2>();
+        Eigen::Vector2d end = origin * it.line.second.cast<double>().head<2>();
+        res.line_data.push_back(sensor::LineData(begin, end));
+      } else if (it.target_name == "reflector") {
+        Eigen::Vector2d reflector = origin * Eigen::Vector2d{it.x, it.y};
+        res.reflector_data.push_back(
+          sensor::LandmarkPointData{time, transform::Rigid3d(), reflector});
+      }
+    }
+  }
+  return res;
+}
+
+/**
+ * @brief 将雷达数据插入到submap中
+ * 
+ * @param time 时间
+ * @param merged_data 融合后的传感器数据
+ * @param tracked_lane_data 跟踪的车道线数据
+ * @param pose_estimate 估计的位姿
+ * @param gravity_alignment 重力对齐的旋转
+ * @return std::unique_ptr<PoseEstimator2D::InsertionResult> 插入的结果
+ */
+std::unique_ptr<PoseEstimator2D::InsertionResult>
+PoseEstimator2D::InsertIntoSubmap(
+    const common::Time time,
+    const preprocess::MergedData& merged_data,
+    const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
+    const transform::Rigid3d& pose_estimate,
+    const Eigen::Quaterniond& gravity_alignment)
+{
+  // 1. 判断是否是关键帧
+  if (map_insertion_motion_filter_.IsSimilar(time, pose_estimate)) {
+    return nullptr;
+  }
+
+  // 2. 将原始数据转换到local坐标系
+  const transform::Rigid2d pose_estimate_2d = transform::Project2D(pose_estimate);
+
+  // 转换点云到local坐标系
+  sensor::PointCloud cloud_in_local =
+            sensor::TransformPointCloud(
+                        merged_data.merged_less_flat_cloud,
+                        pose_estimate.cast<float>());
+
+  sensor::PointCloud highlight_cloud_in_local =
+            sensor::TransformPointCloud(
+                        merged_data.merged_highlight_cloud,
+                        pose_estimate.cast<float>());
+
+  // 将线数据转换到local坐标系
+  std::map<int, std::vector<sensor::LineData>> tracked_lines_in_local;
+  for (const auto& data_vec: tracked_lane_data) {
+    for (const auto& line: data_vec.second) {
+      tracked_lines_in_local[data_vec.first].push_back(sensor::TransformLineData(pose_estimate_2d, line));
+    }
+  }
+
+  // 3. 收集所有需要插入的range data到vector中
+  std::vector<sensor::RangeData> all_range_data_to_insert;
+  
+  // 添加每个传感器的原始去畸变range data
+  for (const auto& original_range_data : merged_data.original_undistorted_range_datas) {
+    // 将原始去畸变数据转换到local坐标系
+    sensor::RangeData sensor_range_data_in_local = sensor::TransformRangeData(
+        original_range_data, pose_estimate.cast<float>());
+    all_range_data_to_insert.push_back(sensor_range_data_in_local);
+  }
+
+  
+  // 一次性插入所有数据（range data、cloud data、line data和reflector data）
+  std::vector<std::shared_ptr<const mapping::Submap2D>> insertion_submaps =
+      active_submaps_.InsertData(all_range_data_to_insert,
+                                  cloud_in_local,
+                                  highlight_cloud_in_local,
+                                  tracked_lines_in_local,
+                                  merged_data.merged_reflector_data);
+
+  // 7. 返回插入结果
+  return absl::make_unique<InsertionResult>(InsertionResult{
+      std::make_shared<const mapping::TrajectoryNode::Data>(mapping::TrajectoryNode::Data{
+          time,
+          gravity_alignment,
+          merged_data.merged_filtered_cloud,  // 合并后的滤波点云
+          merged_data.merged_highlight_cloud, // 合并后的highlight点云
+          merged_data.original_undistorted_range_datas, // 各个传感器的原始去畸变range data
+          tracked_lane_data,
+          merged_data.merged_reflector_data,
+          {},  // 'high_resolution_point_cloud' is only used in 3D.
+          {},  // 'low_resolution_point_cloud' is only used in 3D.
+          {},  // 'rotational_scan_matcher_histogram' is only used in 3D.
+          pose_estimate}),
+      std::move(insertion_submaps)});
+}
+
+/**
+ * @brief 向PoseEstimator2D中加入IMU数据，同时初始化位姿插值器
+ * 
+ * @param imu_data ImuData格式的数据
+ */
+void PoseEstimator2D::AddImuData(const sensor::ImuData& imu_data) {
+  CHECK(options_.use_imu_data()) << "An unexpected IMU packet was added.";
+}
+
+/**
+ * @brief 向PoseEstimator2D中加入odom数据
+ * @param odometry_data OdometryData格式的数据
+ */
+void PoseEstimator2D::AddOdometryData(
+    const sensor::OdometryData& odometry_data)
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  // 将里程计数据添加到数据预处理器
+  if (data_preprocessor_) {
+    data_preprocessor_->AddOdometryData(odometry_data);
+  }
+  
+  // 将里程计数据添加到激光同步器，用于时间一致性检查
+  laser_synchronizer_.AddOdometryData(odometry_data);
+}
+
+/**
+ * @brief 计算相对于上次位姿的delta pose
+ * 
+ * @param laser_time 激光雷达时间戳
+ * @return transform::Rigid3d delta pose
+ */
+transform::Rigid3d PoseEstimator2D::GetOdomDeltaPose(const common::Time& laser_time) {
+  auto current_odom = GetOdometryAtTime(laser_time);
+  if (!current_odom.has_value()) {
+    LOG(WARNING) << "No odometry data available for delta pose calculation at time: " << laser_time;
+    return transform::Rigid3d::Identity();
+  }
+  
+  // 如果这是第一次调用，保存当前位姿作为基准
+  if (!last_odom_for_delta_.has_value()) {
+    last_odom_for_delta_ = *current_odom;
+    return transform::Rigid3d::Identity();
+  }
+  
+  // 计算delta pose
+  const transform::Rigid3d delta_pose = 
+      last_odom_for_delta_->pose.inverse() * current_odom->pose;
+  
+  return delta_pose;
+}
+
+/**
+ * @brief 获取指定时间的里程计数据
+ * 
+ * @param time 时间戳
+ * @return absl::optional<sensor::OdometryData> 里程计数据，如果不存在则返回nullopt
+ */
+absl::optional<sensor::OdometryData> PoseEstimator2D::GetOdometryAtTime(const common::Time& time) const {
+  assert(data_preprocessor_ != nullptr);
+  // 使用数据预处理器来获取里程计数据
+  if (data_preprocessor_) {
+    return data_preprocessor_->GetOdometryAtTime(time);
+  }
+  
+  return absl::nullopt;
+}
+
+/**
+ * @brief 更新用于计算delta pose的基准里程计数据
+ * 
+ * @param time 时间戳
+ */
+void PoseEstimator2D::UpdateLastOdomForDelta(const common::Time& time) {
+  auto current_odom = GetOdometryAtTime(time);
+  if (current_odom.has_value()) {
+    last_odom_for_delta_ = *current_odom;
+  }
+}
+
+void PoseEstimator2D::ResetMapping()
+{
+}
+
+void PoseEstimator2D::RegisterMetrics(
+    metrics::FamilyFactory* family_factory) {
+  auto* latency = family_factory->NewGaugeFamily(
+      "mapping_2d_local_trajectory_builder_latency",
+      "Duration from first incoming point cloud in accumulation to local slam "
+      "result");
+  kLocalSlamLatencyMetric = latency->Add({});
+  auto* real_time_ratio = family_factory->NewGaugeFamily(
+      "mapping_2d_local_trajectory_builder_real_time_ratio",
+      "sensor duration / wall clock duration.");
+  kLocalSlamRealTimeRatio = real_time_ratio->Add({});
+
+  auto* cpu_real_time_ratio = family_factory->NewGaugeFamily(
+      "mapping_2d_local_trajectory_builder_cpu_real_time_ratio",
+      "sensor duration / cpu duration.");
+  kLocalSlamCpuRealTimeRatio = cpu_real_time_ratio->Add({});
+  auto score_boundaries = metrics::Histogram::FixedWidth(0.05, 20);
+  auto* scores = family_factory->NewHistogramFamily(
+      "mapping_2d_local_trajectory_builder_scores", "Local scan matcher scores",
+      score_boundaries);
+  kRealTimeCorrelativeScanMatcherScoreMetric =
+      scores->Add({{"scan_matcher", "real_time_correlative"}});
+  auto cost_boundaries = metrics::Histogram::ScaledPowersOf(2, 0.01, 100);
+  auto* costs = family_factory->NewHistogramFamily(
+      "mapping_2d_local_trajectory_builder_costs", "Local scan matcher costs",
+      cost_boundaries);
+  kCeresScanMatcherCostMetric = costs->Add({{"scan_matcher", "ceres"}});
+  auto distance_boundaries = metrics::Histogram::ScaledPowersOf(2, 0.01, 10);
+  auto* residuals = family_factory->NewHistogramFamily(
+      "mapping_2d_local_trajectory_builder_residuals",
+      "Local scan matcher residuals", distance_boundaries);
+  kScanMatcherResidualDistanceMetric =
+      residuals->Add({{"component", "distance"}});
+  kScanMatcherResidualAngleMetric = residuals->Add({{"component", "angle"}});
+}
+
+}  // namespace localization
+}  // namespace cartographer

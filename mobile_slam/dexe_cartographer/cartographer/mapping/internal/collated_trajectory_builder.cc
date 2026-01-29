@@ -51,11 +51,22 @@ CollatedTrajectoryBuilder::CollatedTrajectoryBuilder(
     }
     expected_sensor_id_strings.insert(sensor_id.id);
   }
+  // 创建传感器数据队列，同时注册数据处理回调函数
   sensor_collator_->AddTrajectory(
       trajectory_id, expected_sensor_id_strings,
       [this](const std::string& sensor_id, std::unique_ptr<sensor::Data> data) {
         HandleCollatedSensorData(sensor_id, std::move(data));
       });
+}
+
+bool CollatedTrajectoryBuilder::SetInitialPose(const transform::Rigid3d &initial_pose)
+{
+  return wrapped_trajectory_builder_->SetInitialPose(initial_pose);
+}
+
+std::optional<localization::LocalizationState> CollatedTrajectoryBuilder::GetLocalizationState() const
+{
+  return wrapped_trajectory_builder_->GetLocalizationState();
 }
 
 void CollatedTrajectoryBuilder::AddData(std::unique_ptr<sensor::Data> data) {

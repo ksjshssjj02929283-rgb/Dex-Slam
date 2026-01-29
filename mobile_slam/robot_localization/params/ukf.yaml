@@ -262,3 +262,16 @@ ukf_filter_node:
 # [ADVANCED, UKF ONLY] The beta variable relates to the distribution of the state vector. Again, it's probably best to
 # leave this alone if you're uncertain. Defaults to 2 if unspecified.
         beta: 2.0
+
+# ============================
+# Filter Reset Configuration
+# ============================
+# Threshold for pose distance error (in meters) to trigger filter reset
+# When the distance error between filtered position and pose0 measurement exceeds this value,
+# the filter will be completely reset. Defaults to 0.2 if unspecified.
+        pose_reset_threshold: 0.1
+
+# Threshold for angle error (in degrees) to trigger filter reset
+# When the yaw angle error between filtered orientation and pose0 measurement exceeds this value,
+# the filter will be completely reset. Defaults to 3.0 if unspecified.
+        angle_reset_threshold: 3.0

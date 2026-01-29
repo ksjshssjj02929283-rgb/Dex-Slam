@@ -16,6 +16,9 @@ cmake_minimum_required(VERSION 3.2)
 
 project(cartographer)
 
+set(CMAKE_BUILD_TYPE "Release")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wall -std=c++17 -march=native")
 set(CARTOGRAPHER_MAJOR_VERSION 1)
 set(CARTOGRAPHER_MINOR_VERSION 0)
 set(CARTOGRAPHER_PATCH_VERSION 0)
@@ -30,7 +33,7 @@ google_initialize_cartographer_project()
 google_enable_testing()
 
 find_package(absl REQUIRED)
-set(BOOST_COMPONENTS iostreams)
+set(BOOST_COMPONENTS iostreams system filesystem)
 if(WIN32)
   list(APPEND BOOST_COMPONENTS zlib)
   set(Boost_USE_STATIC_LIBS FALSE)
@@ -39,6 +42,8 @@ find_package(Boost REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 find_package(Ceres REQUIRED COMPONENTS SuiteSparse)
 find_package(Eigen3 REQUIRED)
 find_package(LuaGoogle REQUIRED)
+find_package(OpenCV 4 REQUIRED)
+find_package(PCL REQUIRED)
 if(WIN32)
   # On Windows, Protobuf is incorrectly found by the bundled CMake module, so prefer native CMake config.
   set(protobuf_MODULE_COMPATIBLE TRUE CACHE INTERNAL "")
@@ -229,7 +234,7 @@ target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
 target_link_libraries(${PROJECT_NAME} PUBLIC ${EIGEN3_LIBRARIES})
 
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-  "${CERES_INCLUDE_DIR}")
+  "${CERES_INCLUDE_DIRS}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${CERES_LIBRARIES})
 
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
@@ -240,38 +245,30 @@ target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   "${Boost_INCLUDE_DIRS}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${Boost_LIBRARIES})
 
-# added by hz
-# set(GLOG_INCLUDE_DIR "/root/Third-Party/glog-0.4.0/include")
-# set(GLOG_LIBRARY_DIR "/root/Third-Party/glog-0.4.0/lib-static")
-# set(GLOG_LIBRARY "${GLOG_LIBRARY_DIR}/libglog.a")
-# set(CMAKE_PREFIX_PATH "/root/Third-Party/glog-0.4.0" ${CMAKE_PREFIX_PATH})
+target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+  "${OpenCV_INCLUDE_DIRS}")
+target_link_libraries(${PROJECT_NAME} PUBLIC ${OpenCV_LIBRARIES})
 
-# message(STATUS "GLOG_INCLUDE_DIR: ${GLOG_INCLUDE_DIR}")
-# message(STATUS "GLOG_LIBRARY_DIR: ${GLOG_LIBRARY_DIR}")
-# message(STATUS "PROJECT_NAME: ${PROJECT_NAME}")
+target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+  "${PCL_INCLUDE_DIRS}")
+target_link_libraries(${PROJECT_NAME} PUBLIC ${PCL_LIBRARIES})
+# add_definitions(${PCL_DEFINITIONS})
 
-# target_include_directories(${PROJECT_NAME} PUBLIC "${GLOG_INCLUDE_DIR}")
-# end
+find_package(yaml-cpp)
+pkg_check_modules(NEW_YAMLCPP yaml-cpp>=0.5)
+if(NEW_YAMLCPP_FOUND)
+    add_definitions(-DHAVE_NEW_YAMLCPP)
+endif()
+target_link_libraries(${PROJECT_NAME} PUBLIC yaml-cpp)
+
 if (WIN32)
   find_package(glog REQUIRED)
   set(GLOG_LIBRARY glog::glog)
 else()
   set(GLOG_LIBRARY glog)
 endif()
-target_link_libraries(${PROJECT_NAME} PUBLIC "${GLOG_LIBRARY}")
 
-target_link_libraries(cartographer_autogenerate_ground_truth PUBLIC "${GLOG_LIBRARY}")
-target_link_libraries(cartographer_compute_relations_metrics PUBLIC "${GLOG_LIBRARY}")
-target_link_libraries(cartographer_pbstream PUBLIC "${GLOG_LIBRARY}")
-target_link_libraries(cartographer_print_configuration PUBLIC "${GLOG_LIBRARY}")
-# source code
-# if (WIN32)
-#   find_package(glog REQUIRED)
-#   set(GLOG_LIBRARY glog::glog)
-# else()
-#   set(GLOG_LIBRARY glog)
-# endif()
-# end
+target_link_libraries(${PROJECT_NAME} PUBLIC ${GLOG_LIBRARY})
 target_link_libraries(${PROJECT_NAME} PUBLIC gflags)
 if(WIN32)
   # Needed to fix conflict with MSVC's error macro.
@@ -372,8 +369,6 @@ install(
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
-  # added by hz
-  # INCLUDES DESTINATION "${GLOG_INCLUDE_DIR}"
 )
 
 foreach(HDR ${INSTALL_SOURCE_HDRS})
@@ -388,6 +383,7 @@ endforeach()
 foreach(HDR ${INSTALL_GENERATED_HDRS})
   file(RELATIVE_PATH REL_FIL ${PROJECT_BINARY_DIR} ${HDR})
   get_filename_component(DIR ${REL_FIL} DIRECTORY)
+  message(STATUS "Installing ${HDR} to include/${DIR}")
   install(
     FILES ${HDR}
     DESTINATION include/${DIR}

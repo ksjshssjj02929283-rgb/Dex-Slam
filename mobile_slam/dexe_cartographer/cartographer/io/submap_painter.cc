@@ -69,11 +69,19 @@ bool Has3DGrids(const mapping::proto::Submap& submap) {
 
 }  // namespace
 
+/**
+ * @brief 调用cairo接口绘制submap
+ * 
+ * @param submaps 
+ * @param resolution 
+ * @return PaintSubmapSlicesResult 
+ */
 PaintSubmapSlicesResult PaintSubmapSlices(
     const std::map<::cartographer::mapping::SubmapId, SubmapSlice>& submaps,
     const double resolution) {
   Eigen::AlignedBox2f bounding_box;
   {
+    // 创建cairo接口
     auto surface = MakeUniqueCairoSurfacePtr(
         cairo_image_surface_create(kCairoFormat, 1, 1));
     auto cr = MakeUniqueCairoPtr(cairo_create(surface.get()));
@@ -81,7 +89,7 @@ PaintSubmapSlicesResult PaintSubmapSlices(
       cairo_user_to_device(cr.get(), &x, &y);
       bounding_box.extend(Eigen::Vector2f(x, y));
     };
-
+    // 使用cairo接口绘制submap
     CairoPaintSubmapSlices(
         1. / resolution, submaps, cr.get(),
         [&update_bounding_box](const SubmapSlice& submap_slice) {
@@ -117,25 +125,36 @@ PaintSubmapSlicesResult PaintSubmapSlices(
   return PaintSubmapSlicesResult(std::move(surface), origin);
 }
 
+/**
+ * @brief 生成submap的slice
+ * 
+ * @param global_submap_pose submap的全局位姿
+ * @param proto 
+ * @param submap_slice 生成的slice
+ * @param conversion_tables 灰度转换表
+ */
 void FillSubmapSlice(
     const ::cartographer::transform::Rigid3d& global_submap_pose,
     const ::cartographer::mapping::proto::Submap& proto,
     SubmapSlice* const submap_slice,
     mapping::ValueConversionTables* conversion_tables) {
   ::cartographer::mapping::proto::SubmapQuery::Response response;
-  ::cartographer::transform::Rigid3d local_pose;
+  ::cartographer::transform::Rigid3d local_pose; // local pose好像没用到
   if (proto.has_submap_3d()) {
     mapping::Submap3D submap(proto.submap_3d());
     local_pose = submap.local_pose();
     submap.ToResponseProto(global_submap_pose, &response);
   } else {
+    // 如果是2D，就根据conversion_tables生成submap
     ::cartographer::mapping::Submap2D submap(proto.submap_2d(),
                                              conversion_tables);
     local_pose = submap.local_pose();
+    // 将submap转换成proto.response.textures
     submap.ToResponseProto(global_submap_pose, &response);
   }
   submap_slice->pose = global_submap_pose;
 
+  // 解析地图信息，并将地图信息转换成submap_slice
   auto& texture_proto = response.textures(0);
   const SubmapTexture::Pixels pixels = UnpackTextureData(
       texture_proto.cells(), texture_proto.width(), texture_proto.height());
@@ -149,10 +168,18 @@ void FillSubmapSlice(
                   texture_proto.height(), &submap_slice->cairo_data);
 }
 
+/**
+ * @brief 逆序列化pbstream文件，获取submap切片
+ * 
+ * @param deserializer 逆序列化器
+ * @param submap_slices submap切片（输出）
+ * @param conversion_tables 灰度转换表
+ */
 void DeserializeAndFillSubmapSlices(
     ProtoStreamDeserializer* deserializer,
     std::map<mapping::SubmapId, SubmapSlice>* submap_slices,
     mapping::ValueConversionTables* conversion_tables) {
+  // 1. 获取所有submap的pose
   std::map<mapping::SubmapId, transform::Rigid3d> submap_poses;
   for (const auto& trajectory : deserializer->pose_graph().trajectory()) {
     for (const auto& submap : trajectory.submap()) {
@@ -161,6 +188,7 @@ void DeserializeAndFillSubmapSlices(
           transform::ToRigid3(submap.pose());
     }
   }
+  // 2. 遍历所有序列化数据，如果有submap，则生成submap切片
   mapping::proto::SerializedData proto;
   while (deserializer->ReadNextSerializedData(&proto)) {
     if (proto.has_submap() &&
@@ -174,6 +202,14 @@ void DeserializeAndFillSubmapSlices(
   }
 }
 
+/**
+ * @brief 解析Texture中的地图信息
+ * 
+ * @param compressed_cells 压缩后的cells
+ * @param width 地图宽度
+ * @param height 地图高度
+ * @return SubmapTexture::Pixels 解析的地图像素（包含intensity,和alpha）
+ */
 SubmapTexture::Pixels UnpackTextureData(const std::string& compressed_cells,
                                         const int width, const int height) {
   SubmapTexture::Pixels pixels;
@@ -192,6 +228,16 @@ SubmapTexture::Pixels UnpackTextureData(const std::string& compressed_cells,
   return pixels;
 }
 
+/**
+ * @brief 根据地图信息绘制地图
+ * 
+ * @param intensity 灰度信息
+ * @param alpha 增益信息
+ * @param width 宽度
+ * @param height 高度
+ * @param cairo_data 操作的数据
+ * @return UniqueCairoSurfacePtr 生成的地图信息
+ */
 UniqueCairoSurfacePtr DrawTexture(const std::vector<char>& intensity,
                                   const std::vector<char>& alpha,
                                   const int width, const int height,

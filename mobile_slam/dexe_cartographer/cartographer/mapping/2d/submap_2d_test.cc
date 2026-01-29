@@ -68,8 +68,13 @@ TEST(Submap2DTest, TheRightNumberOfRangeDataAreInserted) {
   ActiveSubmaps2D submaps{CreateSubmapsOptions2D(parameter_dictionary.get())};
   std::set<std::shared_ptr<const Submap2D>> all_submaps;
   for (int i = 0; i != 1000; ++i) {
+    // 获取插入的submaps
     auto insertion_submaps =
-        submaps.InsertRangeData({Eigen::Vector3f::Zero(), {}, {}});
+        submaps.InsertData({{Eigen::Vector3f::Zero(), {}, {}}}, 
+                          {},  // empty cloud_data
+                          {},  // empty highlight_cloud_data
+                          {},  // empty line_data
+                          {}); // empty reflector_data
     // Except for the first, maps should only be returned after enough range
     // data.
     for (const auto& submap : insertion_submaps) {
@@ -102,7 +107,10 @@ TEST(Submap2DTest, ToFromProto) {
   Submap2D expected(Eigen::Vector2f(4.f, 5.f),
                     absl::make_unique<ProbabilityGrid>(expected_map_limits,
                                                        &conversion_tables),
-                    &conversion_tables);
+                    &conversion_tables,
+                    absl::make_unique<sensor::PointCloud>(),
+                    absl::make_unique<sensor::PointCloud>(),
+                    0, std::map<int, cartographer::mapping::MapLine2D>());
   const proto::Submap proto =
       expected.ToProto(true /* include_probability_grid_data */);
   EXPECT_TRUE(proto.has_submap_2d());

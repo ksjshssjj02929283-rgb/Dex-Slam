@@ -42,6 +42,7 @@
 #include <deque>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <queue>
 #include <string>
@@ -132,22 +133,22 @@ public:
     const std::shared_ptr<
       robot_localization::srv::ToggleFilterProcessing::Response> resp);
 
-  //! @brief Service callback to start localization (enable filter processing)
+  //! @brief Service callback to start filter (enable filter processing)
   //! @param[in] request - Trigger request
   //! @param[out] response - Trigger response with success and message
   //! @return void
   //!
-  void startLocalizationCallback(
+  void startFilterCallback(
     const std::shared_ptr<rmw_request_id_t>/*request_header*/,
     const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
     const std::shared_ptr<std_srvs::srv::Trigger::Response> resp);
 
-  //! @brief Service callback to stop localization (disable filter processing)
+  //! @brief Service callback to stop filter (disable filter processing)
   //! @param[in] request - Trigger request
   //! @param[out] response - Trigger response with success and message
   //! @return void
   //!
-  void stopLocalizationCallback(
+  void stopFilterCallback(
     const std::shared_ptr<rmw_request_id_t>/*request_header*/,
     const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
     const std::shared_ptr<std_srvs::srv::Trigger::Response> resp);
@@ -353,7 +354,7 @@ protected:
   //! @param[in] time - The time to which the filter state should revert
   //! @return True if restoring the filter succeeded. False if not.
   //!
-  bool revertTo(const rclcpp::Time & time);
+  bool revertTo(const rclcpp::Time & time, MeasurementQueue & measurement_queue);
 
   //! @brief Saves the current filter state in the queue of previous filter
   //! states
@@ -722,6 +723,15 @@ protected:
   //!
   double pose_reset_threshold_;
 
+  //! @brief Threshold angle for pose reset (in radians)
+  //!
+  double angle_reset_threshold_;
+
+  //! @brief Recursive mutex to protect measurement_queue_ from concurrent access
+  //! Recursive mutex allows re-locking from the same thread (e.g., clearMeasurementQueue called from integrateMeasurements)
+  //!
+  std::recursive_mutex measurement_queue_mutex_;
+
   //! @brief An implicitly time ordered queue of past filter states used for
   //! smoothing.
   //
@@ -791,15 +801,15 @@ protected:
   rclcpp::Service<robot_localization::srv::ToggleFilterProcessing>::SharedPtr
     toggle_filter_processing_srv_;
 
-  //! @brief Service to start localization (convenience wrapper for toggle)
+  //! @brief Service to start filter (convenience wrapper for toggle)
   //!
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr
-    start_localization_srv_;
+    start_filter_srv_;
 
-  //! @brief Service to stop localization (convenience wrapper for toggle)
+  //! @brief Service to stop filter (convenience wrapper for toggle)
   //!
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr
-    stop_localization_srv_;
+    stop_filter_srv_;
 
   //! @brief Subscribes to the control input topic
   //!

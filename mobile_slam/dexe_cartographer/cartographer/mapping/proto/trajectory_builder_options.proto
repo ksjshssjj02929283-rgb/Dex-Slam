@@ -18,6 +18,7 @@ import "cartographer/transform/proto/transform.proto";
 import "cartographer/mapping/proto/motion_filter_options.proto";
 import "cartographer/mapping/proto/local_trajectory_builder_options_2d.proto";
 import "cartographer/mapping/proto/local_trajectory_builder_options_3d.proto";
+import "cartographer/localization/proto/pose_estimator_options_2d.proto";
 
 package cartographer.mapping.proto;
 
@@ -44,6 +45,8 @@ message TrajectoryBuilderOptions {
   bool collate_landmarks = 8;
 
   MotionFilterOptions pose_graph_odometry_motion_filter = 9;
+
+  cartographer.localization.proto.PoseEstimatorOptions2D pose_estimator_2d_options = 10;
 }
 
 message SensorId {

@@ -19,21 +19,44 @@
 
 #include <chrono>
 #include <memory>
+#include <mutex>
+#include <deque>
+#include <optional>
 
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/ceres_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
-#include "cartographer/mapping/internal/range_data_collator.h"
+#include "cartographer/preprocess/laser_synchronizer.h"
 #include "cartographer/mapping/pose_extrapolator.h"
 #include "cartographer/mapping/proto/local_trajectory_builder_options_2d.pb.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/imu_data.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer/sensor/odometry_data.h"
 #include "cartographer/sensor/range_data.h"
+#include "cartographer/sensor/timed_point_cloud_data.h"
+#include "cartographer/sensor/line_data.h"
 #include "cartographer/transform/rigid_transform.h"
+#include "cartographer/preprocess/data_preprocessor.h"
+#include "cartographer/laser_perception/data_type.h"
+#include "cartographer/laser_perception/laser_perception.h"
+#include "cartographer/sensor/imu_data.h"
+#include "cartographer/sensor/internal/voxel_filter.h"
+#include "cartographer/sensor/odometry_data.h"
+#include "cartographer/sensor/range_data.h"
+#include "cartographer/sensor/timed_point_cloud_data.h"
+#include "cartographer/sensor/line_data.h"
+#include "cartographer/transform/rigid_transform.h"
+#include "cartographer/preprocess/data_preprocessor.h"
+#include "cartographer/laser_perception/data_type.h"
+#include "cartographer/laser_perception/laser_perception.h"
+
+#include "pcl/point_cloud.h"
+#include "pcl/point_types.h"
 
 namespace cartographer {
 namespace mapping {
@@ -44,25 +67,33 @@ namespace mapping {
 class LocalTrajectoryBuilder2D {
  public:
   struct InsertionResult {
-    std::shared_ptr<const TrajectoryNode::Data> constant_data; // 前端匹配用的数据和计算出来的local坐标系下的位姿
-    std::vector<std::shared_ptr<const Submap2D>> insertion_submaps;
+    std::shared_ptr<const TrajectoryNode::Data> constant_data;  // 轨迹约束
+    std::vector<std::shared_ptr<const Submap2D>> insertion_submaps; // submap
   };
-  // 扫描匹配的结果
   struct MatchingResult {
     common::Time time;
-    transform::Rigid3d local_pose;
-    sensor::RangeData range_data_in_local; // 经过扫描匹配校准之后的雷达数据
+    transform::Rigid3d local_pose;  // 位姿(in local frame)
+    std::vector<transform::Rigid2d> particle_poses;
+    sensor::RangeData range_data_in_local;  // range data
+    std::map<int, std::vector<sensor::LineData>>  line_data_in_local;
     // 'nullptr' if dropped by the motion filter.
-    std::unique_ptr<const InsertionResult> insertion_result;
+    std::unique_ptr<const InsertionResult> insertion_result;    // 插入结果
   };
 
+  // 使用DataPreprocessor定义的数据结构
+  using MergedData = preprocess::MergedData;
+  using ProcessedSensorData = preprocess::ProcessedSensorData;
+
   explicit LocalTrajectoryBuilder2D(
-      const proto::LocalTrajectoryBuilderOptions2D& options,
-      const std::vector<std::string>& expected_range_sensor_ids);
+	  const proto::LocalTrajectoryBuilderOptions2D& options,
+	  const std::vector<std::string>& expected_range_sensor_ids);
   ~LocalTrajectoryBuilder2D();
 
   LocalTrajectoryBuilder2D(const LocalTrajectoryBuilder2D&) = delete;
   LocalTrajectoryBuilder2D& operator=(const LocalTrajectoryBuilder2D&) = delete;
+
+  bool SetInitialPose(const transform::Rigid3d &initial_pose) { return false; }
+  std::optional<localization::LocalizationState> GetLocalizationState() const { return std::nullopt; }
 
   // Returns 'MatchingResult' when range data accumulation completed,
   // otherwise 'nullptr'. Range data must be approximately horizontal
@@ -70,45 +101,81 @@ class LocalTrajectoryBuilder2D {
   // `range_data` was acquired, `TimedPointCloudData::ranges` contains the
   // relative time of point with respect to `TimedPointCloudData::time`.
   std::unique_ptr<MatchingResult> AddRangeData(
-      const std::string& sensor_id,
-      const sensor::TimedPointCloudData& range_data);
+	  const std::string& sensor_id,
+	  const sensor::TimedPointCloudData& range_data);
   void AddImuData(const sensor::ImuData& imu_data);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
 
   static void RegisterMetrics(metrics::FamilyFactory* family_factory);
 
  private:
-  std::unique_ptr<MatchingResult> AddAccumulatedRangeData(
-      common::Time time, const sensor::RangeData& gravity_aligned_range_data,
-      const transform::Rigid3d& gravity_alignment,
-      const absl::optional<common::Duration>& sensor_duration);
+  std::unique_ptr<MatchingResult> ProcessDataAndEstimatePose(
+    const std::string& sensor_id,
+    const common::Time& time,
+    const MergedData& merged_data,
+    const transform::Rigid3d& gravity_alignment,
+    const absl::optional<common::Duration>& sensor_duration,
+    preprocess::DataPreprocessor* data_preprocessor);
+
+  sensor::FeatureData GetFeatureData(
+    const common::Time & time,
+    const std::vector<laser_perception::FeatureMsgWithOrigin> & feature_data);
+
   sensor::RangeData TransformToGravityAlignedFrameAndFilter(
-      const transform::Rigid3f& transform_to_gravity_aligned_frame,
-      const sensor::RangeData& range_data) const;
+	  const transform::Rigid3f& transform_to_gravity_aligned_frame,
+	  const sensor::RangeData& range_data) const;
+
+  sensor::RangeData FilterRangeData(
+	  const sensor::RangeData& range_data) const;
   std::unique_ptr<InsertionResult> InsertIntoSubmap(
-      common::Time time, const sensor::RangeData& range_data_in_local,
-      const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+      const common::Time time,
+      const MergedData& merged_data,
+      const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
       const transform::Rigid3d& pose_estimate,
       const Eigen::Quaterniond& gravity_alignment);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
   // observed pose, or nullptr on failure.
   std::unique_ptr<transform::Rigid2d> ScanMatch(
-      common::Time time, const transform::Rigid2d& pose_prediction,
-      const sensor::PointCloud& filtered_gravity_aligned_point_cloud);
+    const common::Time time, const transform::Rigid2d& pose_prediction,
+    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
+    const std::vector<sensor::LineData> & line_data,
+    std::map<int, std::vector<sensor::LineData>> & track_lane_data,
+    Eigen::Matrix3d & cov);
 
   // Lazily constructs a PoseExtrapolator.
+  bool is_exptrapolator_initialized_ = false;
   void InitializeExtrapolator(common::Time time);
+
+  // 获取数据预处理器
+  preprocess::DataPreprocessor* GetDataPreprocessor() const;
+
+  // 计算相对于上次位姿的delta pose
+  transform::Rigid3d GetOdomDeltaPose(const common::Time& laser_time);
+
+  // 更新用于计算delta pose的基准里程计数据
+  void UpdateLastOdomForDelta(const common::Time& time);
+
+  // 获取指定时间的里程计数据
+  absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
+
+  // 处理同步后的激光数据
+  std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
+      const preprocess::LaserSynchronizer::SynchronizedLaserData& synchronized_data);
 
   const proto::LocalTrajectoryBuilderOptions2D options_;
   ActiveSubmaps2D active_submaps_;
 
-  MotionFilter motion_filter_;
+  // MotionFilter motion_filter_;
+  MotionFilter keyframe_motion_filter_;
+  MotionFilter map_insertion_motion_filter_;
   scan_matching::RealTimeCorrelativeScanMatcher2D
-      real_time_correlative_scan_matcher_;
+	  real_time_correlative_scan_matcher_;
   scan_matching::CeresScanMatcher2D ceres_scan_matcher_;
-
-  std::unique_ptr<PoseExtrapolator> extrapolator_;
+	
+	std::mutex extrapolator_mutex_;
+  std::shared_ptr<PoseExtrapolator> extrapolator_;
 
   int num_accumulated_ = 0;
   sensor::RangeData accumulated_range_data_;
@@ -117,7 +184,20 @@ class LocalTrajectoryBuilder2D {
   absl::optional<double> last_thread_cpu_time_seconds_;
   absl::optional<common::Time> last_sensor_time_;
 
-  RangeDataCollator range_data_collator_;
+  preprocess::LaserSynchronizer laser_synchronizer_;
+
+  // 单个数据预处理器处理所有传感器数据
+  const std::vector<std::string> expected_range_sensor_ids_;  // 预期的传感器ID列表
+  std::unique_ptr<preprocess::DataPreprocessor> data_preprocessor_;
+
+  transform::Rigid3d local_pose_ = transform::Rigid3d::Identity();
+  transform::Rigid3d temp_pose_ = transform::Rigid3d::Identity();
+  sensor::OdometryData curr_odom_data_;
+  
+  // 用于计算delta pose的上次里程计数据
+  absl::optional<sensor::OdometryData> last_odom_for_delta_;
+
+  std::unique_ptr<scan_matching::LineMatcher2D> line_matcher_;
 };
 
 }  // namespace mapping
