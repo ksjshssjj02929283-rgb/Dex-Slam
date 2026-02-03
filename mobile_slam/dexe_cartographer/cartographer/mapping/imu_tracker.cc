@@ -35,7 +35,7 @@ ImuTracker::ImuTracker(const double imu_gravity_time_constant,
       orientation_(Eigen::Quaterniond::Identity()),
       gravity_vector_(Eigen::Vector3d::UnitZ()),
       imu_angular_velocity_(Eigen::Vector3d::Zero()) {}
-// 将 ImuTracker 对象更新到给定时间点time，并根据IMU数据的角速度信息来调整姿态和重力向量
+
 void ImuTracker::Advance(const common::Time time) {
   CHECK_LE(time_, time);
   const double delta_t = common::ToSeconds(time - time_);

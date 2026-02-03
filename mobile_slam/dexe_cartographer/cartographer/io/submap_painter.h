@@ -51,7 +51,9 @@ struct SubmapSlice {
   ::cartographer::transform::Rigid3d slice_pose;
   ::cartographer::io::UniqueCairoSurfacePtr surface;
   // Pixel data used by 'surface'. Must outlive 'surface'.
-  std::vector<uint32_t> cairo_data;
+  // 地图的信息（所有信息组合后，保存在一个uint32中）
+  std::vector<uint32_t> cairo_data; // (alpha_value << 24) | (intensity_value << 16) | (observed << 8) | 0
+
 
   // Metadata.
   ::cartographer::transform::Rigid3d pose;

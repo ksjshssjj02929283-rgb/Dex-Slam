@@ -367,10 +367,15 @@ LocalTrajectoryBuilder3D::AddAccumulatedRangeData(
           thread_cpu_duration_seconds);
     }
   }
+  std::map<int, std::vector<sensor::LineData>>  line_data_in_local;
+  std::vector<transform::Rigid2d> particle_poses;
   last_wall_time_ = wall_time;
   last_thread_cpu_time_seconds_ = thread_cpu_time_seconds;
   return absl::make_unique<MatchingResult>(MatchingResult{
-      time, *pose_estimate, std::move(filtered_range_data_in_local),
+      time, *pose_estimate,
+      std::move(particle_poses),
+      std::move(filtered_range_data_in_local),
+      std::move(line_data_in_local),
       std::move(insertion_result)});
 }
 
@@ -414,7 +419,11 @@ LocalTrajectoryBuilder3D::InsertIntoSubmap(
                           mapping::TrajectoryNode::Data{
                               time,
                               gravity_alignment,
-                              {},  // 'filtered_point_cloud' is only used in 2D.
+                              {},  // filtered_gravity_aligned_point_cloud - empty for 3D
+                              {},  // highlight_point_cloud - empty for 3D
+                              {},  // range_datas - empty for 3D
+                              {},  // lines - empty for 3D
+                              {},  // reflectors - empty for 3D
                               high_resolution_point_cloud_in_tracking,
                               low_resolution_point_cloud_in_tracking,
                               rotational_scan_matcher_histogram_in_gravity,

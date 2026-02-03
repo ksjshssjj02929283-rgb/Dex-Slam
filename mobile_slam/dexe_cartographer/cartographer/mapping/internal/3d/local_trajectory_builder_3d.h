@@ -28,6 +28,7 @@
 #include "cartographer/mapping/internal/range_data_collator.h"
 #include "cartographer/mapping/pose_extrapolator_interface.h"
 #include "cartographer/mapping/proto/local_trajectory_builder_options_3d.pb.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/imu_data.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -50,8 +51,10 @@ class LocalTrajectoryBuilder3D {
   struct MatchingResult {
     common::Time time;
     transform::Rigid3d local_pose;
+    std::vector<transform::Rigid2d> particle_poses;
     sensor::RangeData range_data_in_local;
     // 'nullptr' if dropped by the motion filter.
+    std::map<int, std::vector<sensor::LineData>>  line_data_in_local;
     std::unique_ptr<const InsertionResult> insertion_result;
   };
 
@@ -62,6 +65,9 @@ class LocalTrajectoryBuilder3D {
 
   LocalTrajectoryBuilder3D(const LocalTrajectoryBuilder3D&) = delete;
   LocalTrajectoryBuilder3D& operator=(const LocalTrajectoryBuilder3D&) = delete;
+
+  bool SetInitialPose(const transform::Rigid3d &initial_pose) { return false; }
+  std::optional<localization::LocalizationState> GetLocalizationState() const { return std::nullopt; }
 
   void AddImuData(const sensor::ImuData& imu_data);
   // Returns 'MatchingResult' when range data accumulation completed,

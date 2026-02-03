@@ -16,27 +16,21 @@ syntax = "proto3";
 
 package cartographer.mapping.proto;
 
+import "cartographer/preprocess/proto/data_preprocessor_options.proto";
 import "cartographer/mapping/proto/motion_filter_options.proto";
 import "cartographer/mapping/proto/pose_extrapolator_options.proto";
 import "cartographer/sensor/proto/adaptive_voxel_filter_options.proto";
 import "cartographer/mapping/proto/scan_matching/ceres_scan_matcher_options_2d.proto";
 import "cartographer/mapping/proto/scan_matching/real_time_correlative_scan_matcher_options.proto";
+import "cartographer/mapping/proto/scan_matching/line_matcher_options.proto";
 import "cartographer/mapping/proto/submaps_options_2d.proto";
-
-// NEXT ID: 22
+import "cartographer/laser_perception/proto/laser_perception_options.proto";
+// NEXT ID: 27
 message LocalTrajectoryBuilderOptions2D {
-  // Rangefinder points outside these ranges will be dropped.
-  float min_range = 14;
-  float max_range = 15;
+  cartographer.preprocess.proto.DataPreprocessorOptions
+      data_preprocessor_options = 24;
   float min_z = 1;
   float max_z = 2;
-
-  // Points beyond 'max_range' will be inserted with this length as empty space.
-  float missing_data_ray_length = 16;
-
-  // Number of range data to accumulate into one unwarped, combined range data
-  // to use for scan matching.
-  int32 num_accumulated_range_data = 19;
 
   // Voxel filter that gets applied to the range data immediately after
   // cropping.
@@ -57,7 +51,10 @@ message LocalTrajectoryBuilderOptions2D {
       real_time_correlative_scan_matcher_options = 7;
   cartographer.mapping.scan_matching.proto.CeresScanMatcherOptions2D
       ceres_scan_matcher_options = 8;
-  MotionFilterOptions motion_filter_options = 13;
+
+//   MotionFilterOptions motion_filter_options = 13;
+  MotionFilterOptions keyframe_motion_filter_options = 22;
+  MotionFilterOptions map_insertion_motion_filter_options = 23;
 
   // Time constant in seconds for the orientation moving average based on
   // observed gravity via the IMU. It should be chosen so that the error
@@ -71,6 +68,10 @@ message LocalTrajectoryBuilderOptions2D {
   mapping.proto.PoseExtrapolatorOptions pose_extrapolator_options = 21;
 
   SubmapsOptions2D submaps_options = 11;
+
+  cartographer.laser_perception.proto.LaserPerceptionOptions laser_perception_options = 25;
+
+  cartographer.mapping.scan_matching.proto.LineMatcherOptions line_matcher_options = 26;
 
   // True if IMU data should be expected and used.
   bool use_imu_data = 12;

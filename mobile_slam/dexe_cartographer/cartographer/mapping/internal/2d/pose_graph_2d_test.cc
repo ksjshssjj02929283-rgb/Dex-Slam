@@ -180,21 +180,26 @@ class PoseGraph2DTest : public ::testing::Test {
         Eigen::Vector3f::Zero(), new_point_cloud, {}};
     const transform::Rigid2d pose_estimate = noise * current_pose_;
     constexpr int kTrajectoryId = 0;
-    active_submaps_->InsertRangeData(TransformRangeData(
-        range_data, transform::Embed3D(pose_estimate.cast<float>())));
-    std::vector<std::shared_ptr<const Submap2D>> insertion_submaps;
-    for (const auto& submap : active_submaps_->submaps()) {
-      insertion_submaps.push_back(submap);
-    }
+    std::vector<std::shared_ptr<const Submap2D>> insertion_submaps =
+        active_submaps_->InsertData({TransformRangeData(
+            range_data, transform::Embed3D(pose_estimate.cast<float>()))},
+                                    {},  // empty cloud_data
+                                    {},  // empty highlight_cloud_data
+                                    {},  // empty line_data
+                                    {}); // empty reflector_data
     pose_graph_->AddNode(
         std::make_shared<const TrajectoryNode::Data>(
             TrajectoryNode::Data{common::FromUniversal(0),
                                  Eigen::Quaterniond::Identity(),
-                                 range_data.returns,
-                                 {},
-                                 {},
-                                 {},
-                                 transform::Embed3D(pose_estimate)}),
+                                 range_data.returns,  // filtered_gravity_aligned_point_cloud
+                                 {},  // highlight_point_cloud
+                                 {range_data},  // range_datas - 将range_data放入vector中
+                                 {},  // lines
+                                 {},  // reflectors
+                                 {},  // high_resolution_point_cloud
+                                 {},  // low_resolution_point_cloud
+                                 {},  // rotational_scan_matcher_histogram
+                                 transform::Embed3D(pose_estimate)}),  // local_pose
         kTrajectoryId, insertion_submaps);
   }
 

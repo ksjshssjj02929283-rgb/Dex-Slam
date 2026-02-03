@@ -30,9 +30,9 @@ FixedRatioSampler::FixedRatioSampler(const double ratio) : ratio_(ratio) {
 FixedRatioSampler::~FixedRatioSampler() {}
 
 bool FixedRatioSampler::Pulse() {
-  ++num_pulses_; // 接收到的数据脉冲次数
-  if (static_cast<double>(num_samples_) / num_pulses_ < ratio_) { // ratio_是设定的采样固定频率，如果 实际对数据进行处理的次数/数据脉冲次数 < 固定频率，说明数据处理还不够，需要返回true，继续处理
-    ++num_samples_; // 实际对数据进行处理的次数
+  ++num_pulses_;
+  if (static_cast<double>(num_samples_) / num_pulses_ < ratio_) {
+    ++num_samples_;
     return true;
   }
   return false;

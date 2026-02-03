@@ -20,6 +20,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
+#include <optional>
 
 #include "absl/memory/memory.h"
 #include "cartographer/common/lua_parameter_dictionary.h"
@@ -27,6 +29,8 @@
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/proto/trajectory_builder_options.pb.h"
 #include "cartographer/mapping/submaps.h"
+#include "cartographer/mapping/2d/line_map_2d.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/sensor/fixed_frame_pose_data.h"
 #include "cartographer/sensor/imu_data.h"
 #include "cartographer/sensor/landmark_data.h"
@@ -51,6 +55,8 @@ class TrajectoryBuilderInterface {
     NodeId node_id;
     std::shared_ptr<const TrajectoryNode::Data> constant_data;
     std::vector<std::shared_ptr<const Submap>> insertion_submaps;
+    std::shared_ptr<sensor::PointCloud> local_map;
+    std::shared_ptr<LineMap2DList> line_map_2d_list;
   };
 
   // A callback which is called after local SLAM processes an accumulated
@@ -60,8 +66,9 @@ class TrajectoryBuilderInterface {
       std::function<void(int /* trajectory ID */, common::Time,
                          transform::Rigid3d /* local pose estimate */,
                          sensor::RangeData /* in local frame */,
+                         std::map<int, std::vector<sensor::LineData>> /* in local frame */,
                          std::unique_ptr<const InsertionResult>)>;
-  // 包含 传感器类型，id，以及 将两个SensorId对象进行对比操作
+
   struct SensorId {
     enum class SensorType {
       RANGE = 0,
@@ -92,6 +99,9 @@ class TrajectoryBuilderInterface {
   TrajectoryBuilderInterface(const TrajectoryBuilderInterface&) = delete;
   TrajectoryBuilderInterface& operator=(const TrajectoryBuilderInterface&) =
       delete;
+
+  virtual bool SetInitialPose(const transform::Rigid3d &initial_pose) = 0;
+  virtual std::optional<localization::LocalizationState> GetLocalizationState() const = 0;
 
   virtual void AddSensorData(
       const std::string& sensor_id,

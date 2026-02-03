@@ -18,6 +18,7 @@
 #include <limits>
 
 #include "absl/memory/memory.h"
+#include "glog/logging.h"
 #include "cartographer/mapping/probability_values.h"
 #include "cartographer/mapping/submaps.h"
 
@@ -81,6 +82,12 @@ float ProbabilityGrid::GetProbability(const Eigen::Array2i& cell_index) const {
       correspondence_cost_cells()[ToFlatIndex(cell_index)]));
 }
 
+float ProbabilityGrid::GetCorrespondenceCost(const Eigen::Array2i& cell_index) const {
+  if (!limits().Contains(cell_index)) return kMaxCorrespondenceCost;
+  return ValueToCorrespondenceCost(
+      correspondence_cost_cells()[ToFlatIndex(cell_index)]);
+}
+
 proto::Grid2D ProbabilityGrid::ToProto() const {
   proto::Grid2D result;
   result = Grid2D::ToProto();
@@ -106,15 +113,27 @@ std::unique_ptr<Grid2D> ProbabilityGrid::ComputeCroppedGrid() const {
   return std::unique_ptr<Grid2D>(cropped_grid.release());
 }
 
+/**
+ * @brief 根据已有的grid2d和conversion_tables_计算出一个新的grid2d，并记录在texture中
+ * 
+ * @param texture 需要操作的texture
+ * @param local_pose 
+ * @return true 
+ * @return false 
+ */
 bool ProbabilityGrid::DrawToSubmapTexture(
     proto::SubmapQuery::Response::SubmapTexture* const texture,
     transform::Rigid3d local_pose) const {
   Eigen::Array2i offset;
   CellLimits cell_limits;
+  // 1. 计算submap原点和边界
   ComputeCroppedLimits(&offset, &cell_limits);
 
+  // 2. 遍历submap内的所有cell
   std::string cells;
+  // XYIndexRangeIterator，从cell_limits转换成xy的index
   for (const Eigen::Array2i& xy_index : XYIndexRangeIterator(cell_limits)) {
+    // 2.1 如果不是已知的cell，则初始化数值和alpha为0（alpha为增益系数，为自己设置）
     if (!IsKnown(xy_index + offset)) {
       cells.push_back(0 /* unknown log odds value */);
       cells.push_back(0 /* alpha */);
@@ -126,21 +145,32 @@ bool ProbabilityGrid::DrawToSubmapTexture(
     // zero, and use 'alpha' to subtract. This is only correct when the pixel
     // is currently white, so walls will look too gray. This should be hard to
     // detect visually for the user, though.
+    // 我们希望添加 'delta'，但是使用值和 alpha 是不可能的。
+    // 我们使用预乘 alpha，因此当 'delta' 为正数时，我们可以通过将 alpha 设置为零来相加。
+    // 如果 'delta' 为负数，我们将值设置为零，并使用 alpha 进行减法。
+    // 这仅在像素当前为白色时才正确，因此墙壁看起来会有些灰色。
+    // 不过，对于用户来说，这在视觉上应该很难察觉到。
+
+    // 2.2 计算当前cell的占用概率的增量delta
     const int delta =
         128 - ProbabilityToLogOddsInteger(GetProbability(xy_index + offset));
+    // 2.3 计算当前cell的占用值和alpha
     const uint8 alpha = delta > 0 ? 0 : -delta;
     const uint8 value = delta > 0 ? delta : 0;
     cells.push_back(value);
     cells.push_back((value || alpha) ? alpha : 1);
   }
 
+  // 3. 压缩地图
   common::FastGzipString(cells, texture->mutable_cells());
+  // 4. 设置地图的其他属性
   texture->set_width(cell_limits.num_x_cells);
   texture->set_height(cell_limits.num_y_cells);
   const double resolution = limits().resolution();
   texture->set_resolution(resolution);
   const double max_x = limits().max().x() - resolution * offset.y();
   const double max_y = limits().max().y() - resolution * offset.x();
+  // 5. 设置地图位姿（TODO:这个位姿的含义是什么，以及计算逻辑是什么）
   *texture->mutable_slice_pose() = transform::ToProto(
       local_pose.inverse() *
       transform::Rigid3d::Translation(Eigen::Vector3d(max_x, max_y, 0.)));

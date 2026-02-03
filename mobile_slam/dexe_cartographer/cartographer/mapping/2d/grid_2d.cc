@@ -15,6 +15,9 @@
  */
 #include "cartographer/mapping/2d/grid_2d.h"
 
+#include <boost/filesystem.hpp>
+#include <opencv2/opencv.hpp>
+
 namespace cartographer {
 namespace mapping {
 namespace {
@@ -107,14 +110,23 @@ void Grid2D::FinishUpdate() {
 
 // Fills in 'offset' and 'limits' to define a subregion of that contains all
 // known cells.
+/**
+ * @brief 计算cropped地图的offset和limits（cropped，裁剪，这里的应该是指submap）
+ * 
+ * @param offset 
+ * @param limits 
+ */
 void Grid2D::ComputeCroppedLimits(Eigen::Array2i* const offset,
                                   CellLimits* const limits) const {
+  // 1. 初始化offset和limits，offset为0，0，limits为1，1
   if (known_cells_box_.isEmpty()) {
     *offset = Eigen::Array2i::Zero();
     *limits = CellLimits(1, 1);
     return;
   }
+  // 2. offset为known_cells_box_.min().array()
   *offset = known_cells_box_.min().array();
+  // 3. limits为known_cells_box_.sizes().array() + 1（地图大小比known_cells_box_大1m）
   *limits = CellLimits(known_cells_box_.sizes().x() + 1,
                        known_cells_box_.sizes().y() + 1);
 }
@@ -131,25 +143,29 @@ void Grid2D::GrowLimits(const Eigen::Vector2f& point,
                         const std::vector<std::vector<uint16>*>& grids,
                         const std::vector<uint16>& grids_unknown_cell_values) {
   CHECK(update_indices_.empty());
-  while (!limits_.Contains(limits_.GetCellIndex(point))) {
+  while (!limits_.Contains(limits_.GetCellIndex(point))) {  // 点在地图之外了，需要扩大地图
+    // offset为地图中心栅格的index
     const int x_offset = limits_.cell_limits().num_x_cells / 2;
     const int y_offset = limits_.cell_limits().num_y_cells / 2;
     const MapLimits new_limits(
         limits_.resolution(),
         limits_.max() +
             limits_.resolution() * Eigen::Vector2d(y_offset, x_offset),
+        // 将栅格数量扩大一倍
         CellLimits(2 * limits_.cell_limits().num_x_cells,
                    2 * limits_.cell_limits().num_y_cells));
-    const int stride = new_limits.cell_limits().num_x_cells;
-    const int offset = x_offset + stride * y_offset;
+    const int stride = new_limits.cell_limits().num_x_cells;  // 表示新网格每行的单元格数
+    // index的偏移量，offset是旧图左下角在新图中的位置
+    const int offset = x_offset + stride * y_offset;  
     const int new_size = new_limits.cell_limits().num_x_cells *
                          new_limits.cell_limits().num_y_cells;
 
-    for (size_t grid_index = 0; grid_index < grids.size(); ++grid_index) {
+    for (size_t grid_index = 0; grid_index < grids.size(); ++grid_index) {  // grids.size()是1
       std::vector<uint16> new_cells(new_size,
                                     grids_unknown_cell_values[grid_index]);
-      for (int i = 0; i < limits_.cell_limits().num_y_cells; ++i) {
-        for (int j = 0; j < limits_.cell_limits().num_x_cells; ++j) {
+      // 将旧网格的数据复制到新网格中
+      for (int i = 0; i < limits_.cell_limits().num_y_cells; ++i) { // i表示行
+        for (int j = 0; j < limits_.cell_limits().num_x_cells; ++j) {  // j表示列
           new_cells[offset + j + i * stride] =
               (*grids[grid_index])[j + i * limits_.cell_limits().num_x_cells];
         }
@@ -161,6 +177,43 @@ void Grid2D::GrowLimits(const Eigen::Vector2f& point,
       known_cells_box_.translate(Eigen::Vector2i(x_offset, y_offset));
     }
   }
+}
+
+bool Grid2D::DrawAsImage(
+  const std::string& folder,
+  const std::string& filename) const
+{
+  if (!boost::filesystem::is_directory(folder)) {
+    if (!boost::filesystem::create_directory(folder)) {
+      LOG(ERROR) << "DrawAsImage: " << folder << " is not a directory.";
+      return false;
+    }
+  }
+
+  Eigen::Array2i offset;
+  CellLimits cell_limits;
+  // 1. 计算submap原点和边界
+  ComputeCroppedLimits(&offset, &cell_limits);
+  cv::Mat img(cell_limits.num_y_cells,
+              cell_limits.num_x_cells,
+              CV_8UC1, cv::Scalar(127));  // 初始化为 127（灰色），表示未知区域
+  
+  for (const Eigen::Array2i& xy_index : XYIndexRangeIterator(cell_limits)) {
+    const Eigen::Array2i global_index = xy_index + offset;
+    
+    if (!IsKnown(global_index)) {
+      // 未知区域：保持灰色（127）
+      continue;
+    }
+    
+    // 已知区域：根据概率值设置灰度
+    const int value = correspondence_cost_cells()[ToFlatIndex(global_index)];
+    img.at<uchar>(xy_index.y(), xy_index.x()) = static_cast<uchar>(ValueToProbability(value) * 255);
+  }
+  cv::rotate(img, img, cv::ROTATE_90_CLOCKWISE);
+
+  cv::imwrite(folder + filename, img);
+  return true;
 }
 
 proto::Grid2D Grid2D::ToProto() const {

@@ -18,9 +18,11 @@
 #define CARTOGRAPHER_SENSOR_RANGE_DATA_H_
 
 #include "cartographer/common/port.h"
+#include "cartographer/common/time.h"
 #include "cartographer/sensor/compressed_point_cloud.h"
 #include "cartographer/sensor/point_cloud.h"
 #include "cartographer/sensor/proto/sensor.pb.h"
+#include "cartographer/sensor/normals.h"
 
 namespace cartographer {
 namespace sensor {
@@ -33,6 +35,29 @@ struct RangeData {
   Eigen::Vector3f origin;
   PointCloud returns;
   PointCloud misses;
+};
+
+struct RangeDataWithPose {
+  common::Time time;
+  RangeData data;
+  transform::Rigid3f local_pose;
+};
+
+struct TimedRangeData {
+  common::Time time;
+  RangeData data;
+};
+
+struct RangeDataWithIntensity
+{
+  RangeData range_data;
+  std::vector<float> intensitys;
+};
+
+struct RangeDataNormal
+{
+  RangeData range_data;
+  Normals normals;
 };
 
 RangeData TransformRangeData(const RangeData& range_data,

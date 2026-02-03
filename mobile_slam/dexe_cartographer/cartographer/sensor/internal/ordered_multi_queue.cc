@@ -32,6 +32,10 @@ namespace {
 // for data.
 const int kMaxQueueSize = 500;
 
+// Maximum allowed time regression in nanoseconds (100ms = 100,000,000 ns)
+// If data timestamp goes back more than this, we'll warn; otherwise silently drop
+const int64_t kMaxAllowedTimeRegression = 100000000;  // 100ms
+
 }  // namespace
 
 inline std::ostream& operator<<(std::ostream& out, const QueueKey& key) {
@@ -104,13 +108,35 @@ void OrderedMultiQueue::Dispatch() {
         CannotMakeProgress(it->first);
         return;
       }
+      
+      // Check for timestamp regression on this queue's data
+      if (last_dispatched_time_ > data->GetTime()) {
+        const int64_t regression_ns = 
+            common::ToUniversal(last_dispatched_time_) - 
+            common::ToUniversal(data->GetTime());
+        
+        if (regression_ns > kMaxAllowedTimeRegression) {
+          // Severe regression (> 100ms), log error
+          LOG(ERROR) << "Severe time regression detected in queue '" << it->first 
+                     << "': " << regression_ns / 1000000 << "ms backward. "
+                     << "Dropping out-of-order data to avoid crash.";
+        } else {
+          // Minor regression (< 100ms), warn
+          LOG(WARNING) << "Minor time regression detected in queue '" << it->first 
+                       << "': " << regression_ns / 1000000 << "ms backward. "
+                       << "Dropping out-of-order data.";
+        }
+        
+        // Pop and discard the out-of-order data, then re-evaluate this queue
+        it->second.queue.Pop();
+        continue;
+      }
+      
       if (next_data == nullptr || data->GetTime() < next_data->GetTime()) {
         next_data = data;
         next_queue = &it->second;
         next_queue_key = it->first;
       }
-      CHECK_LE(last_dispatched_time_, next_data->GetTime())
-          << "Non-sorted data added to queue: '" << it->first << "'";
       ++it;
     }
     if (next_data == nullptr) {

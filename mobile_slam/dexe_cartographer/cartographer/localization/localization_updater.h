@@ -1,0 +1,146 @@
+/*
+ * Copyright 2016 The Cartographer Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef CARTOGRAPHER_LOCALIZATION_LOCALIZATION_UPDATER_H_
+#define CARTOGRAPHER_LOCALIZATION_LOCALIZATION_UPDATER_H_
+
+#include <memory>
+
+#include "cartographer/common/thread_pool.h"
+#include "cartographer/mapping/trajectory_builder_interface.h"
+#include "cartographer/mapping/map_builder_interface.h"
+#include "cartographer/mapping/pose_graph.h"
+#include "cartographer/localization/proto/localization_updater_options.pb.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
+#include "cartographer/sensor/collator_interface.h"
+#include "cartographer/sensor/line_data.h"
+
+namespace cartographer {
+namespace localization {
+
+// Wires up the complete SLAM stack with TrajectoryBuilders (for local submaps)
+// and a PoseGraph for loop closure.
+class LocalizationUpdater
+{
+public:
+  using LocalSlamResultCallback =
+    mapping::TrajectoryBuilderInterface::LocalSlamResultCallback;
+
+  using SensorId = mapping::TrajectoryBuilderInterface::SensorId;
+
+  explicit LocalizationUpdater(const proto::LocalizationUpdaterOptions &options);
+  ~LocalizationUpdater() {}
+
+  LocalizationUpdater(const LocalizationUpdater &) = delete;
+  LocalizationUpdater &operator=(const LocalizationUpdater &) = delete;
+
+  void InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map);
+  void InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map, std::shared_ptr<CloudMap2D> highlight_cloud_map);
+  void InitGlobalLineMap(const std::shared_ptr<sensor::LineMapData>& line_map_data);
+
+  std::shared_ptr<GridMap2D> GetGlobalGridMap() const;
+  std::shared_ptr<CloudMap2D> GetGlobalCloudMap() const;
+  std::shared_ptr<CloudMap2D> GetGlobalHighlighCloudMap() const;
+  std::shared_ptr<sensor::LineMapData> GetGlobalLineMap() const;
+
+  // 进行重定位
+  bool SetInitialPose(const transform::Rigid3d &initial_pose);
+  std::optional<LocalizationState> GetLocalizationState();
+
+  int AddTrajectoryBuilder(
+      const std::set<SensorId> &expected_sensor_ids,
+      const mapping::proto::TrajectoryBuilderOptions &trajectory_options,
+      LocalSlamResultCallback local_slam_result_callback);
+
+  int AddTrajectoryForDeserialization(
+      const mapping::proto::TrajectoryBuilderOptionsWithSensorIds
+          &options_with_sensor_ids_proto);
+
+  void FinishTrajectory(int trajectory_id);
+
+  std::string SubmapToProto(const mapping::SubmapId &submap_id,
+                            mapping::proto::SubmapQuery::Response *response);
+
+  void SerializeState(bool include_unfinished_submaps,
+                      io::ProtoStreamWriterInterface *writer);
+
+  bool SerializeStateToFile(bool include_unfinished_submaps,
+                            const std::string &filename);
+
+  std::map<int, int> LoadState(io::ProtoStreamReaderInterface *reader,
+                               bool load_frozen_state);
+
+  std::map<int, int> LoadStateFromFile(const std::string &filename,
+                                       const bool load_frozen_state);
+
+
+  // 全局一致的反光板地图
+  const std::shared_ptr<std::vector<Eigen::Vector2d>>
+  GetReflectorMap() const {
+    return global_reflector_map_;
+  }
+
+  mapping::PoseGraphInterface *pose_graph() {
+    return pose_graph_.get();
+  }
+
+  int num_trajectory_builders() const {
+    return trajectory_builders_.size();
+  }
+
+  mapping::TrajectoryBuilderInterface *GetTrajectoryBuilder(
+      int trajectory_id) const {
+    return trajectory_builders_.at(trajectory_id).get();
+  }
+
+  const std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>
+      &GetAllTrajectoryBuilderOptions() const {
+    return all_trajectory_builder_options_;
+  }
+
+private:
+  const proto::LocalizationUpdaterOptions options_;
+  common::ThreadPool thread_pool_;
+
+  std::unique_ptr<mapping::PoseGraph> pose_graph_;
+
+
+  std::shared_ptr<GridMap2D> global_grid_map_;
+
+  std::shared_ptr<mapping::LineMap2DList> global_line_map_;
+
+  std::shared_ptr<CloudMap2D> global_cloud_map_;
+  std::shared_ptr<CloudMap2D> global_highlight_cloud_map_;
+
+  std::shared_ptr<std::vector<Eigen::Vector2d>> global_reflector_map_;
+
+  std::unique_ptr<sensor::CollatorInterface> sensor_collator_;
+  // 保存全局轨迹的构建器
+  std::vector<std::unique_ptr<mapping::TrajectoryBuilderInterface>>
+      trajectory_builders_;
+  std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>
+      all_trajectory_builder_options_;
+};
+
+std::unique_ptr<LocalizationUpdater> CreateLocalizationUpdater(
+    const proto::LocalizationUpdaterOptions& options);
+
+proto::LocalizationUpdaterOptions CreateLocalizationUpdaterOptions(
+    common::LuaParameterDictionary* const parameter_dictionary);
+}  // namespace localization
+}  // namespace cartographer
+
+#endif  // CARTOGRAPHER_LOCALIZATION_LOCALIZATION_UPDATER_H_

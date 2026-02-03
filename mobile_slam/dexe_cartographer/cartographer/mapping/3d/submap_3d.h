@@ -30,6 +30,7 @@
 #include "cartographer/mapping/proto/submap_visualization.pb.h"
 #include "cartographer/mapping/proto/submaps_options_3d.pb.h"
 #include "cartographer/mapping/submaps.h"
+#include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
@@ -72,6 +73,10 @@ class Submap3D : public Submap {
     return rotational_scan_matcher_histogram_;
   }
 
+  const sensor::PointCloud* cloud() const { return cloud_.get(); }
+
+  const LineMap2DList * line_map_2d_list() const {return line_map_2d_list_.get();}
+
   // Insert 'range_data' into this submap using 'range_data_inserter'. The
   // submap must not be finished yet.
   void InsertData(const sensor::RangeData& range_data,
@@ -89,6 +94,9 @@ class Submap3D : public Submap {
   std::unique_ptr<HybridGrid> low_resolution_hybrid_grid_;
   std::unique_ptr<IntensityHybridGrid> high_resolution_intensity_hybrid_grid_;
   Eigen::VectorXf rotational_scan_matcher_histogram_;
+
+  std::unique_ptr<sensor::PointCloud> cloud_;
+  std::unique_ptr<LineMap2DList> line_map_2d_list_;
 };
 
 // The first active submap will be created on the insertion of the first range

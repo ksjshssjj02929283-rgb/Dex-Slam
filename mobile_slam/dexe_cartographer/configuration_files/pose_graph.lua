@@ -13,26 +13,28 @@
 -- limitations under the License.
 
 POSE_GRAPH = {
-  optimize_every_n_nodes = 90,                       -- 每隔多少个节点执行一次后端优化
+  optimize_every_n_nodes = 90,
   constraint_builder = {
-    sampling_ratio = 0.3,                            -- 对局部子图进行回环检测时的计算频率, 数值越大, 计算次数越多
-    max_constraint_distance = 15.,                   -- 对局部子图进行回环检测时能成为约束的最大距离
-    min_score = 0.55,                                -- 对局部子图进行回环检测时的最低分数阈值
-    global_localization_min_score = 0.6,             -- 对整体子图进行回环检测时的最低分数阈值
+    sampling_ratio = 0.1,
+    max_constraint_distance = 10.,
+    min_score = 0.55,
+    global_localization_min_score = 0.6,
     loop_closure_translation_weight = 1.1e4,
     loop_closure_rotation_weight = 1e5,
     log_matches = true,
-    -- 基于分支定界算法的2d粗匹配器
     fast_correlative_scan_matcher = {
       linear_search_window = 7.,
       angular_search_window = math.rad(30.),
       branch_and_bound_depth = 7,
     },
-    -- 基于ceres的2d精匹配器
     ceres_scan_matcher = {
-      occupied_space_weight = 20.,
-      translation_weight = 10.,
-      rotation_weight = 1.,
+      occupied_space_weight = 30.,
+      translation_weight = 20.,
+      rotation_weight = 10.,
+      line_weight = 40.,
+      point_weight = 40.,
+      max_correspondence_distance = 0.1,
+      local_weight_factor = 0.5;  -- 0 ~ 1
       ceres_solver_options = {
         use_nonmonotonic_steps = true,
         max_num_iterations = 10,
@@ -60,40 +62,41 @@ POSE_GRAPH = {
         num_threads = 1,
       },
     },
+    line_matcher_2d = {
+      line_delta_theta_threshold = math.rad(5.),
+      line_delta_tra_elongation_threshold = 0.5,
+      min_delta_tra_parallel = 0.1,
+      max_match_distance = 12.0,
+    },
   },
   matcher_translation_weight = 5e2,
   matcher_rotation_weight = 1.6e3,
-
   optimization_problem = {
-    huber_scale = 1e1,                -- 核函数，值越大,（潜在）异常值的影响就越大
+    huber_scale = 1e1,
     acceleration_weight = 1.1e2,
     rotation_weight = 1.6e4,
-    -- 前端结果残差的权重
     local_slam_pose_translation_weight = 1e5,
     local_slam_pose_rotation_weight = 1e5,
-    -- 里程计残差的权重
     odometry_translation_weight = 1e5,
     odometry_rotation_weight = 1e5,
-    -- gps残差的权重
     fixed_frame_pose_translation_weight = 1e1,
     fixed_frame_pose_rotation_weight = 1e2,
     fixed_frame_pose_use_tolerant_loss = false,
     fixed_frame_pose_tolerant_loss_param_a = 1,
     fixed_frame_pose_tolerant_loss_param_b = 1,
-
     log_solver_summary = false,
     use_online_imu_extrinsics_in_3d = true,
     fix_z_in_3d = false,
     ceres_solver_options = {
       use_nonmonotonic_steps = false,
       max_num_iterations = 50,
-      num_threads = 7,
+      num_threads = 4,
     },
   },
-  max_num_final_iterations = 200,     -- 在建图结束之后执行一次全局优化, 不要求实时性, 迭代次数多
-  global_sampling_ratio = 0.003,      -- 纯定位时候查找回环的频率
+  max_num_final_iterations = 200,
+  global_sampling_ratio = 1.,
   log_residual_histograms = true,
-  global_constraint_search_after_n_seconds = 10.,   -- 纯定位时多少秒执行一次全子图的约束计算
+  global_constraint_search_after_n_seconds = 10.,
   --  overlapping_submaps_trimmer_2d = {
   --    fresh_submaps_count = 1,
   --    min_covered_area = 2,

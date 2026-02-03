@@ -22,7 +22,7 @@ macro(_parse_arguments ARGS)
     "${OPTIONS}" "${ONE_VALUE_ARG}" "${MULTI_VALUE_ARGS}" ${ARGS})
 endmacro(_parse_arguments)
 
-macro(_common_compile_stuff VISIBILITY)
+macro(_common_compile_stuff)
   set(TARGET_COMPILE_FLAGS "${TARGET_COMPILE_FLAGS} ${GOOG_CXX_FLAGS}")
 
   set_target_properties(${NAME} PROPERTIES
@@ -34,7 +34,7 @@ endmacro(_common_compile_stuff)
 
 function(google_test NAME ARG_SRC)
   add_executable(${NAME} ${ARG_SRC})
-  _common_compile_stuff("PRIVATE")
+  _common_compile_stuff()
 
   # Make sure that gmock always includes the correct gtest/gtest.h.
   target_include_directories("${NAME}" SYSTEM PRIVATE
@@ -49,7 +49,7 @@ function(google_binary NAME)
 
   add_executable(${NAME} ${ARG_SRCS})
 
-  _common_compile_stuff("PRIVATE")
+  _common_compile_stuff()
 
   install(TARGETS "${NAME}" RUNTIME DESTINATION bin)
 endfunction()
@@ -80,10 +80,6 @@ macro(google_initialize_cartographer_project)
 
     google_add_flag(GOOG_CXX_FLAGS "-Wall")
     google_add_flag(GOOG_CXX_FLAGS "-Wpedantic")
-
-    # clalancette: disable deprecated declarations; there is currently no way to
-    # compile cartographer warning-free with this on
-    google_add_flag(GOOG_CXX_FLAGS "-Wno-deprecated-declarations")
 
     # Turn some warnings into errors.
     google_add_flag(GOOG_CXX_FLAGS "-Werror=format-security")
