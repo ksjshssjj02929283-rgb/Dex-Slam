@@ -177,6 +177,14 @@ class PoseEstimator2D {
     const transform::Rigid2d& estimated_pose,
     const sensor::PointCloud& point_cloud);
 
+  // 使用局部地图进行位姿恢复
+  // 返回值：恢复成功返回恢复后的位姿，失败返回nullptr
+  std::unique_ptr<transform::Rigid2d> RecoveryFromLocalMap(
+    const transform::Rigid2d& validation_pose,
+    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+    const sensor::PointCloud& highlight_point_cloud,
+    const transform::Rigid3d& gravity_alignment);
+
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
 
