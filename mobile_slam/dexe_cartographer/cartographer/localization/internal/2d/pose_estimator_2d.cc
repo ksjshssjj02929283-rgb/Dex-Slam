@@ -297,10 +297,13 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                                     line_data,
                                     *active_submaps_.line_map_2d_list(),
                                     tracked_lane_data);
+    // TODO: 这里使用的线特征是否需要会使用local dynamic map中的线特征
     line_matcher_->TrackLineFromMap(initial_ceres_pose,
                                     line_data,
-                                    *global_static_submap_->line_map_2d_list(),
+                                    // *global_static_submap_->line_map_2d_list(),
+                                    *local_map_updater_->GetGlobalSubmap()->line_map_2d_list(),
                                     global_tracked_lane_data);
+                                    
   }
 
   // 4. 使用ceres进行位姿估计，得到pose_observation

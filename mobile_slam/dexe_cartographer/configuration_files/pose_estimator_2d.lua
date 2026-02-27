@@ -29,9 +29,9 @@ POSE_ESTIMATOR_2D = {
   -- 一致性检查器参数：用于位姿一致性检查和质量验证
   consistency_checker = {
     translation_threshold = 0.05,        -- 平移误差阈值 (米)，5cm
-    rotation_threshold = math.rad(30.),          -- 旋转误差阈值 (弧度)，30度
+    rotation_threshold = math.rad(30.),  -- 旋转误差阈值 (弧度)，30度
     max_linear_velocity = 1.0,           -- 最大线速度 (m/s)
-    max_angular_velocity = 1.0,         -- 最大角速度 (rad/s)，90度/秒
+    max_angular_velocity = math.rad(45.),-- 最大角速度 (rad/s)，45度/秒
     min_score = 0.4,                     -- 最小匹配分数阈值，用于验证和恢复
   },
 

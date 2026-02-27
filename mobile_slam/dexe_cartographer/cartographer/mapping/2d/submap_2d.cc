@@ -656,6 +656,9 @@ void Submap2D::FreshCloudData() const
 
 void Submap2D::RebuildIkdTrees()
 {
+  cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+
   // 重建cloud的ikd-tree
   if (cloud_ && !cloud_->empty()) {
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl(new pcl::PointCloud<pcl::PointXYZ>());

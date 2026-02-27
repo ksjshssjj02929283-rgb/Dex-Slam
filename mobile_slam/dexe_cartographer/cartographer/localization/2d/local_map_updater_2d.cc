@@ -116,6 +116,7 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
   }
   
   // 创建空的 highlight_cloud
+  // TODO: 后续如果需要使用 highlight_cloud，可以从 global_static_submap_ 中深拷贝
   std::unique_ptr<sensor::PointCloud> highlight_cloud_copy = 
       std::make_unique<sensor::PointCloud>();
   
@@ -185,8 +186,9 @@ bool LocalMapUpdater2D::NeedUpdateLocalMap()
 
 void LocalMapUpdater2D::UpdateLocalMap()
 {
+  std::chrono::system_clock::time_point start_time = std::chrono::system_clock::now();
+
   std::lock_guard<std::mutex> lock(data_mutex_);
-  
   // 根据策略选择使用哪个submap作为源
   std::shared_ptr<mapping::Submap2D> source_submap;
   
@@ -305,7 +307,9 @@ void LocalMapUpdater2D::UpdateLocalMap()
     global_dynamic_submap_->SaveSubmapCloud(data_dir, "global_dynamic_submap.pcd");
     local_submap_->SaveSubmapCloud(data_dir, "local_submap.pcd");
   }
-
+  std::chrono::system_clock::time_point end_time = std::chrono::system_clock::now();
+  std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+  LOG(INFO) << "Local map updated in " << elapsed_seconds.count() << " seconds.";
   LOG(WARNING) << "Update local map at " << robot_pose_->translation().x() 
                << ", " << robot_pose_->translation().y();
 }

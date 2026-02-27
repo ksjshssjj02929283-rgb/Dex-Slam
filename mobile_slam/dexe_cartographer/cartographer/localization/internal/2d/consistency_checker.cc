@@ -90,6 +90,8 @@ ConsistencyCheckResult ConsistencyChecker::CheckPoseConsistency(
       options_.consistency_checker_options().max_linear_velocity();
   const double max_angular_velocity = 
       options_.consistency_checker_options().max_angular_velocity();
+  const double min_score =
+      options_.consistency_checker_options().min_score();
 
   // 1. 检查预测位姿与估计位姿之间的误差
   result.translation_error = 
@@ -118,12 +120,11 @@ ConsistencyCheckResult ConsistencyChecker::CheckPoseConsistency(
   current_confidence_ = result.confidence;
 
   // 如果置信度过低，也认为不一致
-  const double kMinConfidence = 0.3;  // 最小置信度阈值
-  if (result.confidence < kMinConfidence) {
+  if (result.confidence < min_score) {
     result.is_consistent = false;
     result.failure_reason += "Confidence too low (" + 
         std::to_string(result.confidence) + " < " + 
-        std::to_string(kMinConfidence) + "). ";
+        std::to_string(min_score) + "). ";
   }
 
   // 3. 计算速度（基于最近的历史位姿和当前位姿）
