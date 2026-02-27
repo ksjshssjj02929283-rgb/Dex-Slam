@@ -31,7 +31,7 @@ def generate_launch_description():
     
     config_file_arg = DeclareLaunchArgument(
         'config_file',
-        default_value='dexe_localization_2d.lua',
+        default_value='dexe_localization_2d_offline.lua',
         description='Configuration file name for localization')
     
     urdf_file_arg = DeclareLaunchArgument(

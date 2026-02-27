@@ -36,7 +36,7 @@ def generate_launch_description():
     
     config_file_arg = DeclareLaunchArgument(
         'config_file',
-        default_value='dexe_slam_2d.lua',
+        default_value='dexe_slam_2d_offline.lua',
         description='Configuration file name')
     
     urdf_file_arg = DeclareLaunchArgument(

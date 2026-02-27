@@ -387,10 +387,48 @@ void RunLocOfflineNode(const LocalizationUpdaterFactory& localization_updater_fa
   LOG(INFO) << "Peak memory usage: " << usage.ru_maxrss << " KiB";
 #endif
   
-  // 可选：保存定位轨迹
-  if (!FLAGS_pose_output_file.empty()) {
-    LOG(INFO) << "Saving localization poses to: " << FLAGS_pose_output_file;
-    // TODO: 实现pose保存功能
+  // 保存定位轨迹位姿
+  if (node_options.save_tracked_pose) {
+    LOG(INFO) << "Saving localization tracked poses...";
+    // 使用配置文件中的目录和文件名
+    std::string pose_dir = node_options.tracked_pose_directory;
+    std::string pose_filename = node_options.tracked_pose_filename;
+    
+    // 如果指定了pose_output_file参数，则使用参数值
+    if (!FLAGS_pose_output_file.empty()) {
+      // 解析出目录和文件名
+      size_t last_slash = FLAGS_pose_output_file.find_last_of("/");
+      if (last_slash != std::string::npos) {
+        pose_dir = FLAGS_pose_output_file.substr(0, last_slash + 1);
+        pose_filename = FLAGS_pose_output_file.substr(last_slash + 1);
+      } else {
+        pose_filename = FLAGS_pose_output_file;
+      }
+    }
+    
+    LOG(INFO) << "Pose output directory: " << pose_dir;
+    LOG(INFO) << "Pose output filename: " << pose_filename;
+    
+    // 创建输出目录（如果不存在）
+    std::string mkdir_cmd = "mkdir -p " + pose_dir;
+    int ret = system(mkdir_cmd.c_str());
+    if (ret != 0) {
+      LOG(ERROR) << "Failed to create pose directory: " << pose_dir;
+    } else {
+      LOG(INFO) << "Pose directory ready: " << pose_dir;
+    }
+    
+    // 注意：localization的trajectory_id是在运行时动态分配的
+    // 我们需要保存所有轨迹的位姿，但通常只有一个trajectory_id
+    if (trajectory_id >= 0) {
+      // TODO: 需要在LocalizationNode中添加SaveOptimizedPoses方法
+      // 或者实现一个独立的pose保存机制
+      LOG(WARNING) << "Pose saving for localization is not yet fully implemented.";
+      LOG(WARNING) << "Trajectory ID: " << trajectory_id;
+      LOG(WARNING) << "Please use publish_tracked_pose option for runtime pose tracking.";
+    } else {
+      LOG(WARNING) << "No valid trajectory ID found, skipping pose save.";
+    }
   }
   
   if (FLAGS_keep_running) {

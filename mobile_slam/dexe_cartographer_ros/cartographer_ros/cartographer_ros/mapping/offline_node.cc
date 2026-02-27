@@ -478,6 +478,13 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
       LOG(INFO) << "Created map directory: " << map_dir;
     }
     
+    // 0. Save optimized poses if enabled
+    if (node_options.save_tracked_pose) {
+      LOG(INFO) << "Saving optimized poses...";
+      node.SaveOptimizedPoses(int(0));
+      LOG(INFO) << "Optimized poses saved.";
+    }
+    
     // 1. Save pbstream file: map_folder/map_name/map.pbstream
     const std::string state_filename = map_dir + "/map.pbstream";
     LOG(INFO) << "Saving state to '" << state_filename << "'...";
