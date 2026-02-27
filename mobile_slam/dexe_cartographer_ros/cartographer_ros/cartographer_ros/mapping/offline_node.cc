@@ -76,6 +76,14 @@ DEFINE_bool(keep_running, false,
 DEFINE_double(skip_seconds, 0,
               "Optional amount of seconds to skip from the beginning "
               "(i.e. when the earliest bag starts.). ");
+DEFINE_string(map_folder, "",
+              "Directory to save the map files. If empty, maps will be saved "
+              "in the same directory as the bag file.");
+DEFINE_string(map_name, "",
+              "Name for the output map files (without extension). If empty, "
+              "the map name will be inferred from the bag filename.");
+DEFINE_double(resolution, 0.05,
+              "Resolution of the occupancy grid map in meters.");
 
 namespace cartographer_ros {
 
@@ -227,9 +235,14 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     for (const auto& expected_sensor_id :
          bag_expected_sensor_ids.at(current_bag_index)) {
       LOG(INFO) << "expected_sensor_id.id " << expected_sensor_id.id;
+      // Apply ROS2 topic remapping to sensor IDs
+      std::string topic_name = expected_sensor_id.id;
+      std::string resolved_topic = cartographer_offline_node->get_node_base_interface()->
+          resolve_topic_or_service_name(topic_name, false);
       const auto bag_resolved_topic = std::make_pair(
           static_cast<int>(current_bag_index),
-          "/"+expected_sensor_id.id);
+          resolved_topic);
+      LOG(INFO) << "Resolved topic: " << topic_name << " -> " << resolved_topic;
       if (bag_topic_to_sensor_id.count(bag_resolved_topic) != 0) {
         LOG(ERROR) << "Sensor " << expected_sensor_id.id << " of bag "
                    << current_bag_index << " resolves to topic "
@@ -451,9 +464,44 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
   LOG(INFO) << "Peak memory usage: " << usage.ru_maxrss << " KiB";
 #endif
 
-  // Serialize unless we have neither a bagfile nor an explicit state filename.
-  if (rclcpp::ok() &&
-      !(bag_filenames.empty() && FLAGS_save_state_filename.empty())) {
+  // Save map if map_folder and map_name are specified
+  if (rclcpp::ok() && !FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
+    LOG(INFO) << "Starting map save process...";
+    
+    // Create map folder structure: map_folder/map_name/
+    std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+    std::string mkdir_cmd = "mkdir -p " + map_dir;
+    int ret = system(mkdir_cmd.c_str());
+    if (ret != 0) {
+      LOG(ERROR) << "Failed to create map directory: " << map_dir;
+    } else {
+      LOG(INFO) << "Created map directory: " << map_dir;
+    }
+    
+    // 1. Save pbstream file: map_folder/map_name/map.pbstream
+    const std::string state_filename = map_dir + "/map.pbstream";
+    LOG(INFO) << "Saving state to '" << state_filename << "'...";
+    node.SerializeState(state_filename, true /* include_unfinished_submaps */);
+    LOG(INFO) << "State saved to '" << state_filename << "'.";
+    
+    // 2. Save map files: map_folder/map_name/map.pgm and map.yaml
+    const std::string map_filestream = map_dir + "/map";
+    LOG(INFO) << "Saving map to '" << map_filestream << "' with resolution " 
+              << FLAGS_resolution << " meters...";
+    
+    bool save_success = node.SaveMap(map_filestream, FLAGS_resolution);
+    if (save_success) {
+      LOG(INFO) << "Map saved successfully to " << map_filestream;
+      LOG(INFO) << "Generated files:";
+      LOG(INFO) << "  - " << state_filename;
+      LOG(INFO) << "  - " << map_filestream << ".pgm";
+      LOG(INFO) << "  - " << map_filestream << ".yaml";
+    } else {
+      LOG(ERROR) << "Failed to save map to " << map_filestream;
+    }
+  } else if (rclcpp::ok() && 
+             !(bag_filenames.empty() && FLAGS_save_state_filename.empty())) {
+    // Fallback: Save pbstream only if map saving is not configured
     const std::string state_output_filename =
         FLAGS_save_state_filename.empty()
             ? bag_filenames.front() + ".pbstream"
@@ -462,6 +510,7 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     node.SerializeState(state_output_filename,
                         true /* include_unfinished_submaps */);
   }
+
   if (FLAGS_keep_running) {
     LOG(INFO) << "Finished processing and waiting for shutdown.";
     rclcpp::spin(cartographer_offline_node);
