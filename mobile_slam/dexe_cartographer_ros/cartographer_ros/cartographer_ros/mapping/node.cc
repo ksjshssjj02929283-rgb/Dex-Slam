@@ -242,18 +242,15 @@ Node::Node(
     [this]() {
       PublishConstraintList();
     });
-  // // 增加定位位姿的保存 by linfeng.guo
-  // if(node_options_.save_tracked_pose) {
-  //   if (!boost::filesystem::is_directory(node_options_.tracked_pose_directory)) {
-  //     dcm::utility::FileManager::InitDirectory(node_options_.tracked_pose_directory, "tracked_pose of cartographer");
-  //   }
-  //   std::string file_path = node_options_.tracked_pose_directory + node_options_.tracked_pose_filename;
-  //   dcm::utility::FileManager::RemoveFile(file_path);
-  //   carto_pose_tool_ = std::make_shared<dcm::utility::PoseSaveTool>(file_path, node_options_.tracked_pose_format);
-  // }
-
-  // // added by hz
-  // transform_id = 0;
+  // 增加定位位姿的保存 by linfeng.guo
+  if(node_options_.save_tracked_pose) {
+    if (!boost::filesystem::is_directory(node_options_.tracked_pose_directory)) {
+      dcm::utility::FileManager::InitDirectory(node_options_.tracked_pose_directory, "tracked_pose of cartographer");
+    }
+    std::string file_path = node_options_.tracked_pose_directory + node_options_.tracked_pose_filename;
+    dcm::utility::FileManager::RemoveFile(file_path);
+    carto_pose_tool_ = std::make_shared<dcm::utility::PoseSaveTool>(file_path, node_options_.tracked_pose_format);
+  }
 }
 
 Node::~Node() { FinishAllTrajectories(); }

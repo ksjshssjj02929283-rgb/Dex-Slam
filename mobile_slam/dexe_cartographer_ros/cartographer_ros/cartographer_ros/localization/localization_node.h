@@ -96,12 +96,12 @@ public:
 
   bool SaveMap(const std::string& map_filename, const double resolution);
 
-private:
-  struct Subscriber {
-    rclcpp::SubscriptionBase::SharedPtr sub;
-    std::string topic;
-  };
-
+  // Public methods for offline processing (similar to mapping::Node)
+  std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>
+  ComputeExpectedSensorIds(const TrajectoryOptions& options) const;
+  
+  int AddTrajectory(const TrajectoryOptions& options);
+  
   void HandleOdometryMessage(int trajectory_id, const std::string& sensor_id,
                              const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
   void HandleNavSatFixMessage(int trajectory_id, const std::string& sensor_id,
@@ -114,6 +114,13 @@ private:
                               const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg);
   void HandlePointCloud2Message(int trajectory_id, const std::string& sensor_id,
                                 const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
+
+private:
+  struct Subscriber {
+    rclcpp::SubscriptionBase::SharedPtr sub;
+    std::string topic;
+  };
+
   void HandleInitialPoseMessage(int trajectory_id, const std::string& sensor_id,
                                 const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr& msg);
 
@@ -154,9 +161,6 @@ private:
   bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);
   bool StopFilter();
 
-  std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>
-  ComputeExpectedSensorIds(const TrajectoryOptions& options) const;
-
   // Timed publishers
   void PublishSubmapList();
   void PublishLocalTrajectoryData();
@@ -165,7 +169,6 @@ private:
   void PublishConstraintList();
   void PublishLocalizationState();
 
-  int AddTrajectory(const TrajectoryOptions& options);
   void LaunchSubscribers(const TrajectoryOptions& options, int trajectory_id);
   void AddSensorSamplers(int trajectory_id, const TrajectoryOptions& options);
 
