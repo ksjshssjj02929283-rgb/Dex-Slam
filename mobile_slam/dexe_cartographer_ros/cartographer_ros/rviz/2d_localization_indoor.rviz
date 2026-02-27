@@ -37,7 +37,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: LaserRear
+    SyncSource: MatchedCloud
 Visualization Manager:
   Class: ""
   Displays:
@@ -215,94 +215,7 @@ Visualization Manager:
       Show Names: true
       Tree:
         map:
-          odom:
-            base_footprint:
-              base_link:
-                chassis_base_link:
-                  torso_base_link:
-                    ankle:
-                      knee:
-                        buttock:
-                          waist:
-                            head_base_link:
-                              neck_base:
-                                neck1:
-                                  neck2:
-                                    {}
-                            left_base_link:
-                              left_base_to_left_arm_connector:
-                                left_arm_base:
-                                  left_j1:
-                                    left_j2:
-                                      left_j3:
-                                        left_j4:
-                                          left_j5:
-                                            left_j6:
-                                              left_j7:
-                                                left_ee:
-                                                  left_l_base_link:
-                                                    left_l_index_prox:
-                                                      left_l_index_dist:
-                                                        {}
-                                                    left_l_little_prox:
-                                                      left_l_little_dist:
-                                                        {}
-                                                    left_l_middle_prox:
-                                                      left_l_middle_dist:
-                                                        {}
-                                                    left_l_ring_prox:
-                                                      left_l_ring_dist:
-                                                        {}
-                                                    left_l_thumb_prox:
-                                                      left_l_thumb_dist:
-                                                        {}
-                            right_base_link:
-                              right_base_to_right_arm_connector:
-                                right_arm_base:
-                                  right_j1:
-                                    right_j2:
-                                      right_j3:
-                                        right_j4:
-                                          right_j5:
-                                            right_j6:
-                                              right_j7:
-                                                right_ee:
-                                                  right_r_base_link:
-                                                    right_r_index_prox:
-                                                      right_r_index_dist:
-                                                        {}
-                                                    right_r_little_prox:
-                                                      right_r_little_dist:
-                                                        {}
-                                                    right_r_middle_prox:
-                                                      right_r_middle_dist:
-                                                        {}
-                                                    right_r_ring_prox:
-                                                      right_r_ring_dist:
-                                                        {}
-                                                    right_r_thumb_prox:
-                                                      right_r_thumb_dist:
-                                                        {}
-                  wheel_left:
-                    {}
-                  wheel_right:
-                    {}
-                front_depth:
-                  {}
-                front_rgb:
-                  {}
-                imu_chassis_link:
-                  {}
-                laser_back_link:
-                  {}
-                laser_forward_link:
-                  {}
-                merged_laser_link:
-                  {}
-                rear_depth:
-                  {}
-                rear_rgb:
-                  {}
+          {}
       Update Interval: 0
       Value: true
     - Alpha: 0.699999988079071
@@ -342,11 +255,8 @@ Visualization Manager:
           10.100: true
           11.100: true
           12.100: true
-          13.100: true
-          14.100: true
-          15.100: true
-          16.73: true
-          17.23: true
+          13.97: true
+          14.47: true
           2.100: true
           3.100: true
           4.100: true
@@ -585,40 +495,6 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /matched_feature
           Value: true
-        - Alpha: 1
-          Autocompute Intensity Bounds: true
-          Autocompute Value Bounds:
-            Max Value: 10
-            Min Value: -10
-            Value: true
-          Axis: Z
-          Channel Name: intensity
-          Class: rviz_default_plugins/PointCloud2
-          Color: 25; 255; 0
-          Color Transformer: FlatColor
-          Decay Time: 0
-          Enabled: false
-          Invert Rainbow: false
-          Max Color: 255; 255; 255
-          Max Intensity: 4096
-          Min Color: 0; 0; 0
-          Min Intensity: 0
-          Name: MatchedCloud
-          Position Transformer: XYZ
-          Selectable: true
-          Size (Pixels): 3
-          Size (m): 0.05000000074505806
-          Style: Flat Squares
-          Topic:
-            Depth: 5
-            Durability Policy: Volatile
-            Filter size: 10
-            History Policy: Keep Last
-            Reliability Policy: Reliable
-            Value: /scan_matched_points2
-          Use Fixed Frame: true
-          Use rainbow: false
-          Value: false
       Enabled: false
       Name: FeatureMap
     - Class: rviz_common/Group
@@ -703,6 +579,40 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: Odometry
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 25; 255; 0
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: MatchedCloud
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.05000000074505806
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /scan_matched_points2
+      Use Fixed Frame: true
+      Use rainbow: false
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -759,11 +669,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 233.41656494140625
+      Scale: 94.4723892211914
       Target Frame: map
       Value: TopDownOrtho (rviz_default_plugins)
-      X: 1.377928614616394
-      Y: -0.06965888291597366
+      X: -1.1318891048431396
+      Y: -4.500484943389893
     Saved: ~
 Window Geometry:
   Displays:

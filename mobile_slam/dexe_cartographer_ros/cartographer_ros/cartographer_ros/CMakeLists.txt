@@ -37,6 +37,17 @@ install(TARGETS localization_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+google_binary(loc_offline_node
+  SRCS
+    localization/loc_offline_node_main.cc
+)
+
+install(TARGETS loc_offline_node
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(cartographer_node
   SRCS
     mapping/node_main.cc
