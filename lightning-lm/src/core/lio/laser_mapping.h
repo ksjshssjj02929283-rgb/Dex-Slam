@@ -131,6 +131,7 @@ class LaserMapping {
 
    private:
     Options options_;
+    int lidar_type_ = 0;  // 0: not init, 1: livox (lidar acc in G), 2: velodyne, 3: ouster
 
     /// modules
     IVoxType::Options ivox_options_;
