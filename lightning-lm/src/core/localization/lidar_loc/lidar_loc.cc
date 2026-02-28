@@ -476,7 +476,7 @@ void LidarLoc::Align(const CloudPtr& input) {
         SetInitRltState();
 
         if (initial_pose_set_) {
-            /// 尝试在给定点初始化
+            /// 尝试在给定点初始化，如果初始化成功，loc_inited_会被置为true
             if (InitWithFP(input, initial_pose_)) {
                 LOG(INFO) << "init with external pose: " << initial_pose_.translation().transpose();
                 initial_pose_set_ = false;

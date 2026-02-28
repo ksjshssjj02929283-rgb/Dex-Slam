@@ -86,6 +86,8 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
         return false;
     }
 
+    lidar_type_ = lidar_type;
+
     if (ivox_nearby_type == 0) {
         ivox_options_.nearby_type_ = IVoxType::NearbyType::CENTER;
     } else if (ivox_nearby_type == 6) {
@@ -127,6 +129,10 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
     if (timestamp < last_timestamp_imu_) {
         LOG(WARNING) << "imu loop back, clear buffer";
         imu_buffer_.clear();
+    }
+    // livox的重力加速度的单位为G
+    if (lidar_type_ == 1) {
+        imu->linear_acceleration *= G_m_s2;
     }
 
     if (p_imu_->IsIMUInited()) {
@@ -245,8 +251,8 @@ bool LaserMapping::Run() {
     // update local map
     Timer::Evaluate([&, this]() { MapIncremental(); }, "    Incremental Mapping");
 
-    LOG(INFO) << "[ mapping ]: In num: " << scan_undistort_->points.size() << " down " << cur_pts
-              << " Map grid num: " << ivox_->NumValidGrids() << " effect num : " << effect_feat_num_;
+    // LOG(INFO) << "[ mapping ]: In num: " << scan_undistort_->points.size() << " down " << cur_pts
+    //           << " Map grid num: " << ivox_->NumValidGrids() << " effect num : " << effect_feat_num_;
 
     /// keyframes
     if (last_kf_ == nullptr) {
