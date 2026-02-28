@@ -175,7 +175,8 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
     }
 
     auto lo_state = lio_->GetState();
-
+    LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
+              << lo_state.GetPose().translation().transpose();
     lidar_loc_->ProcessLO(lo_state);
     pgo_->ProcessLidarOdom(lo_state);
 
@@ -218,6 +219,8 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
     lidar_loc_->ProcessCloud(scan_undist);
 
     auto res = lidar_loc_->GetLocalizationResult();
+    LOG(INFO) << "Loc pose: " << std::setprecision(12) << res.timestamp_ << " "
+              << res.pose_.translation().transpose() << ", status: " << static_cast<int>(res.status_);
     pgo_->ProcessLidarLoc(res);
 
     if (ui_) {
@@ -235,7 +238,9 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
 
 void Localization::ProcessIMUMsg(IMUPtr imu) {
     UL lock(global_mutex_);
-
+    std::cout << "Process IMU msg: time " << std::setprecision(12) << imu->timestamp
+              << ", acc: " << imu->linear_acceleration.transpose()
+              << ", gyr: " << imu->angular_velocity.transpose() << std::endl;
     if (lidar_loc_ == nullptr || lio_ == nullptr || pgo_ == nullptr) {
         return;
     }
@@ -267,9 +272,9 @@ void Localization::ProcessIMUMsg(IMUPtr imu) {
 
     /// 如果没有odm, 用lio替代DR
 
-    // LOG(INFO) << "dr state: " << std::setprecision(12) << dr_state.timestamp_ << " "
-    //           << dr_state.GetPose().translation().transpose()
-    //           << ", q=" << dr_state.GetPose().unit_quaternion().coeffs().transpose();
+    LOG(INFO) << "dr state: " << std::setprecision(12) << dr_state.timestamp_ << " "
+              << dr_state.GetPose().translation().transpose()
+              << ", q=" << dr_state.GetPose().unit_quaternion().coeffs().transpose();
 
     lidar_loc_->ProcessDR(dr_state);
     pgo_->ProcessDR(dr_state);
