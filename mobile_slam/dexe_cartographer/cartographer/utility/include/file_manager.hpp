@@ -1,4 +1,4 @@
-// Copyright (c) 2021 dcm360 Inc
+// Copyright (c) 2026 dexforce Inc
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@
 
 #include "glog/logging.h"
 
-namespace dcm
+namespace cartographer
 {
 
 namespace utility
@@ -43,6 +43,6 @@ public:
 
 }  // namespace utility
 
-}  // namespace dcm
+}  // namespace cartographer
 
 #endif  // FILE_MANAGER_HPP_

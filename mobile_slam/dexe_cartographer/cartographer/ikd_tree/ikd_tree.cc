@@ -220,7 +220,7 @@ void iKdTree<PointType>::start_thread()
     pthread_mutex_init(&working_flag_mutex, NULL);
     pthread_mutex_init(&search_flag_mutex, NULL);
     pthread_create(&rebuild_thread, NULL, multi_thread_ptr, (void *)this);
-    printf("Multi thread started \n");
+    // printf("Multi thread started \n");
 }
 
 template <typename PointType>
@@ -417,7 +417,7 @@ void iKdTree<PointType>::multi_thread_rebuild()
             usleep(100);
         }
     }
-    printf("Rebuild thread terminated normally\n");
+    // printf("Rebuild thread terminated normally\n");
 }
 
 template <typename PointType>

@@ -59,8 +59,8 @@
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
 
-#include "file_manager.hpp"
-#include "pose_save_tool.hpp"
+#include "cartographer/utility/include/file_manager.hpp"
+#include "cartographer/utility/include/pose_save_tool.hpp"
 
 namespace cartographer_ros {
 
@@ -292,7 +292,7 @@ class Node
   ::rclcpp::TimerBase::SharedPtr maybe_warn_about_topic_mismatch_timer_;
 
   // TODO：add by linfeng.guo
-  std::shared_ptr<dcm::utility::PoseSaveTool> carto_pose_tool_;
+  std::shared_ptr<cartographer::utility::PoseSaveTool> carto_pose_tool_;
 };
 
 }  // namespace cartographer_ros

@@ -85,16 +85,8 @@ endif()
 include_directories(
   include
   ${urdfdom_headers_INCLUDE_DIRS}
-  ../../utility/include
 )
 
-add_library(utility
-  ../../utility/src/converter.cpp
-  ../../utility/src/pose_save_tool.cpp
-  ../../utility/src/file_manager.cpp
-)
-target_include_directories(utility SYSTEM PUBLIC ${EIGEN3_INCLUDE_DIR} ${Boost_INCLUDE_DIRS})
-target_link_libraries(utility PUBLIC ${GLOG_LIBRARIES} ${Boost_LIBRARIES})
 
 # Override Catkin's GTest configuration to use GMock.
 set(GTEST_FOUND TRUE)
@@ -141,9 +133,6 @@ target_link_libraries(${PROJECT_NAME} PUBLIC ${Boost_LIBRARIES})
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC ${JSONCPP_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} PUBLIC ${JSONCPP_LIBRARIES})
 
-# utility
-target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC ../utility/include)
-target_link_libraries(${PROJECT_NAME} PUBLIC utility)
 
 # 生成目录优先（port.h 相关注释保留）
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -209,8 +198,8 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# 安装库
-install(TARGETS ${PROJECT_NAME} utility
+# 安装库（utility 现在是 cartographer 的一部分，不需要单独安装）
+install(TARGETS ${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
@@ -224,9 +213,9 @@ foreach(HDR ${HDRS})
   install(FILES ${HDR} DESTINATION include/${INSTALL_DIR})
 endforeach()
 
-# 导出
+# 导出（utility 现在通过 cartographer 导出）
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME} utility)
+ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(${PACKAGE_DEPENDENCIES} OpenCV PCL)
 
 ament_package()

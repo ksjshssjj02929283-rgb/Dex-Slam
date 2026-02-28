@@ -154,8 +154,8 @@ void RunLocOfflineNode(const LocalizationUpdaterFactory& localization_updater_fa
   if (pos != std::string::npos) {
     map_yaml_path.replace(pos, std::string("/map.pbstream").length(), "/map.yaml");
   }
-  LOG(INFO) << "Loading map data from: " << map_yaml_path;
-  node.LoadMapData(map_yaml_path);
+  // LOG(INFO) << "Loading map data from: " << map_yaml_path;
+  // node.LoadMapData(map_yaml_path);
   
   rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_publisher =
       loc_offline_node->create_publisher<tf2_msgs::msg::TFMessage>(
