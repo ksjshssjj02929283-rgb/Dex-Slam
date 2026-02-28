@@ -146,11 +146,16 @@ inline void ImuProcess::IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N
 
     auto init_state = kf_state.GetX();
     init_state.timestamp_ = meas.imu_.back()->timestamp;
+    std::cout << "IMU Init mean_acc_: " << mean_acc_.transpose() << ", mean_gyr_: " << mean_gyr_.transpose()
+              << ", N: " << N - 1 << std::endl;
+    std::cout << "-mean_acc_ / mean_acc_.norm() * G_m_s2: " << (-mean_acc_ / mean_acc_.norm() * G_m_s2).transpose()
+              << std::endl;
     init_state.grav_ = S2(-mean_acc_ / mean_acc_.norm() * G_m_s2);
     init_state.bg_ = mean_gyr_;
     init_state.offset_t_lidar_ = t_lidar_mu_;
     init_state.offset_R_lidar_ = R_lidar_imu_;
     kf_state.ChangeX(init_state);
+    std::cout << "init_state.grav_: " << init_state.grav_.vec_.transpose() << std::endl;
 
     auto init_P = kf_state.GetP();
     init_P.setIdentity();
