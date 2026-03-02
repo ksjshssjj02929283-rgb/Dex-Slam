@@ -540,16 +540,16 @@ bool MapBuilderBridge::SaveGridMapFromRange(
   //          << ", Resolution: " << resolution;
   
   // 保存文件
-  cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
-  WritePgm(image, resolution, &pgm_writer,
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
-
-  // Task 1: 注释掉PNG图像的生成，只保留PGM格式
-  // cartographer::io::StreamFileWriter png_writer(map_filename + ".png");
-  // WritePng(image, map_filename + ".png",
+  // cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
+  // WritePgm(image, resolution, &pgm_writer,
   //          node_options_.mapping_occ_thresh,
   //          node_options_.mapping_free_thresh);
+
+  // Task 1: 注释掉PNG图像的生成，只保留PGM格式
+  cartographer::io::StreamFileWriter png_writer(map_filename + ".png");
+  WritePng(image, map_filename + ".png",
+           node_options_.mapping_occ_thresh,
+           node_options_.mapping_free_thresh);
 
   const Eigen::Vector2d map_origin(
     -result.origin.x() * resolution,
@@ -563,8 +563,25 @@ bool MapBuilderBridge::SaveGridMapFromRange(
             node_options_.mapping_occ_thresh,
             node_options_.mapping_free_thresh);
 
+  // 保存导航地图（根据配置）- 在PGM和YAML保存后执行，直接读取PNG文件处理
+  if (node_options_.save_navigation_map) {
+    // 提取地图目录路径
+    std::string map_dir = map_filename.substr(0, map_filename.find_last_of("/\\"));
+    if (map_dir.empty()) {
+      map_dir = ".";  // 当前目录
+    }
+    
+    WriteNavigationMap(map_filename + ".png",
+                      map_filename + "_navigation.png",
+                      node_options_.navigation_map_filter_mode,
+                      node_options_.save_debug_map,
+                      map_dir);
+  } else {
+    LOG(INFO) << "Navigation map saving is disabled in configuration";
+  }
+
   LOG(INFO) << "SaveGridMapFromRange with provided submap completed. Saved to " 
-            << map_filename + ".pgm/.png/.yaml"
+            << map_filename + ".pgm/.yaml"
             << " with size " << image.width() << "x" << image.height();
 
   return true;

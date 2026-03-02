@@ -32,7 +32,7 @@ POSE_ESTIMATOR_2D = {
     rotation_threshold = math.rad(30.),  -- 旋转误差阈值 (弧度)，30度
     max_linear_velocity = 1.0,           -- 最大线速度 (m/s)
     max_angular_velocity = math.rad(45.),-- 最大角速度 (rad/s)，45度/秒
-    min_score = 0.4,                     -- 最小匹配分数阈值，用于验证和恢复
+    min_score = 0.3,                     -- 最小匹配分数阈值，用于验证和恢复
   },
 
   adaptive_voxel_filter = {
@@ -108,7 +108,7 @@ POSE_ESTIMATOR_2D = {
     -- 2 (LONG): 长时间保留在内存，车辆移出区域后仍然保留，但不会存盘
     -- 3 (PERSISTENT): 更长时间的保留，会存盘，下次运行也会读取
     dynamic_map_policy = 3,  -- 默认使用 PERSISTENT 策略
-    save_debug_data = false,
+    save_debug_data = true,
   },
 
   use_online_correlative_scan_matching = true,

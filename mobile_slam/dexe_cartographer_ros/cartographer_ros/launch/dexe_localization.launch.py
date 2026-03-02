@@ -37,7 +37,7 @@ def generate_launch_description():
     
     map_name_arg = DeclareLaunchArgument(
         'map_name',
-        default_value='map_2_standard',
+        default_value='map_dynamic',
         description='Name of the map to load'
     )
     

@@ -44,6 +44,12 @@ void WritePng(const ::cartographer::io::Image& image,
               const std::string file_name,
               double occ_thresh, double free_thresh);
 
+void WriteNavigationMap(const std::string pgm_file_name,
+                       const std::string output_file_name,
+                       const std::string& filter_mode,
+                       bool save_debug_map,
+                       const std::string& map_dir);
+
 
 }  // namespace cartographer_ros
 

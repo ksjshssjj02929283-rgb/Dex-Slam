@@ -499,10 +499,6 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     bool save_success = node.SaveMap(map_filestream, FLAGS_resolution);
     if (save_success) {
       LOG(INFO) << "Map saved successfully to " << map_filestream;
-      LOG(INFO) << "Generated files:";
-      LOG(INFO) << "  - " << state_filename;
-      LOG(INFO) << "  - " << map_filestream << ".pgm";
-      LOG(INFO) << "  - " << map_filestream << ".yaml";
     } else {
       LOG(ERROR) << "Failed to save map to " << map_filestream;
     }

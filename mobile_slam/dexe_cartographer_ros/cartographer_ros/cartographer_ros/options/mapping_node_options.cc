@@ -72,6 +72,17 @@ MappingNodeOptions CreateMappingNodeOptions(
     options.mapping_free_thresh = lua_parameter_dictionary->GetDouble("mapping_free_thresh");
   }
 
+  // Navigation map options
+  if (lua_parameter_dictionary->HasKey("save_navigation_map")) {
+    options.save_navigation_map = lua_parameter_dictionary->GetBool("save_navigation_map");
+  }
+  if (lua_parameter_dictionary->HasKey("navigation_map_filter_mode")) {
+    options.navigation_map_filter_mode = lua_parameter_dictionary->GetString("navigation_map_filter_mode");
+  }
+  if (lua_parameter_dictionary->HasKey("save_debug_map")) {
+    options.save_debug_map = lua_parameter_dictionary->GetBool("save_debug_map");
+  }
+
   return options;
 }
 
