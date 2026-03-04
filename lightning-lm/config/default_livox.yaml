@@ -29,11 +29,11 @@ fasterlio:
   b_acc_cov: 0.0001
   b_gyr_cov: 0.0001
   extrinsic_est_en: false      # true: enable the online estimation of IMU-LiDAR extrinsic
-  extrinsic_T: [ 0, 0, 0.28 ]
+  extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
   extrinsic_R: [ 1, 0, 0,
                  0, 1, 0,
                  0, 0, 1 ]
-  keep_first_imu_estimation: true
+  keep_first_imu_estimation: false
 
 
 g2p5:

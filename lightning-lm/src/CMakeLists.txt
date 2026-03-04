@@ -65,6 +65,7 @@ ament_target_dependencies(lightning.utils
 # ----------------------------------------------------------------------------
 add_library(lightning.core.lio STATIC
     core/lio/eskf.cc
+    core/lio/imu_processing.cc
     core/lio/laser_mapping.cc
     core/lio/pointcloud_preprocess.cc
 )

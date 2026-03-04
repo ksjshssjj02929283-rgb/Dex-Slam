@@ -1,6 +1,7 @@
 #include <pcl/common/transforms.h>
 #include <yaml-cpp/yaml.h>
 #include <fstream>
+#include <filesystem>
 
 #include "common/options.h"
 #include "core/lightning_math.hpp"
@@ -303,6 +304,7 @@ void LaserMapping::MakeKF() {
     kf->SetState(state_point_);
 
     LOG(INFO) << "LIO: create kf " << kf->GetID() << ", state: " << state_point_.pos_.transpose()
+              << ", rot: " << state_point_.rot_.log().transpose()
               << ", kf opt pose: " << kf->GetOptPose().translation().transpose()
               << ", lio pose: " << kf->GetLIOPose().translation().transpose() << ", time: " << std::setprecision(14)
               << state_point_.timestamp_;
