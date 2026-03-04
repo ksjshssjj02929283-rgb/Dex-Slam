@@ -12,7 +12,7 @@
 #include "common/options.h"
 #include "core/ivox3d/ivox3d.h"
 #include "core/lio/eskf.hpp"
-#include "core/lio/imu_processing.hpp"
+#include "core/lio/imu_processing.h"
 #include "pointcloud_preprocess.h"
 
 #include "livox_ros_driver2/msg/custom_msg.hpp"
