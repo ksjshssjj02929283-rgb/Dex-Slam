@@ -1,76 +1,8 @@
-#pragma once
-
-#ifndef FASTER_LIO_IMU_PROCESSING_H
-#define FASTER_LIO_IMU_PROCESSING_H
-
-#include <glog/logging.h>
-#include <cmath>
-#include <deque>
-#include <fstream>
-
-#include "common/eigen_types.h"
-#include "common/measure_group.h"
-#include "common/point_def.h"
-#include "core/lio/eskf.hpp"
-#include "core/lio/pose6d.h"
-#include "utils/timer.h"
+#include "imu_processing.h"
 
 namespace lightning {
 
-/// IMU处理类
-class ImuProcess {
-   public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-    ImuProcess();
-    ~ImuProcess();
-
-    void Reset();
-    void SetExtrinsic(const Vec3d &transl, const Mat3d &rot);
-    void SetGyrCov(const Vec3d &scaler);
-    void SetAccCov(const Vec3d &scaler);
-    void SetGyrBiasCov(const Vec3d &b_g);
-    void SetAccBiasCov(const Vec3d &b_a);
-
-    void Process(const MeasureGroup &meas, ESKF &kf_state, CloudPtr &scan);
-
-    bool IsIMUInited() const { return imu_need_init_ == false; }
-
-    double GetMeanAccNorm() const { return mean_acc_.norm(); }
-
-    Eigen::Matrix<double, 12, 12> Q_;
-    Vec3d cov_acc_;
-    Vec3d cov_gyr_;
-    Vec3d cov_acc_scale_;
-    Vec3d cov_gyr_scale_;
-    Vec3d cov_bias_gyr_;
-    Vec3d cov_bias_acc_;
-
-   private:
-    void IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N);
-    void UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr &pcl_out);
-
-    static inline constexpr int max_init_count_ = 20;
-
-    PointCloudType::Ptr cur_pcl_un_ = nullptr;
-    lightning::IMUPtr last_imu_ = nullptr;
-    std::deque<lightning::IMUPtr> imu_queue_;
-
-    std::vector<Pose6D> imu_pose_;
-    Mat3d R_lidar_imu_ = Mat3d ::Identity();
-    Vec3d t_lidar_mu_ = Vec3d ::Zero();
-    Vec3d mean_acc_ = Vec3d::Zero();
-    Vec3d mean_gyr_ = Vec3d::Zero();
-    Vec3d angvel_last_ = Vec3d ::Zero();
-    Vec3d acc_s_last_ = Vec3d ::Zero();
-
-    double last_lidar_end_time_ = 0;
-    int init_iter_num_ = 1;
-    bool b_first_frame_ = true;
-    bool imu_need_init_ = true;
-};
-
-inline ImuProcess::ImuProcess() : b_first_frame_(true), imu_need_init_(true) {
+ImuProcess::ImuProcess() : b_first_frame_(true), imu_need_init_(true) {
     init_iter_num_ = 1;
     Q_.setZero();
     Q_.diagonal() << 1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5;
@@ -83,9 +15,9 @@ inline ImuProcess::ImuProcess() : b_first_frame_(true), imu_need_init_(true) {
     last_imu_.reset(new lightning::IMU());
 }
 
-inline ImuProcess::~ImuProcess() {}
+ImuProcess::~ImuProcess() {}
 
-inline void ImuProcess::Reset() {
+void ImuProcess::Reset() {
     mean_acc_ = Vec3d(0, 0, -1.0);
     mean_gyr_ = Vec3d(0, 0, 0);
     angvel_last_.setZero();
@@ -98,20 +30,55 @@ inline void ImuProcess::Reset() {
     cur_pcl_un_.reset(new PointCloudType());
 }
 
-inline void ImuProcess::SetExtrinsic(const Vec3d &transl, const Mat3d &rot) {
-    t_lidar_mu_ = transl;
+void ImuProcess::SetExtrinsic(const Vec3d &transl, const Mat3d &rot) {
+    t_lidar_imu_ = transl;
     R_lidar_imu_ = rot;
 }
 
-inline void ImuProcess::SetGyrCov(const Vec3d &scaler) { cov_gyr_scale_ = scaler; }
+void ImuProcess::SetGyrCov(const Vec3d &scaler) { cov_gyr_scale_ = scaler; }
 
-inline void ImuProcess::SetAccCov(const Vec3d &scaler) { cov_acc_scale_ = scaler; }
+void ImuProcess::SetAccCov(const Vec3d &scaler) { cov_acc_scale_ = scaler; }
 
-inline void ImuProcess::SetGyrBiasCov(const Vec3d &b_g) { cov_bias_gyr_ = b_g; }
+void ImuProcess::SetGyrBiasCov(const Vec3d &b_g) { cov_bias_gyr_ = b_g; }
 
-inline void ImuProcess::SetAccBiasCov(const Vec3d &b_a) { cov_bias_acc_ = b_a; }
+void ImuProcess::SetAccBiasCov(const Vec3d &b_a) { cov_bias_acc_ = b_a; }
 
-inline void ImuProcess::IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N) {
+Mat3d ImuProcess::AlignGravity(const Vec3d &gravity_vector, Vec3d &aligned_gravity) {
+    // 归一化重力向量
+    Vec3d n0 = gravity_vector / gravity_vector.norm();
+    
+    // 目标重力方向（世界坐标系z轴）
+    Vec3d n1(0, 0, 1);
+    if (n0[2] < 0) {
+        n1[2] = -1;  // 如果重力向上，则目标方向也向上
+    }
+    
+    // 计算旋转轴和角度
+    Vec3d rotvec = n0.cross(n1);
+    double rnorm = rotvec.norm();
+    
+    Mat3d rot = Mat3d::Identity();
+    if (rnorm > 1e-6) {  // 避免除零
+        rotvec = rotvec / rnorm;
+        Eigen::AngleAxisd angaxis(std::asin(rnorm), rotvec);
+        rot = angaxis.matrix();
+        
+        std::cout << "Gravity alignment: rotation angle = " << std::asin(rnorm) * 180.0 / M_PI 
+                  << " deg, axis = " << rotvec.transpose() << std::endl;
+    } else {
+        std::cout << "Gravity already aligned, no rotation needed" << std::endl;
+    }
+    
+    // 计算对齐后的重力向量
+    aligned_gravity = rot * gravity_vector;
+    
+    std::cout << "Gravity before alignment: " << gravity_vector.transpose() << std::endl;
+    std::cout << "Gravity after alignment:  " << aligned_gravity.transpose() << std::endl;
+    
+    return rot;
+}
+
+void ImuProcess::IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N) {
     /** 1. initializing the gravity_, gyro bias, acc and gyro covariance
      ** 2. normalize the acceleration measurenments to unit gravity_ **/
 
@@ -143,19 +110,53 @@ inline void ImuProcess::IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N
 
         N++;
     }
+    
+    // 静止判断：检查加速度和角速度方差
+    const double acc_cov_threshold = 0.05;   // 加速度方差阈值
+    const double gyr_cov_threshold = 0.05;  // 角速度方差阈值
+    
+    double acc_cov_norm = cov_acc_.norm();
+    double gyr_cov_norm = cov_gyr_.norm();
+    
+    std::cout << "IMU static check: acc_cov = " << acc_cov_norm 
+              << ", gyr_cov = " << gyr_cov_norm << std::endl;
+    
+    if (acc_cov_norm > acc_cov_threshold || gyr_cov_norm > gyr_cov_threshold) {
+        std::cout << "IMU not static! acc_cov = " << acc_cov_norm 
+                  << " (threshold: " << acc_cov_threshold << "), gyr_cov = " << gyr_cov_norm
+                  << " (threshold: " << gyr_cov_threshold << ")" << std::endl;
+        // 重置初始化状态，等待下一帧
+        b_first_frame_ = true;
+        N = 1;
+        return;
+    }
+    
+    std::cout << "IMU static check passed!" << std::endl;
 
     auto init_state = kf_state.GetX();
     init_state.timestamp_ = meas.imu_.back()->timestamp;
     std::cout << "IMU Init mean_acc_: " << mean_acc_.transpose() << ", mean_gyr_: " << mean_gyr_.transpose()
               << ", N: " << N - 1 << std::endl;
-    std::cout << "-mean_acc_ / mean_acc_.norm() * G_m_s2: " << (-mean_acc_ / mean_acc_.norm() * G_m_s2).transpose()
-              << std::endl;
-    init_state.grav_ = S2(-mean_acc_ / mean_acc_.norm() * G_m_s2);
+    
+    // 计算初始重力向量（加速度计测量的是-g）
+    Vec3d gravity_init = -mean_acc_ / mean_acc_.norm() * G_m_s2;
+    std::cout << "Initial gravity estimate: " << gravity_init.transpose() << std::endl;
+    
+    // 使用重力对齐方法获取旋转矩阵
+    Vec3d aligned_gravity;
+    Mat3d R_align = AlignGravity(gravity_init, aligned_gravity);
+    
+    // 设置对齐后的重力向量和初始旋转
+    init_state.grav_ = S2(aligned_gravity);
+    init_state.rot_ = SO3(R_align);
     init_state.bg_ = mean_gyr_;
-    init_state.offset_t_lidar_ = t_lidar_mu_;
+    
+    init_state.offset_t_lidar_ = t_lidar_imu_;
     init_state.offset_R_lidar_ = R_lidar_imu_;
+    
     kf_state.ChangeX(init_state);
     std::cout << "init_state.grav_: " << init_state.grav_.vec_.transpose() << std::endl;
+    std::cout << "init_state.rot_: \n" << init_state.rot_.matrix() << std::endl;
 
     auto init_P = kf_state.GetP();
     init_P.setIdentity();
@@ -169,7 +170,7 @@ inline void ImuProcess::IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N
     last_imu_ = meas.imu_.back();
 }
 
-inline void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr &pcl_out) {
+void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr &pcl_out) {
     /*** add the imu_ of the last frame-tail to the of current frame-head ***/
     auto v_imu = meas.imu_;
     v_imu.push_front(last_imu_);
@@ -223,12 +224,8 @@ inline void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, C
         Q_.block<3, 3>(3, 3).diagonal() = cov_acc_;
         Q_.block<3, 3>(6, 6).diagonal() = cov_bias_gyr_;
         Q_.block<3, 3>(9, 9).diagonal() = cov_bias_acc_;
+
         kf_state.Predict(dt, Q_, gyro, acc);
-
-        // LOG(INFO) << "gyro: " << gyro.transpose() << ", dt: " << dt;
-
-        // LOG(INFO) << "acc: " << acc.transpose() << " grav: " << kf_state.GetX().grav_.vec_.norm()
-        //           << ", vel: " << kf_state.GetX().vel_.transpose() << ", dt: " << dt;
 
         /* save the poses at each IMU measurements */
         imu_state = kf_state.GetX();
@@ -300,7 +297,7 @@ inline void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, C
     }
 }
 
-inline void ImuProcess::Process(const MeasureGroup &meas, ESKF &kf_state, CloudPtr &scan) {
+void ImuProcess::Process(const MeasureGroup &meas, ESKF &kf_state, CloudPtr &scan) {
     if (meas.imu_.empty()) {
         return;
     }
@@ -330,6 +327,5 @@ inline void ImuProcess::Process(const MeasureGroup &meas, ESKF &kf_state, CloudP
 
     Timer::Evaluate([&, this]() { UndistortPcl(meas, kf_state, scan); }, "Undistort Pcl");
 }
-}  // namespace lightning
 
-#endif
+}  // namespace lightning
