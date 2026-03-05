@@ -61,6 +61,12 @@ struct NavState {
         // 减零偏
         Vec3d omega = gyro - bg_;
         Vec3d a_inertial = rot_ * (acce - ba_);  // 加计读数-ba 并转到 世界系下
+        // std::cout << "acce: " << acce.transpose() << std::endl;
+        // std::cout << "rot_: \n" << rot_.log().transpose() << std::endl;
+        // std::cout << "rot_.matrix(): \n" << rot_.matrix() << std::endl;
+        // std::cout << "a_inertial: " << a_inertial.transpose() << std::endl;
+        // std::cout << "grav_: " << grav_.vec_.transpose() << std::endl;
+        // std::cout << "imu_acc: " << (a_inertial + grav_.vec_).transpose() << std::endl;
 
         for (int i = 0; i < 3; i++) {
             res(i) = vel_[i];

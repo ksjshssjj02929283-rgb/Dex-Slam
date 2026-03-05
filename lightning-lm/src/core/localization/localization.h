@@ -14,6 +14,8 @@ namespace ui {
 class PangolinWindow;
 }
 
+class RVizPublisher;
+
 namespace loc {
 
 class LidarLoc;
@@ -81,6 +83,8 @@ class Localization {
     using PointcloudWorldCallback = std::function<void(const sensor_msgs::msg::PointCloud2& pointcloud)>;
 
     void SetTFCallback(TFCallback&& callback);
+    
+    void SetRVizPublisher(std::shared_ptr<RVizPublisher> rviz_pub);
 
     // void SetPathCallback(std::function<void(const nav_msgs::msg::Path& path)>&& callback);
     // void SetPointcloudWorldCallback(std::function<void(const sensor_msgs::msg::PointCloud2& pointcloud)>&& callback);
@@ -102,6 +106,9 @@ class Localization {
 
     // ui
     std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;
+    
+    // rviz
+    std::shared_ptr<RVizPublisher> rviz_pub_ = nullptr;
 
     // pose graph
     std::shared_ptr<PGO> pgo_ = nullptr;

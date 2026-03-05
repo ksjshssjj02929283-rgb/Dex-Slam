@@ -6,6 +6,7 @@
 #include "core/localization/pose_graph/pgo.h"
 #include "io/yaml_io.h"
 #include "ui/pangolin_window.h"
+#include "wrapper/rviz_publisher.h"
 
 namespace lightning::loc {
 
@@ -180,6 +181,11 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
     lidar_loc_->ProcessLO(lo_state);
     pgo_->ProcessLidarOdom(lo_state);
 
+    // 发布里程计位姿到 RViz
+    if (rviz_pub_) {
+        rviz_pub_->UpdateFrontendPath(lo_state.GetPose());
+    }
+
     // LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
     //           << lo_state.GetPose().translation().transpose();
 
@@ -226,6 +232,14 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
     if (ui_) {
         // Twi with Til, here pose means Twl, thus Til=I
         ui_->UpdateScan(scan_undist, res.pose_);
+    }
+
+    // 发布定位结果到 RViz
+    if (rviz_pub_) {
+        rviz_pub_->UpdateCurrentScan(scan_undist, res.pose_);
+        rviz_pub_->UpdateCurrentPose(res.pose_);
+        rviz_pub_->UpdateBackendPath(res.pose_);
+        rviz_pub_->UpdateNavState(res.ToNavState());
     }
 
     if (loc_state_callback_) {
@@ -331,5 +345,12 @@ void Localization::SetExternalPose(const Eigen::Quaterniond& q, const Eigen::Vec
 }
 
 void Localization::SetTFCallback(Localization::TFCallback&& callback) { tf_callback_ = callback; }
+
+void Localization::SetRVizPublisher(std::shared_ptr<RVizPublisher> rviz_pub) { 
+    rviz_pub_ = rviz_pub;
+    if (lidar_loc_) {
+        lidar_loc_->SetRVizPublisher(rviz_pub);
+    }
+}
 
 }  // namespace lightning::loc

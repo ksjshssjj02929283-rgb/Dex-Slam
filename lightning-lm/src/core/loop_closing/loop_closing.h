@@ -56,6 +56,17 @@ class LoopClosing {
     using LoopClosedCallback = std::function<void()>;
     void SetLoopClosedCB(LoopClosedCallback cb) { loop_cb_ = cb; }
 
+    /// 获取回环边（用于可视化）
+    std::vector<std::pair<int, int>> GetLoopEdges() const {
+        std::vector<std::pair<int, int>> edges;
+        for (const auto& c : candidates_) {
+            if (c.ndt_score_ > options_.ndt_score_th_) {
+                edges.emplace_back(c.idx1_, c.idx2_);
+            }
+        }
+        return edges;
+    }
+
    protected:
     void HandleKF(Keyframe::Ptr kf);
 

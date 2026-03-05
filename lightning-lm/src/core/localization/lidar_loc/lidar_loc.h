@@ -18,6 +18,10 @@ namespace lightning::ui {
 class PangolinWindow;
 }
 
+namespace lightning {
+class RVizPublisher;
+}
+
 namespace lightning::loc {
 
 /// 激光定位对外接口类
@@ -120,6 +124,9 @@ class LidarLoc {
     /// 设置UI
     void SetUI(std::shared_ptr<ui::PangolinWindow> ui) { ui_ = ui; }
 
+    /// 设置RViz发布器
+    void SetRVizPublisher(std::shared_ptr<lightning::RVizPublisher> rviz_pub) { rviz_pub_ = rviz_pub; }
+
     /// 设置init pose
     void SetInitialPose(SE3 init_pose);
 
@@ -193,8 +200,9 @@ class LidarLoc {
     using ICPType = pcl::IterativeClosestPoint<PointType, PointType>;
     ICPType::Ptr pcl_icp_ = nullptr;
 
-    CloudPtr current_scan_ = nullptr;                   // 当前扫描
-    std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;  // ui
+    CloudPtr current_scan_ = nullptr;                            // 当前扫描
+    std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;           // ui
+    std::shared_ptr<lightning::RVizPublisher> rviz_pub_ = nullptr; // rviz publisher
     SE3 last_loc_pose_;
 
     std::mutex initial_pose_mutex_;  // 初始定位锁

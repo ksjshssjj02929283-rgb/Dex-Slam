@@ -151,6 +151,7 @@ target_link_libraries(lightning.core.localization
     lightning.core.lio
     lightning.core.maps
     lightning.utils
+    lightning.wrapper
     ${third_party_libs}
     ${PCL_LIBRARIES}
 )
@@ -160,6 +161,8 @@ ament_target_dependencies(lightning.core.localization
     "sensor_msgs"
     "nav_msgs"
     "geometry_msgs"
+    "visualization_msgs"
+    "pcl_conversions"
 )
 
 # ----------------------------------------------------------------------------
@@ -195,6 +198,7 @@ target_link_libraries(lightning.system
     lightning.core.maps
     lightning.core.localization
     lightning.ui
+    lightning.wrapper
     ${third_party_libs}
 )
 
@@ -205,6 +209,9 @@ ament_target_dependencies(lightning.system
     "std_srvs"
     "tf2"
     "tf2_ros"
+    "geometry_msgs"
+    "visualization_msgs"
+    "pcl_conversions"
 )
 
 # ----------------------------------------------------------------------------
@@ -212,21 +219,27 @@ ament_target_dependencies(lightning.system
 # ----------------------------------------------------------------------------
 add_library(lightning.wrapper STATIC
     wrapper/bag_io.cc
+    wrapper/rviz_publisher.cc
 )
 
 target_link_libraries(lightning.wrapper
     lightning.common
     ${third_party_libs}
+    ${PCL_LIBRARIES}
 )
 
 ament_target_dependencies(lightning.wrapper
     "rclcpp"
     "rosbag2_cpp"
     "sensor_msgs"
+    "nav_msgs"
+    "geometry_msgs"
+    "visualization_msgs"
     "message_filters"
     "pcl_conversions"
     "tf2"
     "tf2_ros"
+    "tf2_geometry_msgs"
 )
 
 add_dependencies(lightning.wrapper

@@ -16,6 +16,7 @@
 #include "io/yaml_io.h"
 #include "ui/pangolin_window.h"
 #include "utils/timer.h"
+#include "wrapper/rviz_publisher.h"
 
 namespace lightning::loc {
 
@@ -413,6 +414,11 @@ void LidarLoc::UpdateMapThread() {
             if (ui_) {
                 ui_->UpdatePointCloudGlobal(map_->GetStaticCloud());
                 ui_->UpdatePointCloudDynamic(map_->GetDynamicCloud());
+            }
+
+            if (rviz_pub_) {
+                rviz_pub_->UpdateGlobalMap(map_->GetStaticCloud());
+                rviz_pub_->UpdateDynamicMap(map_->GetDynamicCloud());
             }
 
             map_->CleanMapUpdate();

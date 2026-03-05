@@ -9,6 +9,10 @@
 #include "core/maps/tiled_map.h"
 #include "ui/pangolin_window.h"
 #include "wrapper/ros_utils.h"
+#include "wrapper/rviz_publisher.h"
+
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 
 #include <yaml-cpp/yaml.h>
 #include <filesystem>
@@ -34,6 +38,10 @@ bool SlamSystem::Init(const std::string& yaml_path) {
     options_.with_2dvisualization_ = yaml["system"]["with_2dui"].as<bool>();
     options_.with_gridmap_ = yaml["system"]["with_g2p5"].as<bool>();
     options_.step_on_kf_ = yaml["system"]["step_on_kf"].as<bool>();
+
+    if (yaml["rviz"] && yaml["rviz"]["enable"]) {
+        options_.with_rviz_ = yaml["rviz"]["enable"].as<bool>();
+    }
 
     if (options_.with_loop_closing_) {
         LOG(INFO) << "slam with loop closing";
@@ -105,17 +113,33 @@ bool SlamSystem::Init(const std::string& yaml_path) {
 
         cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
             cloud_topic_, qos, [this](sensor_msgs::msg::PointCloud2::SharedPtr cloud) {
-                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
+                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", false);
             });
 
         livox_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
             livox_topic_, qos, [this](livox_ros_driver2::msg::CustomMsg ::SharedPtr cloud) {
-                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
+                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", false);
             });
 
         savemap_service_ = node_->create_service<SaveMapService>(
             "lightning/save_map", [this](const SaveMapService::Request::SharedPtr& req,
                                          SaveMapService::Response::SharedPtr res) { SaveMap(req, res); });
+
+        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
+
+        if (options_.with_rviz_) {
+            LOG(INFO) << "slam with RViz visualization";
+            RVizPublisher::Options rviz_opt;
+            if (yaml["rviz"]) {
+                rviz_opt.pub_current_scan = yaml["rviz"]["pub_current_scan"].as<bool>(true);
+                rviz_opt.pub_local_map = yaml["rviz"]["pub_local_map"].as<bool>(true);
+                rviz_opt.pub_trajectory = yaml["rviz"]["pub_trajectory"].as<bool>(true);
+                rviz_opt.pub_keyframes = yaml["rviz"]["pub_keyframes"].as<bool>(true);
+                rviz_opt.pub_loop_edges = yaml["rviz"]["pub_loop_edges"].as<bool>(true);
+                rviz_opt.local_map_downsample = yaml["rviz"]["local_map_downsample"].as<int>(5);
+            }
+            rviz_pub_ = std::make_shared<RVizPublisher>(node_, rviz_opt);
+        }
 
         LOG(INFO) << "online slam node has been created.";
     }
@@ -246,6 +270,17 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
     lio_->ProcessPointCloud2(cloud);
     lio_->Run();
 
+    // 发布实时 scan 和 pose（每帧都发布）
+    if (rviz_pub_) {
+        auto state = lio_->GetState();
+        auto scan = lio_->GetScanUndist();
+        if (scan && scan->size() > 0) {
+            rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
+            rviz_pub_->UpdateCurrentPose(state.GetPose());
+            rviz_pub_->UpdateNavState(state);
+        }
+    }
+
     auto kf = lio_->GetKeyframe();
     if (kf != cur_kf_) {
         cur_kf_ = kf;
@@ -267,6 +302,49 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
 
     if (ui_) {
         ui_->UpdateKF(cur_kf_);
+    }
+
+    if (rviz_pub_) {
+        rviz_pub_->UpdateSingleKeyframe(cur_kf_);
+        rviz_pub_->UpdateCurrentScan(cur_kf_->GetCloud(), cur_kf_->GetLIOPose());
+        rviz_pub_->UpdateFrontendPath(cur_kf_->GetLIOPose());
+        rviz_pub_->UpdateKeyframes(lio_->GetAllKeyframes());
+        if (options_.with_loop_closing_) {
+            rviz_pub_->UpdateLoopEdges(lc_->GetLoopEdges());
+        }
+
+        // 构建局部地图（最近10个关键帧）
+        auto all_kfs = lio_->GetAllKeyframes();
+        if (all_kfs.size() > 0) {
+            std::map<int, CloudPtr> local_map;
+            int start_idx = std::max(0, (int)all_kfs.size() - 10);
+            for (size_t i = start_idx; i < all_kfs.size(); ++i) {
+                local_map[i] = all_kfs[i]->GetCloud();
+            }
+            rviz_pub_->UpdateLocalMap(local_map);
+        }
+    }
+
+    // 发布 TF
+    if (tf_broadcaster_ != nullptr) {
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp = node_->now();
+        tf_msg.header.frame_id = "map";
+        tf_msg.child_frame_id = "base_link";
+
+        auto pose = cur_kf_->GetLIOPose();
+        auto t = pose.translation();
+        auto q = pose.unit_quaternion();
+
+        tf_msg.transform.translation.x = t.x();
+        tf_msg.transform.translation.y = t.y();
+        tf_msg.transform.translation.z = t.z();
+        tf_msg.transform.rotation.w = q.w();
+        tf_msg.transform.rotation.x = q.x();
+        tf_msg.transform.rotation.y = q.y();
+        tf_msg.transform.rotation.z = q.z();
+
+        tf_broadcaster_->sendTransform(tf_msg);
     }
 }
 
@@ -278,6 +356,17 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
     lio_->ProcessPointCloud2(cloud);
     lio_->Run();
 
+    // 发布实时 scan 和 pose（每帧都发布）
+    if (rviz_pub_) {
+        auto state = lio_->GetState();
+        auto scan = lio_->GetScanUndist();
+        if (scan && scan->size() > 0) {
+            rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
+            rviz_pub_->UpdateCurrentPose(state.GetPose());
+            rviz_pub_->UpdateNavState(state);
+        }
+    }
+
     auto kf = lio_->GetKeyframe();
     if (kf != cur_kf_) {
         cur_kf_ = kf;
@@ -299,6 +388,49 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
 
     if (ui_) {
         ui_->UpdateKF(cur_kf_);
+    }
+
+    if (rviz_pub_) {
+        rviz_pub_->UpdateSingleKeyframe(cur_kf_);
+        rviz_pub_->UpdateCurrentScan(cur_kf_->GetCloud(), cur_kf_->GetLIOPose());
+        rviz_pub_->UpdateFrontendPath(cur_kf_->GetLIOPose());
+        rviz_pub_->UpdateKeyframes(lio_->GetAllKeyframes());
+        if (options_.with_loop_closing_) {
+            rviz_pub_->UpdateLoopEdges(lc_->GetLoopEdges());
+        }
+
+        // 构建局部地图（最近10个关键帧）
+        auto all_kfs = lio_->GetAllKeyframes();
+        if (all_kfs.size() > 0) {
+            std::map<int, CloudPtr> local_map;
+            int start_idx = std::max(0, (int)all_kfs.size() - 10);
+            for (size_t i = start_idx; i < all_kfs.size(); ++i) {
+                local_map[i] = all_kfs[i]->GetCloud();
+            }
+            rviz_pub_->UpdateLocalMap(local_map);
+        }
+    }
+
+    // 发布 TF
+    if (tf_broadcaster_ != nullptr) {
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp = node_->now();
+        tf_msg.header.frame_id = "map";
+        tf_msg.child_frame_id = "base_link";
+
+        auto pose = cur_kf_->GetLIOPose();
+        auto t = pose.translation();
+        auto q = pose.unit_quaternion();
+
+        tf_msg.transform.translation.x = t.x();
+        tf_msg.transform.translation.y = t.y();
+        tf_msg.transform.translation.z = t.z();
+        tf_msg.transform.rotation.w = q.w();
+        tf_msg.transform.rotation.x = q.x();
+        tf_msg.transform.rotation.y = q.y();
+        tf_msg.transform.rotation.z = q.z();
+
+        tf_broadcaster_->sendTransform(tf_msg);
     }
 }
 
