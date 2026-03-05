@@ -22,10 +22,13 @@ namespace loc {
 class Localization;
 }
 
+class RVizPublisher;
+
 class LocSystem {
    public:
     struct Options {
         bool pub_tf_ = true;  // 是否发布tf
+        bool with_rviz_ = true;  // 是否启用RViz可视化
     };
 
     explicit LocSystem(Options options);
@@ -51,6 +54,7 @@ class LocSystem {
     Options options_;
 
     std::shared_ptr<loc::Localization> loc_ = nullptr;  // 定位接口
+    std::shared_ptr<RVizPublisher> rviz_pub_ = nullptr; // RViz 可视化
 
     std::atomic_bool loc_started_ = false;  // 是否开启定位
     std::atomic_bool map_loaded_ = false;   // 地图是否已载入
