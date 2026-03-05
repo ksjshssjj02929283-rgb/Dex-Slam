@@ -6,6 +6,7 @@
 #include "core/localization/localization.h"
 #include "io/yaml_io.h"
 #include "wrapper/ros_utils.h"
+#include "wrapper/rviz_publisher.h"
 
 namespace lightning {
 
@@ -63,9 +64,25 @@ bool LocSystem::Init(const std::string &yaml_path) {
             [this](const geometry_msgs::msg::TransformStamped &pose) { tf_broadcaster_->sendTransform(pose); });
     }
 
+    if (options_.with_rviz_) {
+        LOG(INFO) << "loc with RViz visualization";
+        RVizPublisher::Options rviz_opt;
+        rviz_opt.pub_current_scan = true;
+        rviz_opt.pub_local_map = true;
+        rviz_opt.pub_trajectory = true;
+        rviz_opt.pub_keyframes = false;
+        rviz_opt.pub_loop_edges = false;
+        rviz_pub_ = std::make_shared<RVizPublisher>(node_, rviz_opt);
+    }
+
     bool ret = loc_->Init(yaml_path, map_path);
     if (ret) {
         LOG(INFO) << "online loc node has been created.";
+        
+        // 将 RViz Publisher 传递给 Localization
+        if (rviz_pub_) {
+            loc_->SetRVizPublisher(rviz_pub_);
+        }
     }
 
     return ret;

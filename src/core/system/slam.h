@@ -8,6 +8,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <tf2_ros/transform_broadcaster.h>
 #include <string>
 
 #include "lightning/srv/save_map.hpp"
@@ -21,6 +22,7 @@ namespace lightning {
 
 class LaserMapping;  //  lio 前端
 class LoopClosing;   // 回环检测
+class RVizPublisher; // RViz 可视化
 
 namespace ui {
 class PangolinWindow;
@@ -45,6 +47,7 @@ class SlamSystem {
         bool with_loop_closing_ = true;     // 是否需要回环检测
         bool with_visualization_ = true;    // 是否需要可视化UI
         bool with_2dvisualization_ = true;  // 是否需要2D可视化UI
+        bool with_rviz_ = true;             // 是否需要RViz可视化
 
         bool step_on_kf_ = true;  // 是否在关键帧处暂停p
     };
@@ -89,11 +92,14 @@ class SlamSystem {
     std::shared_ptr<LoopClosing> lc_ = nullptr;         // 回环检测
     std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;  // ui
     std::shared_ptr<g2p5::G2P5> g2p5_ = nullptr;        // 栅格地图
+    std::shared_ptr<RVizPublisher> rviz_pub_ = nullptr; // RViz 可视化
 
     Keyframe::Ptr cur_kf_ = nullptr;
 
     /// 实时模式下的ros2 node, subscribers
     rclcpp::Node::SharedPtr node_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_ = nullptr;
+
     std::string imu_topic_;
     std::string cloud_topic_;
     std::string livox_topic_;

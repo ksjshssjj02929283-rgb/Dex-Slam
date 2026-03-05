@@ -59,7 +59,15 @@ include_directories(
 )
 
 install(DIRECTORY config
-        DESTINATION lib/${PROJECT_NAME}/
+        DESTINATION share/${PROJECT_NAME}/
+)
+
+install(DIRECTORY rviz
+        DESTINATION share/${PROJECT_NAME}/
+)
+
+install(DIRECTORY launch
+        DESTINATION share/${PROJECT_NAME}/
 )
 
 add_subdirectory(thirdparty/livox_ros_driver)

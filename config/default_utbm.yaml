@@ -61,6 +61,19 @@ system:
   map_path: ./data/new_map/
   pub_tf: true
 
+rviz:
+  enable: true
+  pub_current_scan: true
+  pub_local_map: true
+  pub_global_map: false
+  pub_trajectory: true
+  pub_keyframes: true
+  pub_loop_edges: true
+  local_map_downsample: 5
+  global_map_downsample: 10
+  scan_rate: 10.0
+  map_rate: 1.0
+
 loop_closing:
   loop_kf_gap: 20       # 每隔多少个关键帧检查一次
   min_id_interval: 20   # 被检查的关键帧ID间隔
