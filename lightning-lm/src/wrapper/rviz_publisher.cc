@@ -1,0 +1,419 @@
+#include "wrapper/rviz_publisher.h"
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/common/transforms.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
+namespace lightning {
+
+RVizPublisher::RVizPublisher(rclcpp::Node::SharedPtr node, Options options)
+    : node_(node), options_(options) {
+
+    if (options_.pub_current_scan) {
+        scan_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/lightning/cloud/current_scan", 10);
+    }
+
+    if (options_.pub_local_map) {
+        local_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/lightning/cloud/local_map", 10);
+    }
+
+    if (options_.pub_global_map) {
+        global_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/lightning/cloud/global_map", 10);
+    }
+
+    if (options_.pub_dynamic_map) {
+        dynamic_map_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/lightning/cloud/dynamic_map", 10);
+    }
+
+    if (options_.pub_trajectory) {
+        frontend_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
+            "/lightning/path/frontend", 10);
+        backend_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
+            "/lightning/path/backend", 10);
+        realtime_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
+            "/lightning/path/realtime", 10);
+        current_pose_pub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+            "/lightning/pose/current", 10);
+
+        frontend_path_.header.frame_id = "map";
+        backend_path_.header.frame_id = "map";
+        realtime_path_.header.frame_id = "map";
+    }
+
+    if (options_.pub_keyframes) {
+        keyframes_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/lightning/keyframes", 10);
+    }
+
+    if (options_.pub_loop_edges) {
+        loop_edges_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/lightning/loop_edges", 10);
+    }
+
+    timer_ = node_->create_wall_timer(
+        std::chrono::milliseconds(100),
+        std::bind(&RVizPublisher::PublishTimerCallback, this));
+}
+
+void RVizPublisher::UpdateCurrentScan(CloudPtr cloud, const SE3& pose) {
+    std::lock_guard<std::mutex> lock(mtx_scan_);
+    current_scan_ = cloud;
+    current_scan_pose_ = pose;
+    scan_updated_ = true;
+}
+
+void RVizPublisher::UpdateLocalMap(const std::map<int, CloudPtr>& cloud_map) {
+    std::lock_guard<std::mutex> lock(mtx_map_);
+    local_map_ = cloud_map;
+    map_updated_ = true;
+}
+
+void RVizPublisher::UpdateGlobalMap(const std::map<int, CloudPtr>& cloud_map) {
+    std::lock_guard<std::mutex> lock(mtx_map_);
+    global_map_ = cloud_map;
+    global_map_updated_ = true;
+}
+
+void RVizPublisher::UpdateDynamicMap(const std::map<int, CloudPtr>& cloud_map) {
+    std::lock_guard<std::mutex> lock(mtx_map_);
+    // 需要深拷贝，因为动态地图可能会被清空
+    dynamic_map_.clear();
+    for (const auto& [id, cloud] : cloud_map) {
+        if (cloud) {
+            CloudPtr c(new PointCloudType());
+            *c = *cloud;
+            dynamic_map_[id] = c;
+        }
+    }
+    dynamic_map_updated_ = true;
+}
+
+void RVizPublisher::UpdateKeyframes(const std::vector<Keyframe::Ptr>& kfs) {
+    std::lock_guard<std::mutex> lock(mtx_kf_);
+    keyframes_ = kfs;
+}
+
+void RVizPublisher::UpdateSingleKeyframe(Keyframe::Ptr kf) {
+    std::lock_guard<std::mutex> lock(mtx_kf_);
+    keyframes_.push_back(kf);
+}
+
+void RVizPublisher::UpdateLoopEdges(const std::vector<std::pair<int, int>>& edges) {
+    std::lock_guard<std::mutex> lock(mtx_kf_);
+    loop_edges_ = edges;
+}
+
+void RVizPublisher::UpdateFrontendPath(const SE3& pose) {
+    std::lock_guard<std::mutex> lock(mtx_path_);
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = node_->now();
+    pose_msg.header.frame_id = "map";
+
+    auto t = pose.translation();
+    auto q = pose.unit_quaternion();
+    pose_msg.pose.position.x = t.x();
+    pose_msg.pose.position.y = t.y();
+    pose_msg.pose.position.z = t.z();
+    pose_msg.pose.orientation.w = q.w();
+    pose_msg.pose.orientation.x = q.x();
+    pose_msg.pose.orientation.y = q.y();
+    pose_msg.pose.orientation.z = q.z();
+
+    frontend_path_.poses.push_back(pose_msg);
+    if (frontend_path_.poses.size() > 10000) {
+        frontend_path_.poses.erase(frontend_path_.poses.begin());
+    }
+}
+
+void RVizPublisher::UpdateBackendPath(const SE3& pose) {
+    std::lock_guard<std::mutex> lock(mtx_path_);
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = node_->now();
+    pose_msg.header.frame_id = "map";
+
+    auto t = pose.translation();
+    auto q = pose.unit_quaternion();
+    pose_msg.pose.position.x = t.x();
+    pose_msg.pose.position.y = t.y();
+    pose_msg.pose.position.z = t.z();
+    pose_msg.pose.orientation.w = q.w();
+    pose_msg.pose.orientation.x = q.x();
+    pose_msg.pose.orientation.y = q.y();
+    pose_msg.pose.orientation.z = q.z();
+
+    backend_path_.poses.push_back(pose_msg);
+    if (backend_path_.poses.size() > 10000) {
+        backend_path_.poses.erase(backend_path_.poses.begin());
+    }
+}
+
+void RVizPublisher::UpdateCurrentPose(const SE3& pose) {
+    std::lock_guard<std::mutex> lock(mtx_path_);
+    current_pose_ = pose;
+    pose_updated_ = true;
+    
+    // 更新实时轨迹
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = node_->now();
+    pose_msg.header.frame_id = "map";
+
+    auto t = pose.translation();
+    auto q = pose.unit_quaternion();
+    pose_msg.pose.position.x = t.x();
+    pose_msg.pose.position.y = t.y();
+    pose_msg.pose.position.z = t.z();
+    pose_msg.pose.orientation.w = q.w();
+    pose_msg.pose.orientation.x = q.x();
+    pose_msg.pose.orientation.y = q.y();
+    pose_msg.pose.orientation.z = q.z();
+
+    realtime_path_.poses.push_back(pose_msg);
+    if (realtime_path_.poses.size() > 10000) {
+        realtime_path_.poses.erase(realtime_path_.poses.begin());
+    }
+}
+
+void RVizPublisher::UpdateNavState(const NavState& state) {
+    std::lock_guard<std::mutex> lock(mtx_path_);
+    current_nav_state_ = state;
+    current_pose_ = state.GetPose();
+    pose_updated_ = true;
+}
+
+void RVizPublisher::PublishTimerCallback() {
+    auto now = node_->now();
+
+    // Publish current scan (变换到 map 坐标系)
+    if (options_.pub_current_scan && scan_updated_) {
+        std::lock_guard<std::mutex> lock(mtx_scan_);
+        if (current_scan_ && current_scan_->size() > 0 && scan_pub_) {
+            // 将 scan 从 body 坐标系变换到 map 坐标系
+            CloudPtr scan_in_map(new PointCloudType);
+            pcl::transformPointCloud(*current_scan_, *scan_in_map, current_scan_pose_.matrix().cast<float>());
+            
+            auto msg = ToRosCloud(scan_in_map, "map");
+            msg.header.stamp = now;
+            scan_pub_->publish(msg);
+        }
+        scan_updated_ = false;
+    }
+
+    // Publish local map (每个关键帧的点云变换到 map 坐标系)
+    if (options_.pub_local_map && map_updated_) {
+        std::lock_guard<std::mutex> lock(mtx_map_);
+        if (!local_map_.empty() && local_map_pub_) {
+            CloudPtr merged(new PointCloudType);
+            
+            // 注意：local_map_ 中存储的是 {keyframe_id: cloud_in_body} 的对应关系
+            // 需要从 keyframes_ 中获取对应的位姿，将点云变换到 map 坐标系
+            std::lock_guard<std::mutex> lock_kf(mtx_kf_);
+            for (const auto& [id, cloud] : local_map_) {
+                if (cloud && id < (int)keyframes_.size() && keyframes_[id]) {
+                    CloudPtr cloud_in_map(new PointCloudType);
+                    auto pose = keyframes_[id]->GetOptPose();
+                    pcl::transformPointCloud(*cloud, *cloud_in_map, pose.matrix().cast<float>());
+                    *merged += *cloud_in_map;
+                }
+            }
+
+            // Downsample
+            if (options_.local_map_downsample > 1 && merged->size() > 0) {
+                CloudPtr downsampled(new PointCloudType);
+                for (size_t i = 0; i < merged->size(); i += options_.local_map_downsample) {
+                    downsampled->push_back(merged->points[i]);
+                }
+                merged = downsampled;
+            }
+
+            auto msg = ToRosCloud(merged, "map");
+            msg.header.stamp = now;
+            local_map_pub_->publish(msg);
+        }
+        map_updated_ = false;
+    }
+
+    // Publish global map (每个关键帧的点云变换到 map 坐标系)
+    if (options_.pub_global_map && global_map_updated_) {
+        std::lock_guard<std::mutex> lock(mtx_map_);
+        if (!global_map_.empty() && global_map_pub_) {
+            CloudPtr merged(new PointCloudType);
+            
+            std::lock_guard<std::mutex> lock_kf(mtx_kf_);
+            for (const auto& [id, cloud] : global_map_) {
+                if (cloud && id < (int)keyframes_.size() && keyframes_[id]) {
+                    CloudPtr cloud_in_map(new PointCloudType);
+                    auto pose = keyframes_[id]->GetOptPose();
+                    pcl::transformPointCloud(*cloud, *cloud_in_map, pose.matrix().cast<float>());
+                    *merged += *cloud_in_map;
+                }
+            }
+
+            // Downsample
+            if (options_.global_map_downsample > 1 && merged->size() > 0) {
+                CloudPtr downsampled(new PointCloudType);
+                for (size_t i = 0; i < merged->size(); i += options_.global_map_downsample) {
+                    downsampled->push_back(merged->points[i]);
+                }
+                merged = downsampled;
+            }
+
+            auto msg = ToRosCloud(merged, "map");
+            msg.header.stamp = now;
+            global_map_pub_->publish(msg);
+        }
+        global_map_updated_ = false;
+    }
+
+    // Publish dynamic map (每个关键帧的点云变换到 map 坐标系)
+    if (options_.pub_dynamic_map && dynamic_map_updated_) {
+        std::lock_guard<std::mutex> lock(mtx_map_);
+        if (!dynamic_map_.empty() && dynamic_map_pub_) {
+            CloudPtr merged(new PointCloudType);
+            
+            std::lock_guard<std::mutex> lock_kf(mtx_kf_);
+            for (const auto& [id, cloud] : dynamic_map_) {
+                if (cloud && id < (int)keyframes_.size() && keyframes_[id]) {
+                    CloudPtr cloud_in_map(new PointCloudType);
+                    auto pose = keyframes_[id]->GetOptPose();
+                    pcl::transformPointCloud(*cloud, *cloud_in_map, pose.matrix().cast<float>());
+                    *merged += *cloud_in_map;
+                }
+            }
+
+            // Downsample
+            if (options_.dynamic_map_downsample > 1 && merged->size() > 0) {
+                CloudPtr downsampled(new PointCloudType);
+                for (size_t i = 0; i < merged->size(); i += options_.dynamic_map_downsample) {
+                    downsampled->push_back(merged->points[i]);
+                }
+                merged = downsampled;
+            }
+
+            auto msg = ToRosCloud(merged, "map");
+            msg.header.stamp = now;
+            dynamic_map_pub_->publish(msg);
+        }
+        dynamic_map_updated_ = false;
+    }
+
+    // Publish trajectories
+    if (options_.pub_trajectory) {
+        std::lock_guard<std::mutex> lock(mtx_path_);
+        if (frontend_path_pub_ && !frontend_path_.poses.empty()) {
+            frontend_path_.header.stamp = now;
+            frontend_path_pub_->publish(frontend_path_);
+        }
+        if (backend_path_pub_ && !backend_path_.poses.empty()) {
+            backend_path_.header.stamp = now;
+            backend_path_pub_->publish(backend_path_);
+        }
+        if (realtime_path_pub_ && !realtime_path_.poses.empty()) {
+            realtime_path_.header.stamp = now;
+            realtime_path_pub_->publish(realtime_path_);
+        }
+        
+        // Publish current pose
+        if (current_pose_pub_ && pose_updated_) {
+            geometry_msgs::msg::PoseStamped pose_msg;
+            pose_msg.header.stamp = now;
+            pose_msg.header.frame_id = "map";
+            
+            auto t = current_pose_.translation();
+            auto q = current_pose_.unit_quaternion();
+            pose_msg.pose.position.x = t.x();
+            pose_msg.pose.position.y = t.y();
+            pose_msg.pose.position.z = t.z();
+            pose_msg.pose.orientation.w = q.w();
+            pose_msg.pose.orientation.x = q.x();
+            pose_msg.pose.orientation.y = q.y();
+            pose_msg.pose.orientation.z = q.z();
+            
+            current_pose_pub_->publish(pose_msg);
+            pose_updated_ = false;
+        }
+    }
+
+    // Publish keyframes
+    if (options_.pub_keyframes && keyframes_pub_) {
+        std::lock_guard<std::mutex> lock(mtx_kf_);
+        if (!keyframes_.empty()) {
+            visualization_msgs::msg::MarkerArray markers;
+            for (size_t i = 0; i < keyframes_.size(); ++i) {
+                visualization_msgs::msg::Marker marker;
+                marker.header.frame_id = "map";
+                marker.header.stamp = now;
+                marker.ns = "keyframes";
+                marker.id = i;
+                marker.type = visualization_msgs::msg::Marker::SPHERE;
+                marker.action = visualization_msgs::msg::Marker::ADD;
+
+                auto t = keyframes_[i]->GetOptPose().translation();
+                marker.pose.position.x = t.x();
+                marker.pose.position.y = t.y();
+                marker.pose.position.z = t.z();
+                marker.pose.orientation.w = 1.0;
+
+                marker.scale.x = 0.3;
+                marker.scale.y = 0.3;
+                marker.scale.z = 0.3;
+                marker.color.r = 1.0;
+                marker.color.g = 0.0;
+                marker.color.b = 0.0;
+                marker.color.a = 1.0;
+
+                markers.markers.push_back(marker);
+            }
+            keyframes_pub_->publish(markers);
+        }
+    }
+
+    // Publish loop edges
+    if (options_.pub_loop_edges && loop_edges_pub_) {
+        std::lock_guard<std::mutex> lock(mtx_kf_);
+        if (!loop_edges_.empty() && !keyframes_.empty()) {
+            visualization_msgs::msg::MarkerArray markers;
+            for (size_t i = 0; i < loop_edges_.size(); ++i) {
+                auto [id1, id2] = loop_edges_[i];
+                if (id1 >= (int)keyframes_.size() || id2 >= (int)keyframes_.size()) continue;
+
+                visualization_msgs::msg::Marker marker;
+                marker.header.frame_id = "map";
+                marker.header.stamp = now;
+                marker.ns = "loop_edges";
+                marker.id = i;
+                marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+                marker.action = visualization_msgs::msg::Marker::ADD;
+
+                geometry_msgs::msg::Point p1, p2;
+                auto t1 = keyframes_[id1]->GetOptPose().translation();
+                auto t2 = keyframes_[id2]->GetOptPose().translation();
+                p1.x = t1.x(); p1.y = t1.y(); p1.z = t1.z();
+                p2.x = t2.x(); p2.y = t2.y(); p2.z = t2.z();
+
+                marker.points.push_back(p1);
+                marker.points.push_back(p2);
+
+                marker.scale.x = 0.05;
+                marker.color.r = 0.0;
+                marker.color.g = 1.0;
+                marker.color.b = 0.0;
+                marker.color.a = 0.8;
+
+                markers.markers.push_back(marker);
+            }
+            loop_edges_pub_->publish(markers);
+        }
+    }
+}
+
+sensor_msgs::msg::PointCloud2 RVizPublisher::ToRosCloud(CloudPtr cloud, const std::string& frame_id) {
+    sensor_msgs::msg::PointCloud2 msg;
+    pcl::toROSMsg(*cloud, msg);
+    msg.header.frame_id = frame_id;
+    return msg;
+}
+
+}  // namespace lightning
