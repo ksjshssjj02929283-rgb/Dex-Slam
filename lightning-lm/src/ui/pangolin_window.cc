@@ -10,6 +10,7 @@ bool PangolinWindow::Init() {
     impl_->kf_result_need_update_.store(false);
     impl_->lidarloc_need_update_.store(false);
     impl_->current_scan_need_update_.store(false);
+    impl_->loop_debug_need_update_.store(false);
 
     bool inited = impl_->Init();
     // 创建渲染线程
@@ -85,6 +86,39 @@ void PangolinWindow::UpdateScan(CloudPtr cloud, const SE3& pose) {
 void PangolinWindow::UpdateKF(std::shared_ptr<Keyframe> kf) {
     UL lock(impl_->mtx_current_scan_);
     impl_->all_keyframes_.emplace_back(kf);
+}
+
+void PangolinWindow::UpdateLoopDebug(CloudPtr submap, CloudPtr scan, CloudPtr aligned,
+                                     const SE3& submap_pose, const SE3& scan_pose, const SE3& aligned_pose,
+                                     double ndt_score) {
+    std::lock_guard<std::mutex> lock(impl_->mtx_loop_info_);
+    
+    // 深拷贝点云数据
+    if (submap && !submap->empty()) {
+        impl_->loop_submap_ = std::make_shared<PointCloudType>(*submap);
+        impl_->loop_submap_pose_ = submap_pose;
+    }
+    
+    if (scan && !scan->empty()) {
+        impl_->loop_scan_ = std::make_shared<PointCloudType>(*scan);
+        impl_->loop_scan_pose_ = scan_pose;
+    }
+    
+    if (aligned && !aligned->empty()) {
+        impl_->loop_aligned_ = std::make_shared<PointCloudType>(*aligned);
+        impl_->loop_aligned_pose_ = aligned_pose;
+    }
+    
+    impl_->loop_ndt_score_ = ndt_score;
+    impl_->loop_debug_need_update_.store(true);
+}
+
+void PangolinWindow::UpdateLoopEdges(const std::vector<std::pair<int, int>>& loop_edges) {
+    std::lock_guard<std::mutex> lock(impl_->mtx_loop_info_);
+    impl_->loop_info_.clear();
+    for (const auto& edge : loop_edges) {
+        impl_->loop_info_.push_back(edge);
+    }
 }
 
 void PangolinWindow::SetCurrentScanSize(int current_scan_size) { impl_->max_size_of_current_scan_ = current_scan_size; }
