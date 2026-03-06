@@ -71,6 +71,7 @@ class PangolinWindowImpl {
     std::atomic<bool> kf_result_need_update_;      // 卡尔曼滤波结果
     std::atomic<bool> current_scan_need_update_;   // 更新当前扫描
     std::atomic<bool> lidarloc_need_update_;       // 雷达位置？
+    std::atomic<bool> loop_debug_need_update_;     // 回环调试数据更新
 
     pcl::PointCloud<PointType>::Ptr current_scan_ = nullptr;  // 当前scan
     SE3 newest_frontend_pose_;                                // 最新pose
@@ -78,6 +79,15 @@ class PangolinWindowImpl {
     SE3 current_scan_pose_;                                   // 当前scan对应的pose or Twb/Twi
     std::deque<std::pair<int, int>> loop_info_;
     std::vector<LoopCandidate> new_loop_candidate_;
+    
+    // 回环调试点云
+    CloudPtr loop_submap_;
+    CloudPtr loop_scan_;
+    CloudPtr loop_aligned_;
+    SE3 loop_submap_pose_;
+    SE3 loop_scan_pose_;
+    SE3 loop_aligned_pose_;
+    double loop_ndt_score_;
 
     // 地图点云
     std::map<int, CloudPtr> cloud_global_map_;
@@ -111,6 +121,7 @@ class PangolinWindowImpl {
     bool UpdateDynamicMap();
     bool UpdateState();
     bool UpdateCurrentScan();
+    bool UpdateLoopDebug();  // 更新回环调试信息
 
     void RenderLabels();
 
@@ -147,6 +158,11 @@ class PangolinWindowImpl {
     std::shared_ptr<ui::UiCloud> current_scan_ui_;              // current scan
     std::deque<std::shared_ptr<ui::UiCloud>> scans_;            // current scan 保留的队列
     std::deque<std::pair<int, int>> loop_info_ui_;
+    
+    // 回环调试点云UI
+    std::shared_ptr<ui::UiCloud> loop_submap_ui_;
+    std::shared_ptr<ui::UiCloud> loop_scan_ui_;
+    std::shared_ptr<ui::UiCloud> loop_aligned_ui_;
 
     // trajectory
     std::shared_ptr<ui::UiTrajectory> traj_scans_ = nullptr;         // 激光扫描的轨迹

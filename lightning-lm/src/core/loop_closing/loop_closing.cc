@@ -77,6 +77,9 @@ void LoopClosing::HandleKF(Keyframe::Ptr kf) {
     cur_kf_ = kf;
     all_keyframes_.emplace_back(kf);
 
+    // 清空上一次的调试数据
+    loop_debug_data_.valid = false;
+
     // 检测回环候选
     DetectLoopCandidates();
 
@@ -243,6 +246,24 @@ void LoopClosing::ComputeForCandidate(lightning::LoopCandidate& c) {
     Vec3d t = T.block<3, 1>(0, 3);
 
     c.Tij_ = kf1->GetLIOPose().inverse() * SE3(q, t);
+
+    // 保存调试数据（包括submap、原始scan和配准后的点云）
+    loop_debug_data_.loop_submap = submap_kf1;
+    loop_debug_data_.current_scan = submap_kf2;
+    loop_debug_data_.aligned_scan = output;  // 配准后的点云
+    loop_debug_data_.loop_kf_pose = kf1->GetLIOPose();
+    loop_debug_data_.current_kf_pose = kf2->GetLIOPose();
+    loop_debug_data_.aligned_pose = SE3(q, t);  // 配准后的位姿
+    loop_debug_data_.loop_kf_id = c.idx1_;
+    loop_debug_data_.current_kf_id = c.idx2_;
+    loop_debug_data_.ndt_score = c.ndt_score_;
+    loop_debug_data_.valid = true;
+    
+    LOG(INFO) << "Loop debug data saved: kf " << c.idx1_ << " -> " << c.idx2_ 
+              << ", score: " << c.ndt_score_ 
+              << ", submap size: " << submap_kf1->size() 
+              << ", scan size: " << submap_kf2->size()
+              << ", aligned size: " << output->size();
 
     // pcl::io::savePCDFileBinaryCompressed(
     //     "./data/lc_" + std::to_string(c.idx1_) + "_" + std::to_string(c.idx2_) + "_out.pcd", *output);
