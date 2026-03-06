@@ -67,6 +67,24 @@ class LoopClosing {
         return edges;
     }
 
+    /// 获取最新的回环调试数据（用于可视化）
+    struct LoopDebugData {
+        CloudPtr loop_submap;          // 回环帧构建的submap（世界坐标系）
+        CloudPtr current_scan;         // 当前帧的scan（body坐标系）
+        CloudPtr aligned_scan;         // 配准后的scan（世界坐标系）
+        SE3 loop_kf_pose;              // 回环关键帧的位姿
+        SE3 current_kf_pose;           // 当前关键帧的位姿
+        SE3 aligned_pose;              // 配准后的位姿
+        int loop_kf_id;                // 回环关键帧ID
+        int current_kf_id;             // 当前关键帧ID
+        double ndt_score;              // NDT匹配得分
+        bool valid;                    // 是否有效
+        
+        LoopDebugData() : valid(false), ndt_score(0.0) {}
+    };
+    
+    LoopDebugData GetLoopDebugData() const { return loop_debug_data_; }
+
    protected:
     void HandleKF(Keyframe::Ptr kf);
 
@@ -100,6 +118,8 @@ class LoopClosing {
     std::vector<std::shared_ptr<miao::EdgeSE3>> edge_loops_;
 
     LoopClosedCallback loop_cb_;
+    
+    mutable LoopDebugData loop_debug_data_;  // 回环调试数据
 };
 
 }  // namespace lightning

@@ -48,6 +48,14 @@ class PangolinWindow {
 
     void UpdateKF(std::shared_ptr<Keyframe> kf);
 
+    /// 更新回环调试信息（submap、scan、aligned）
+    void UpdateLoopDebug(CloudPtr submap, CloudPtr scan, CloudPtr aligned, 
+                        const SE3& submap_pose, const SE3& scan_pose, const SE3& aligned_pose, 
+                        double ndt_score);
+
+    /// 更新回环边信息
+    void UpdateLoopEdges(const std::vector<std::pair<int, int>>& loop_edges);
+
     /// 等待显示线程结束，并释放资源
     void Quit();
 
