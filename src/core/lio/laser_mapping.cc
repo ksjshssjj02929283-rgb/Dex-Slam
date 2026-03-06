@@ -303,11 +303,11 @@ void LaserMapping::MakeKF() {
 
     kf->SetState(state_point_);
 
-    LOG(INFO) << "LIO: create kf " << kf->GetID() << ", state: " << state_point_.pos_.transpose()
-              << ", rot: " << state_point_.rot_.log().transpose()
-              << ", kf opt pose: " << kf->GetOptPose().translation().transpose()
-              << ", lio pose: " << kf->GetLIOPose().translation().transpose() << ", time: " << std::setprecision(14)
-              << state_point_.timestamp_;
+    // LOG(INFO) << "LIO: create kf " << kf->GetID() << ", state: " << state_point_.pos_.transpose()
+    //           << ", rot: " << state_point_.rot_.log().transpose()
+    //           << ", kf opt pose: " << kf->GetOptPose().translation().transpose()
+    //           << ", lio pose: " << kf->GetLIOPose().translation().transpose() << ", time: " << std::setprecision(14)
+    //           << state_point_.timestamp_;
 
     if (options_.is_in_slam_mode_) {
         all_keyframes_.emplace_back(kf);
@@ -327,8 +327,8 @@ void LaserMapping::ProcessPointCloud2(const sensor_msgs::msg::PointCloud2::Share
                 lidar_buffer_.clear();
             }
 
-            LOG(INFO) << "get cloud at " << std::setprecision(14) << timestamp
-                      << ", latest imu: " << last_timestamp_imu_;
+            // LOG(INFO) << "get cloud at " << std::setprecision(14) << timestamp
+            //           << ", latest imu: " << last_timestamp_imu_;
 
             CloudPtr cloud(new PointCloudType());
             preprocess_->Process(msg, cloud);

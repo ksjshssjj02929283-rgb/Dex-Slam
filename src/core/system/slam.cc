@@ -302,6 +302,25 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
 
     if (ui_) {
         ui_->UpdateKF(cur_kf_);
+        
+        // 更新UI的回环调试信息
+        if (options_.with_loop_closing_) {
+            // 更新回环边
+            ui_->UpdateLoopEdges(lc_->GetLoopEdges());
+            
+            // 更新回环调试点云
+            auto loop_debug_data = lc_->GetLoopDebugData();
+            if (loop_debug_data.valid) {
+                ui_->UpdateLoopDebug(
+                    loop_debug_data.loop_submap,
+                    loop_debug_data.current_scan,
+                    loop_debug_data.aligned_scan,
+                    loop_debug_data.loop_kf_pose,
+                    loop_debug_data.current_kf_pose,
+                    loop_debug_data.aligned_pose,
+                    loop_debug_data.ndt_score);
+            }
+        }
     }
 
     if (rviz_pub_) {
@@ -311,6 +330,19 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
         rviz_pub_->UpdateKeyframes(lio_->GetAllKeyframes());
         if (options_.with_loop_closing_) {
             rviz_pub_->UpdateLoopEdges(lc_->GetLoopEdges());
+            
+            // 更新回环调试点云（包含submap、原始scan和配准结果）
+            auto loop_debug_data = lc_->GetLoopDebugData();
+            if (loop_debug_data.valid) {
+                rviz_pub_->UpdateLoopDebugClouds(
+                    loop_debug_data.loop_submap,
+                    loop_debug_data.current_scan,
+                    loop_debug_data.aligned_scan,
+                    loop_debug_data.loop_kf_pose,
+                    loop_debug_data.current_kf_pose,
+                    loop_debug_data.aligned_pose,
+                    loop_debug_data.ndt_score);
+            }
         }
 
         // 构建局部地图（最近10个关键帧）
@@ -388,6 +420,25 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
 
     if (ui_) {
         ui_->UpdateKF(cur_kf_);
+        
+        // 更新UI的回环调试信息
+        if (options_.with_loop_closing_) {
+            // 更新回环边
+            ui_->UpdateLoopEdges(lc_->GetLoopEdges());
+            
+            // 更新回环调试点云
+            auto loop_debug_data = lc_->GetLoopDebugData();
+            if (loop_debug_data.valid) {
+                ui_->UpdateLoopDebug(
+                    loop_debug_data.loop_submap,
+                    loop_debug_data.current_scan,
+                    loop_debug_data.aligned_scan,
+                    loop_debug_data.loop_kf_pose,
+                    loop_debug_data.current_kf_pose,
+                    loop_debug_data.aligned_pose,
+                    loop_debug_data.ndt_score);
+            }
+        }
     }
 
     if (rviz_pub_) {
@@ -397,6 +448,19 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
         rviz_pub_->UpdateKeyframes(lio_->GetAllKeyframes());
         if (options_.with_loop_closing_) {
             rviz_pub_->UpdateLoopEdges(lc_->GetLoopEdges());
+            
+            // 更新回环调试点云（包含submap、原始scan和配准结果）
+            auto loop_debug_data = lc_->GetLoopDebugData();
+            if (loop_debug_data.valid) {
+                rviz_pub_->UpdateLoopDebugClouds(
+                    loop_debug_data.loop_submap,
+                    loop_debug_data.current_scan,
+                    loop_debug_data.aligned_scan,
+                    loop_debug_data.loop_kf_pose,
+                    loop_debug_data.current_kf_pose,
+                    loop_debug_data.aligned_pose,
+                    loop_debug_data.ndt_score);
+            }
         }
 
         // 构建局部地图（最近10个关键帧）

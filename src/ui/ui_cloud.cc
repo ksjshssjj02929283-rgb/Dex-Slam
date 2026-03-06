@@ -48,7 +48,7 @@ void UiCloud::SetCloud(CloudPtr cloud, const SE3& pose) {
 }
 
 void UiCloud::Render() {
-    // glPointSize(2.0);
+    glPointSize(1.0);  // 设置点大小为1.0，使点云更精细
 
     glBegin(GL_POINTS);
 

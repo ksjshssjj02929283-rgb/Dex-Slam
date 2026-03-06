@@ -162,6 +162,59 @@ bool PangolinWindowImpl::UpdateCurrentScan() {
     return true;
 }
 
+bool PangolinWindowImpl::UpdateLoopDebug() {
+    std::lock_guard<std::mutex> lock(mtx_loop_info_);
+    
+    bool has_update = false;
+    
+    // 检查是否需要更新回环调试点云
+    if (loop_debug_need_update_.load()) {
+        // 更新回环submap点云 (鲜红色) - 点云已经在map坐标系下
+        if (loop_submap_ && !loop_submap_->empty()) {
+            loop_submap_ui_ = std::make_shared<ui::UiCloud>();
+            loop_submap_ui_->SetCloud(loop_submap_, SE3());  // 点云已在map坐标系
+            loop_submap_ui_->SetCustomColor(Vec4f(1.0, 0.0, 0.0, 1.0));  // 鲜红色，完全不透明
+            loop_submap_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
+        }
+        
+        // 更新回环scan点云 (鲜黄色) - 使用当前帧的位姿
+        if (loop_scan_ && !loop_scan_->empty()) {
+            loop_scan_ui_ = std::make_shared<ui::UiCloud>();
+            loop_scan_ui_->SetCloud(loop_scan_, loop_scan_pose_);  // 使用current_kf_pose
+            loop_scan_ui_->SetCustomColor(Vec4f(1.0, 1.0, 0.0, 1.0));  // 鲜黄色，完全不透明
+            loop_scan_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
+        }
+        
+        // 更新回环aligned点云 (鲜绿色) - NDT输出的点云已经变换到map坐标系
+        if (loop_aligned_ && !loop_aligned_->empty()) {
+            loop_aligned_ui_ = std::make_shared<ui::UiCloud>();
+            loop_aligned_ui_->SetCloud(loop_aligned_, SE3());  // NDT输出已在map坐标系
+            loop_aligned_ui_->SetCustomColor(Vec4f(0.0, 0.0, 1.0, 1.0));  // 蓝色，完全不透明
+            loop_aligned_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
+        }
+        
+        loop_debug_need_update_.store(false);
+        has_update = true;
+    }
+    
+    // 累积所有回环边（而不是覆盖），保持历史回环边一直显示
+    for (const auto& edge : loop_info_) {
+        // 检查是否已存在，避免重复添加
+        bool exists = false;
+        for (const auto& existing_edge : loop_info_ui_) {
+            if (existing_edge.first == edge.first && existing_edge.second == edge.second) {
+                exists = true;
+                break;
+            }
+        }
+        if (!exists) {
+            loop_info_ui_.push_back(edge);
+        }
+    }
+    
+    return has_update;
+}
+
 bool PangolinWindowImpl::UpdateState() {
     if (!kf_result_need_update_.load()) {
         return false;
@@ -223,11 +276,23 @@ void PangolinWindowImpl::DrawAll() {
         UL lock(mtx_current_scan_);
 
         if (all_keyframes_.size() > 1) {
+            
+            // 绘制关键帧点 (紫色球体)
+            glPointSize(8.0);
+            glBegin(GL_POINTS);
+            glColor3f(0.5, 0.0, 0.5);  // 紫色
+            
+            for (const auto& kf : all_keyframes_) {
+                auto p = kf->GetOptPose().translation();
+                glVertex3f(p[0], p[1], p[2]);
+            }
+            
+            glEnd();
 
-            /// 闭环后的轨迹
-            glLineWidth(5.0);
+            /// 闭环后的轨迹线
+            glLineWidth(2.0);
             glBegin(GL_LINE_STRIP);
-            glColor3f(0.5, 0.0, 0.5);
+            glColor3f(0.5, 0.0, 0.5);  // 紫色
 
             for (int i = 0; i < all_keyframes_.size() - 1; ++i) {
                 auto p1 = all_keyframes_[i]->GetOptPose().translation();
@@ -240,6 +305,50 @@ void PangolinWindowImpl::DrawAll() {
             glEnd();
         }
     }
+    
+    // 绘制回环边 (绿色线条) - 先复制数据再绘制，避免长时间持锁
+    std::deque<std::pair<int, int>> loop_edges_copy;
+    {
+        std::lock_guard<std::mutex> lock_loop(mtx_loop_info_);
+        loop_edges_copy = loop_info_ui_;
+    }
+    
+    if (!loop_edges_copy.empty() && all_keyframes_.size() > 1) {
+        UL lock_kf(mtx_current_scan_);
+        
+        glLineWidth(3.0);
+        glBegin(GL_LINES);
+        glColor3f(0.0, 1.0, 0.0);  // 绿色
+        
+        for (const auto& loop_pair : loop_edges_copy) {
+            IdType id1 = loop_pair.first;
+            IdType id2 = loop_pair.second;
+            
+            // 检查索引有效性
+            if (id1 < all_keyframes_.size() && id2 < all_keyframes_.size()) {
+                auto p1 = all_keyframes_[id1]->GetOptPose().translation();
+                auto p2 = all_keyframes_[id2]->GetOptPose().translation();
+                
+                glVertex3f(p1[0], p1[1], p1[2]);
+                glVertex3f(p2[0], p2[1], p2[2]);
+            }
+        }
+        
+        glEnd();
+    }
+    
+    // 渲染回环调试点云 (最后渲染，显示在最上层，使用更大的点)
+    glPointSize(2.5);  // 增大回环点云的点尺寸
+    if (loop_submap_ui_) {
+        loop_submap_ui_->Render();
+    }
+    if (loop_scan_ui_) {
+        loop_scan_ui_->Render();
+    }
+    if (loop_aligned_ui_) {
+        loop_aligned_ui_->Render();
+    }
+    glPointSize(1.0);  // 恢复默认点尺寸
 
     // 文字
     RenderLabels();
@@ -253,6 +362,7 @@ void PangolinWindowImpl::RenderClouds() {
     UpdateDynamicMap();
     UpdateState();
     UpdateCurrentScan();
+    UpdateLoopDebug();  // 更新回环调试信息
 
     // 绘制
     pangolin::Display(dis_3d_main_name_).Activate(s_cam_main_);
