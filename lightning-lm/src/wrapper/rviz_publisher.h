@@ -42,6 +42,9 @@ public:
     void UpdateKeyframes(const std::vector<Keyframe::Ptr>& kfs);
     void UpdateSingleKeyframe(Keyframe::Ptr kf);  // 单个关键帧更新
     void UpdateLoopEdges(const std::vector<std::pair<int, int>>& edges);
+    void UpdateLoopDebugClouds(CloudPtr loop_submap, CloudPtr current_scan, CloudPtr aligned_scan,
+                               const SE3& loop_pose, const SE3& current_pose, const SE3& aligned_pose,
+                               double ndt_score);  // 回环调试点云（包含配准结果）
     void UpdateFrontendPath(const SE3& pose);
     void UpdateBackendPath(const SE3& pose);
     void UpdateCurrentPose(const SE3& pose);  // 实时位姿
@@ -64,6 +67,9 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr keyframes_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr loop_edges_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_submap_pub_;      // 回环submap
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_scan_pub_;        // 回环当前scan
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_aligned_pub_;     // 配准后的scan
 
     rclcpp::TimerBase::SharedPtr timer_;
 
@@ -71,6 +77,7 @@ private:
     std::mutex mtx_map_;
     std::mutex mtx_path_;
     std::mutex mtx_kf_;
+    std::mutex mtx_loop_debug_;  // 回环调试数据锁
 
     CloudPtr current_scan_;
     SE3 current_scan_pose_;
@@ -84,12 +91,22 @@ private:
     nav_msgs::msg::Path realtime_path_;  // 实时轨迹
     std::vector<Keyframe::Ptr> keyframes_;
     std::vector<std::pair<int, int>> loop_edges_;
+    
+    // 回环调试数据
+    CloudPtr loop_submap_;
+    CloudPtr loop_scan_;
+    CloudPtr loop_aligned_;
+    SE3 loop_submap_pose_;
+    SE3 loop_scan_pose_;
+    SE3 loop_aligned_pose_;
+    double loop_ndt_score_;
 
     bool scan_updated_ = false;
     bool map_updated_ = false;
     bool global_map_updated_ = false;
     bool dynamic_map_updated_ = false;
     bool pose_updated_ = false;
+    bool loop_debug_updated_ = false;  // 回环调试数据更新标志
 };
 
 }  // namespace lightning
