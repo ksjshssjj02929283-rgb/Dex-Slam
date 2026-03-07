@@ -53,6 +53,14 @@ RVizPublisher::RVizPublisher(rclcpp::Node::SharedPtr node, Options options)
             "/lightning/loop_edges", 10);
     }
 
+    // 回环调试点云发布器（始终创建，用于调试）
+    loop_submap_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/lightning/loop/submap", 10);
+    loop_scan_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/lightning/loop/scan", 10);
+    loop_aligned_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/lightning/loop/aligned", 10);
+
     timer_ = node_->create_wall_timer(
         std::chrono::milliseconds(100),
         std::bind(&RVizPublisher::PublishTimerCallback, this));
@@ -104,6 +112,35 @@ void RVizPublisher::UpdateSingleKeyframe(Keyframe::Ptr kf) {
 void RVizPublisher::UpdateLoopEdges(const std::vector<std::pair<int, int>>& edges) {
     std::lock_guard<std::mutex> lock(mtx_kf_);
     loop_edges_ = edges;
+}
+
+void RVizPublisher::UpdateLoopDebugClouds(CloudPtr loop_submap, CloudPtr current_scan, CloudPtr aligned_scan,
+                                          const SE3& loop_pose, const SE3& current_pose, const SE3& aligned_pose,
+                                          double ndt_score) {
+    std::lock_guard<std::mutex> lock(mtx_loop_debug_);
+    
+    if (loop_submap && !loop_submap->empty() && 
+        current_scan && !current_scan->empty() &&
+        aligned_scan && !aligned_scan->empty()) {
+        // 深拷贝点云
+        loop_submap_ = CloudPtr(new PointCloudType());
+        loop_scan_ = CloudPtr(new PointCloudType());
+        loop_aligned_ = CloudPtr(new PointCloudType());
+        *loop_submap_ = *loop_submap;
+        *loop_scan_ = *current_scan;
+        *loop_aligned_ = *aligned_scan;
+        
+        loop_submap_pose_ = loop_pose;
+        loop_scan_pose_ = current_pose;
+        loop_aligned_pose_ = aligned_pose;
+        loop_ndt_score_ = ndt_score;
+        loop_debug_updated_ = true;
+        
+        LOG(INFO) << "RViz: Updated loop debug clouds, submap: " << loop_submap_->size() 
+                  << " pts, scan: " << loop_scan_->size() 
+                  << " pts, aligned: " << loop_aligned_->size()
+                  << " pts, NDT score: " << ndt_score;
+    }
 }
 
 void RVizPublisher::UpdateFrontendPath(const SE3& pose) {
@@ -406,6 +443,40 @@ void RVizPublisher::PublishTimerCallback() {
             }
             loop_edges_pub_->publish(markers);
         }
+    }
+
+    // 发布回环调试点云
+    if (loop_debug_updated_) {
+        std::lock_guard<std::mutex> lock(mtx_loop_debug_);
+        
+        if (loop_submap_ && !loop_submap_->empty()) {
+            // submap已经在世界坐标系下，直接发布
+            auto msg = ToRosCloud(loop_submap_, "map");
+            msg.header.stamp = now;
+            loop_submap_pub_->publish(msg);
+        }
+        
+        if (loop_scan_ && !loop_scan_->empty()) {
+            // 将当前scan从body坐标系转换到map坐标系
+            CloudPtr scan_in_map(new PointCloudType());
+            pcl::transformPointCloud(*loop_scan_, *scan_in_map, loop_scan_pose_.matrix());
+            auto msg = ToRosCloud(scan_in_map, "map");
+            msg.header.stamp = now;
+            loop_scan_pub_->publish(msg);
+        }
+        
+        if (loop_aligned_ && !loop_aligned_->empty()) {
+            // 将配准后的scan从body坐标系转换到map坐标系（使用配准后的位姿）
+            CloudPtr aligned_in_map(new PointCloudType());
+            pcl::transformPointCloud(*loop_aligned_, *aligned_in_map, loop_aligned_pose_.matrix());
+            auto msg = ToRosCloud(aligned_in_map, "map");
+            msg.header.stamp = now;
+            loop_aligned_pub_->publish(msg);
+            
+            LOG(INFO) << "RViz: Published loop debug clouds with NDT score: " << loop_ndt_score_;
+        }
+        
+        loop_debug_updated_ = false;
     }
 }
 
