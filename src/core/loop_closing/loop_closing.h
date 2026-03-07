@@ -12,6 +12,10 @@
 #include "core/graph/optimizer.h"
 #include "core/types/edge_se3.h"
 
+#include <map>
+#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/point_types.h>
+
 namespace lightning {
 
 /**
@@ -27,18 +31,41 @@ class LoopClosing {
 
         int loop_kf_gap_ = 20;       // 每隔多少个关键帧检查一次
         int min_id_interval_ = 20;   // 被检查的关键帧ID间隔
-        int closest_id_th_ = 50;     // 历史关键帧与当前帧的ID间隔
-        double max_range_ = 30.0;    // 候选帧的最大距离
-        double ndt_score_th_ = 1.0;  // ndt位姿分值
+        int closest_id_th_ = 50;     // 历史关键帧与当前帧的ID间隔（已由时间差过滤取代，保留兼容）
+        double max_range_ = 30.0;    // KD-Tree 搜索半径（单位：米）
+        double ndt_score_th_ = 1.0;  // NDT 配准通过阈值（TransformationProbability）
+
+        // LIO-SAM 风格：时间差过滤阈值（秒）
+        // 历史候选帧与当前帧的时间差必须超过该值，避免检测同一轨迹段的近邻帧
+        double history_search_time_diff_ = 30.0;
+
+        // ---- LIO-SAM 风格子地图构建参数 ----
+        // 对应 LIO-SAM historyKeyframeSearchNum（前后各取 N 帧，共 2N+1 帧）
+        int history_keyframe_search_num_ = 25;
+        // 子地图 VoxelGrid 叶大小（对应 LIO-SAM mappingSurfLeafSize = 0.4m）
+        float icp_filter_size_ = 0.4f;
+        // 当前帧（source）最小点数，不足则放弃本次配准
+        int min_cur_cloud_size_ = 300;
+        // 历史子地图（target）最小点数，不足则放弃本次配准
+        int min_prev_cloud_size_ = 1000;
+
+        // 每次触发时最多处理的候选帧数（超出部分按距离最近优先截取）
+        int max_candidates_per_check_ = 3;
+
+        // ---- ICP 精匹配参数（NDT 后进行细化）----
+        // ICP fitness score 阈值（均方点距，越小越精，超出则认为配准失败）
+        float icp_fitness_score_th_ = 0.3f;
+        // ICP 最大点对点对应距离（米），NDT 粗对齐后 1.5m 足够
+        float icp_max_correspondence_dist_ = 1.5f;
 
         /// 图优化权重
-        double motion_trans_noise_ = 0.1;               // 位移权重
-        double motion_rot_noise_ = 3.0 * M_PI / 180.0;  // 旋转权重
+        double motion_trans_noise_ = 0.1;               // 运动边平移权重
+        double motion_rot_noise_ = 3.0 * M_PI / 180.0;  // 运动边旋转权重
 
-        double loop_trans_noise_ = 0.2;               // 位移权重
-        double loop_rot_noise_ = 3.0 * M_PI / 180.0;  // 旋转权重
+        double loop_trans_noise_ = 0.2;               // 回环边平移权重（基准值）
+        double loop_rot_noise_ = 3.0 * M_PI / 180.0;  // 回环边旋转权重（基准值）
 
-        double rk_loop_th_ = 5.2 / 5;  // 回环的RK阈值
+        double rk_loop_th_ = 5.2 / 5;  // 回环的 Cauchy 鲁棒核阈值
 
         bool with_height_ = true;
         double height_noise_ = 0.1;
@@ -93,10 +120,24 @@ class LoopClosing {
     /// 计算回环候选位姿
     void ComputeLoopCandidates();
 
-    /// 计算单个回环候选
+    /// 计算单个回环候选（NDT 配准，结果写入 c.Tij_ / c.ndt_score_）
     void ComputeForCandidate(LoopCandidate& c);
 
-    /// 优化位姿
+    /**
+     * 构建关键帧附近子地图（LIO-SAM loopFindNearKeyframes 对应实现）
+     * @param near_keyframes  输出点云（世界坐标系，VoxelGrid 降采样后）
+     * @param key             中心关键帧索引
+     * @param search_num      前后各取帧数；0 = 只取自身（当前帧 source）
+     */
+    void LoopFindNearKeyframes(CloudPtr& near_keyframes, int key, int search_num);
+
+    /**
+     * 消费回环队列，向 miao 优化器添加回环边（LIO-SAM addLoopFactor 对应实现）
+     * 队列来源：ComputeLoopCandidates 成功后写入
+     */
+    void AddLoopFactor();
+
+    /// 优化位姿（miao 增量 PGO，lightning-lm 原有逻辑保留）
     void PoseOptimization();
 
     Options options_;
@@ -118,8 +159,22 @@ class LoopClosing {
     std::vector<std::shared_ptr<miao::EdgeSE3>> edge_loops_;
 
     LoopClosedCallback loop_cb_;
-    
+
     mutable LoopDebugData loop_debug_data_;  // 回环调试数据
+
+    // ---- LIO-SAM 风格的候选帧搜索结构 ----
+    // 关键帧位置点云（与 all_keyframes_ 同步，但滞后一帧——不含当前帧，用于 KD-Tree 搜索）
+    pcl::PointCloud<pcl::PointXYZ>::Ptr kf_poses_cloud_;
+    // KD-Tree 空间索引，用于半径搜索历史关键帧
+    pcl::KdTreeFLANN<pcl::PointXYZ>::Ptr kdtree_history_poses_;
+    // 已检测到的回环对（cur_id → hist_id），防止对同一帧重复触发回环
+    std::map<uint64_t, uint64_t> loop_index_container_;
+
+    // ---- LIO-SAM 风格的回环约束队列（解耦检测与优化）----
+    // 成功通过 NDT 验证的回环对，等待 AddLoopFactor 消费
+    std::vector<std::pair<int, int>> loop_index_queue_;  // (hist_id, cur_id)
+    std::vector<SE3> loop_pose_queue_;                   // 对应的相对位姿 Tij
+    std::vector<double> loop_score_queue_;               // 对应的 NDT 得分（用于计算噪声模型）
 };
 
 }  // namespace lightning

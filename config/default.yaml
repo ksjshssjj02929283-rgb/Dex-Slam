@@ -74,12 +74,23 @@ rviz:
   map_rate: 1.0
 
 loop_closing:
-  loop_kf_gap: 20       # 每隔多少个关键帧检查一次
-  min_id_interval: 20   # 被检查的关键帧ID间隔
-  closest_id_th: 50     # 历史关键帧与当前帧的ID间隔
-  max_range: 30.0       # 候选帧的最大距离
-  ndt_score_th: 1.0     # ndt位姿分值
+  loop_kf_gap: 50       # 每隔多少个关键帧检查一次（冷却期）
+  min_id_interval: 20   # 候选帧之间的最小 ID 间隔（避免候选过于密集）
+  closest_id_th: 50     # 历史关键帧与当前帧 ID 差的最小阈值（已由时间差过滤取代，保留为参考）
+  max_range: 30.0       # KD-Tree 半径搜索距离阈值（单位：米，对应 LIO-SAM historyKeyframeSearchRadius）
+  ndt_score_th: 1.0     # NDT 配准通过阈值（TransformationProbability，越高越严）
   with_height: true
+  # LIO-SAM 风格候选检测参数
+  history_search_time_diff: 30.0   # 时间差过滤阈值（秒），对应 LIO-SAM historyKeyframeSearchTimeDiff
+  max_candidates_per_check: 3      # 每次触发最多处理的候选帧数（KD-Tree 按距离排序，取最近的）
+  # LIO-SAM 风格子地图构建参数
+  history_keyframe_search_num: 25  # 历史子地图前后各取帧数（共 2N+1 帧），对应 LIO-SAM historyKeyframeSearchNum
+  icp_filter_size: 0.4             # 子地图 VoxelGrid 叶大小（米），对应 LIO-SAM mappingSurfLeafSize
+  min_cur_cloud_size: 300          # 当前帧（source）最小点数，不足则放弃配准
+  min_prev_cloud_size: 1000        # 历史子地图（target）最小点数，不足则放弃配准
+  # ICP 精匹配参数（NDT 粗对齐后进行细化）
+  icp_fitness_score_th: 0.3        # ICP fitness score 阈值（均方点距，越小越严），对应 LIO-SAM historyKeyframeFitnessScore
+  icp_max_correspondence_dist: 1.5 # ICP 最大点对点对应距离（米）
 
 
 ### localization ================================================================================================

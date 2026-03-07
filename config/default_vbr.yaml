@@ -73,12 +73,20 @@ rviz:
   map_rate: 1.0
 
 loop_closing:
-  loop_kf_gap: 20       # 每隔多少个关键帧检查一次
-  min_id_interval: 20   # 被检查的关键帧ID间隔
-  closest_id_th: 50     # 历史关键帧与当前帧的ID间隔
-  max_range: 30.0       # 候选帧的最大距离
-  ndt_score_th: 1.0     # ndt位姿分值
+  loop_kf_gap: 20
+  min_id_interval: 20
+  closest_id_th: 20
+  max_range: 30.0
+  ndt_score_th: 1.3
   with_height: true
+  history_search_time_diff: 30.0
+  max_candidates_per_check: 5
+  history_keyframe_search_num: 25
+  icp_filter_size: 0.2
+  min_cur_cloud_size: 300
+  min_prev_cloud_size: 1000
+  icp_fitness_score_th: 0.5
+  icp_max_correspondence_dist: 1.5
 
 
 ### localization ================================================================================================
