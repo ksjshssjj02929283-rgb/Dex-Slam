@@ -51,7 +51,7 @@ void G2P5::RenderFront(Keyframe::Ptr kf) {
     {
         UL lock{newest_map_mutex_};
 
-        lightning::Timer::Evaluate([&]() { AddKfToMap({kf}, frontend_map_); }, "G2P5 Occupancy Mapping", true);
+        lightning::Timer::Evaluate([&]() { AddKfToMap({kf}, frontend_map_); }, "G2P5 Occupancy Mapping", false);
         newest_map_ = frontend_map_;
     }
 
@@ -243,7 +243,7 @@ bool G2P5::ResizeMap(const std::vector<Keyframe::Ptr> &kfs, G2P5MapPtr &map) {
         max_y = static_cast<int>((ceil)(max_y / r)) * r;
         map->Resize(min_x, min_y, max_x, max_y);
 
-        LOG(INFO) << "map resized to " << min_x << ", " << min_y << ", " << max_x << ", " << max_y;
+        // LOG(INFO) << "map resized to " << min_x << ", " << min_y << ", " << max_x << ", " << max_y;
     }
 
     return true;
