@@ -79,6 +79,12 @@ class LoopClosing {
     /// 向回环中添加一个关键帧
     void AddKF(Keyframe::Ptr kf);
 
+    /**
+     * 建图结束时调用：等待异步队列耗尽，然后对最后一帧强制执行一次回环检测和全局优化。
+     * 该函数会阻塞直到所有工作完成，并在检测到新回环时调用 loop_cb_。
+     */
+    void FinalizeAndWait();
+
     /// 如果检测到新地回环并发生了优化，则调用回调
     using LoopClosedCallback = std::function<void()>;
     void SetLoopClosedCB(LoopClosedCallback cb) { loop_cb_ = cb; }
@@ -116,6 +122,9 @@ class LoopClosing {
     void HandleKF(Keyframe::Ptr kf);
 
     void DetectLoopCandidates();
+
+    /// 强制对当前帧执行一次回环检测（绕过冷却期和防重复检查），用于建图收尾
+    void ForceFinalLoopCheck();
 
     /// 计算回环候选位姿
     void ComputeLoopCandidates();

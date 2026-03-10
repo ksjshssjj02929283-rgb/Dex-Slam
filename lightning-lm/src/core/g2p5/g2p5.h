@@ -58,6 +58,10 @@ class G2P5 {
         double grid_map_resolution_ = 0.1;  // 栅格地图的分辨率，室外建议为0.1，室内可以用0.05
 
         bool verbose_ = true;
+
+        bool build_nav_map_ = false;               // 是否对离线地图做噪声过滤生成导航地图
+        std::string nav_map_filter_mode_ = "normal";  // 滤波强度: "normal"(10), "high"(50), "super"(100)
+        bool save_debug_map_ = false;              // 是否保存滤波中间结果（mask、连通域等）
     };
 
     explicit G2P5(Options options = Options()) : options_(options) {}
@@ -77,8 +81,23 @@ class G2P5 {
     /// 增加一个关键帧，该关键帧会放到关键帧队列中
     void PushKeyframe(Keyframe::Ptr kf);
 
-    /// 触发一次重绘，如果程序正在重绘过程中，再次触发会导致当前重绘过程停止
-    void RedrawGlobalMap();
+    /// 触发一次后端重绘（异步）：回环优化后调用，使用优化后位姿重建地图并回传给前端
+    /// 如果正在重绘过程中，再次触发会导致当前重绘过程停止并重新开始
+    void RedrawGlobalMapBackend();
+
+    /**
+     * 离线同步重绘（阻塞）：遍历全部关键帧，使用当前 GetOptPose() 从头构建完整栅格地图。
+     * 直接返回 G2P5MapPtr，不写入 newest_map_，避免与 RenderBack/RenderFront 的写入竞争。
+     * 返回 nullptr 表示无关键帧数据。
+     */
+    G2P5MapPtr RedrawGlobalMapOffline();
+
+    /**
+     * 保存 2D 栅格地图到指定目录（阻塞）。
+     * 内部依次执行：RedrawGlobalMapOffline → ToROS 转图像 → 可选噪声过滤 → 保存 map.png + map.yaml。
+     * save_path 目录必须在调用前已创建。
+     */
+    void SaveGridMap(const std::string& save_path);
 
     /// 获取最新的地图
     G2P5MapPtr GetNewestMap();
@@ -111,8 +130,6 @@ class G2P5 {
     /// 检测地面参数
     bool DetectPlaneCoeffs(Keyframe::Ptr kf);
 
-    void SetWhitePoints(const std::vector<Vec2d> &ang_distance_height, Keyframe::Ptr kf, G2P5MapPtr &map);
-
     Options options_;
 
     std::atomic_bool parallel_render_ = false;  // 是否需要并行渲染
@@ -137,7 +154,11 @@ class G2P5 {
     std::atomic_bool backend_redraw_flag_ = false;  // 后端重绘的flag
     G2P5MapPtr backend_map_ = nullptr;              // 正在绘制的地图
 
-    Vec4d floor_coeffs_ = Vec4d(0, 0, 1.0, 1.0);  // 地面方程参数
+    Vec4d floor_coeffs_ = Vec4d(0, 0, 1.0, 1.0);  // 地面方程参数（body 系，保留备用）
+    double floor_z_world_ = 0.0;                   // 地面世界 Z 坐标（每帧更新）
+
+    /// 在世界坐标系中估计地面 Z 高度（支持任意安装姿态）
+    bool EstimateFloorZWorld(Keyframe::Ptr kf, const SE3& Twb, double& floor_z_world);
 };
 
 }  // namespace lightning::g2p5
