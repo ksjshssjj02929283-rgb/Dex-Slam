@@ -111,6 +111,106 @@ void LoopClosing::AddKF(Keyframe::Ptr kf) {
     }
 }
 
+void LoopClosing::FinalizeAndWait() {
+    // 1. 在线模式下，等待异步队列中所有关键帧处理完毕
+    if (options_.online_mode_) {
+        kf_thread_.Quit();  // 排空队列并 join 线程
+    }
+
+    if (cur_kf_ == nullptr) {
+        LOG(WARNING) << "FinalizeAndWait: no keyframe processed yet, skip";
+        return;
+    }
+
+    LOG(INFO) << "FinalizeAndWait: forcing final loop check on kf " << cur_kf_->GetID();
+
+    // 2. 强制对最后一帧执行一次回环检测（绕过冷却期约束）
+    ForceFinalLoopCheck();
+    ComputeLoopCandidates();
+
+    if (candidates_.empty()) {
+        LOG(INFO) << "FinalizeAndWait: no new loops found for final frame, skip extra optimization";
+        return;
+    }
+
+    // 3. 有新回环约束：只添加回环边（顶点已在队列刷新阶段添加，不重复添加，避免破坏优化器）
+    AddLoopFactor();
+
+    optimizer_->InitializeOptimization();
+    optimizer_->SetVerbose(false);
+    optimizer_->Optimize(20);
+
+    // 外点剔除
+    for (auto& e : edge_loops_) {
+        if (e->GetRobustKernel() == nullptr) continue;
+        if (e->Chi2() > e->GetRobustKernel()->Delta()) {
+            e->SetLevel(1);
+        } else {
+            e->SetRobustKernel(nullptr);
+        }
+    }
+
+    // 写回所有顶点的优化结果
+    for (auto& vert : kf_vert_) {
+        all_keyframes_[vert->GetId()]->SetOptPose(vert->Estimate());
+    }
+
+    if (loop_cb_) {
+        loop_cb_();
+    }
+
+    LOG(INFO) << "FinalizeAndWait: done, total loops: " << edge_loops_.size();
+}
+
+void LoopClosing::ForceFinalLoopCheck() {
+    candidates_.clear();
+
+    if (kf_poses_cloud_->empty()) {
+        return;
+    }
+
+    uint64_t cur_id = cur_kf_->GetID();
+    Vec3d t_cur = cur_kf_->GetOptPose().translation();
+    pcl::PointXYZ query;
+    query.x = static_cast<float>(t_cur.x());
+    query.y = static_cast<float>(t_cur.y());
+    query.z = static_cast<float>(t_cur.z());
+
+    std::vector<int> indices;
+    std::vector<float> sq_dists;
+    kdtree_history_poses_->setInputCloud(kf_poses_cloud_);
+    kdtree_history_poses_->radiusSearch(query, options_.max_range_, indices, sq_dists);
+
+    if (indices.empty()) {
+        return;
+    }
+
+    double cur_time = cur_kf_->GetState().timestamp_;
+    Keyframe::Ptr check_first = nullptr;
+    for (int idx : indices) {
+        auto kf = all_keyframes_[idx];
+        double time_diff = std::abs(cur_time - kf->GetState().timestamp_);
+        if (time_diff < options_.history_search_time_diff_) {
+            continue;
+        }
+        if (check_first &&
+            std::abs(static_cast<int64_t>(kf->GetID() - check_first->GetID())) <= options_.min_id_interval_) {
+            continue;
+        }
+        LoopCandidate c(kf->GetID(), cur_id);
+        c.Tij_ = kf->GetLIOPose().inverse() * cur_kf_->GetLIOPose();
+        candidates_.emplace_back(c);
+        check_first = kf;
+    }
+
+    if (!candidates_.empty()) {
+        if (static_cast<int>(candidates_.size()) > options_.max_candidates_per_check_) {
+            candidates_.resize(options_.max_candidates_per_check_);
+        }
+        LOG(INFO) << "ForceFinalLoopCheck: found " << candidates_.size() << " candidates for kf " << cur_id;
+    }
+}
+
 void LoopClosing::HandleKF(Keyframe::Ptr kf) {
     if (kf == last_kf_) {
         return;

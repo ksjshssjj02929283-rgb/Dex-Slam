@@ -24,7 +24,7 @@ def generate_launch_description():
     pkg_dir = get_package_share_directory('lightning')
     
     # 默认配置文件路径（从 share 目录读取）
-    default_config_file = os.path.join(pkg_dir, 'config', 'default_livox.yaml')
+    default_config_file = os.path.join(pkg_dir, 'config', 'default_vbr.yaml')
     
     # 默认 RViz 配置文件路径（从 share 目录读取）
     default_rviz_config = os.path.join(pkg_dir, 'rviz', 'lightning.rviz')

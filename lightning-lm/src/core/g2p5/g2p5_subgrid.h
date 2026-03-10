@@ -15,6 +15,14 @@ class SubGrid {
    public:
     static inline constexpr int SUB_GRID_SIZE = 4;
 
+    // Log-Odds 更新参数
+    static constexpr float kLogOddsHit  =  0.85f;   // P(occ|hit)  ≈ 0.70
+    static constexpr float kLogOddsMiss = -0.20f;   // P(occ|miss) ≈ 0.45（弱化，减少 miss 射线消除已确认墙面）
+    static constexpr float kLogOddsMax  =  5.0f;    // 防止过度确定
+    static constexpr float kLogOddsMin  = -5.0f;
+    static constexpr float kLogOddsOcc  =  0.4f;    // 占据判定阈值（约 P=0.60，需 ≥1 次命中）
+    static constexpr float kLogOddsFree = -0.4f;    // 自由空间判定阈值（需 ≥2 次 miss 才能变白）
+
     SubGrid(int num_x = 0, int num_y = 0);
 
     ~SubGrid();
@@ -22,7 +30,7 @@ class SubGrid {
     SubGrid(const SubGrid &other);
     SubGrid &operator=(const SubGrid &other);
 
-    /// 设置某个网格的占据或者非占据
+    /// 设置某个网格的占据或者非占据（Log-Odds 更新）
     void SetGridHitPoint(bool hit, int sub_xi, int sub_yi, float height) {
         UL lock(data_mutex_);
         if (grid_data_ == nullptr) {
@@ -33,22 +41,16 @@ class SubGrid {
         GridData &cell = grid_data_[index];
 
         if (hit) {
-            // 占据，黑色
+            // 障碍物命中：增加 log_odds，更新最低高度
+            cell.log_odds_ = std::min(kLogOddsMax, cell.log_odds_ + kLogOddsHit);
             if (height < cell.height_) {
                 cell.height_ = height;
-                cell.hit_cnt_ += 1;
-                cell.visit_cnt_ += 1;
             }
         } else {
-            // 非占据，白色
-            if (cell.hit_cnt_ > 3) {
-                // 本身为黑色，黑色刷白有高度要求
-                if (height < cell.height_) {
-                    cell.visit_cnt_ += 1;
-                }
-            } else {
-                cell.visit_cnt_ += 1;
-                cell.height_ = height;
+            // 自由空间：仅当射线从障碍上方穿过（含同高度），或格子尚未确定为占据时才减少 log_odds
+            // 使用 <= 而非 <，使同高度 miss 射线也能参与更新（修复同高度命中不统计的问题）
+            if (cell.log_odds_ < kLogOddsOcc || height <= cell.height_) {
+                cell.log_odds_ = std::max(kLogOddsMin, cell.log_odds_ + kLogOddsMiss);
             }
         }
     }
@@ -59,8 +61,7 @@ class SubGrid {
             MallocGrid();
         }
         int index = sub_xi + sub_yi * width_;
-        grid_data_[index].visit_cnt_ += 4;
-        grid_data_[index].hit_cnt_ = 0;
+        grid_data_[index].log_odds_ = kLogOddsMin;
     }
 
     /// 判定数据是否为空
@@ -69,13 +70,12 @@ class SubGrid {
         return grid_data_ == nullptr;
     }
 
-    /// 获取hit cnt和visit cnt
-    void GetHitAndVisit(int sx, int sy, unsigned int &hit_cnt, unsigned int &visit_cnt) {
+    /// 获取 log_odds 和障碍高度
+    void GetLogOdds(int sx, int sy, float &log_odds, float &height) {
         UL lock(data_mutex_);
         GridData &d = grid_data_[sx + sy * width_];
-
-        hit_cnt = d.hit_cnt_;
-        visit_cnt = d.visit_cnt_;
+        log_odds = d.log_odds_;
+        height = d.height_;
     }
 
    private:

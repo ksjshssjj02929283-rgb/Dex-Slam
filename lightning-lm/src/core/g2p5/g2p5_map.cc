@@ -152,68 +152,45 @@ void G2P5Map::SetMissPoint(const float &point_x, const float &point_y, const flo
         return;
     }
 
-    int point_x_index = floor(point_x / options_.resolution_);
-    int point_y_index = floor(point_y / options_.resolution_);
+    // 障碍点索引：与 GetDataIndex / SetHitPoint 保持同一坐标系（相对于 min_x_/min_y_）
+    int point_x_index = floor((point_x - min_x_) / options_.resolution_);
+    int point_y_index = floor((point_y - min_y_) / options_.resolution_);
 
-    int xi_lidar = floor(laser_origin_x / options_.resolution_);
-    int yi_lidar = floor(laser_origin_y / options_.resolution_);
-
-    float k = 0;
-    int sign = 1;
-    int diff_y = point_y_index - yi_lidar;
-    int diff_x = point_x_index - xi_lidar;
-
-    /// 整数的直线填充算法
-    if (diff_y == 0 && diff_x == 0) {
-        return;
-    }
-
+    int xi_lidar = 0, yi_lidar = 0;
     if (!GetDataIndex(laser_origin_x, laser_origin_y, xi_lidar, yi_lidar)) {
         return;
     }
 
-    std::vector<Vec2i> updated_pts;
-    std::vector<float> heights;
+    int diff_y = point_y_index - yi_lidar;
+    int diff_x = point_x_index - xi_lidar;
 
+    if (diff_y == 0 && diff_x == 0) {
+        return;
+    }
+
+    /// Bresenham 直线追踪，直接更新格子（避免中间向量分配）
     if (std::abs(diff_y) > std::abs(diff_x)) {
         if (diff_y == 0) {
             return;
         }
-
-        k = float(diff_x) / diff_y;
+        float k = float(diff_x) / diff_y;
         float dh = (lidar_height - height) / diff_y;
-
-        sign = diff_y > 0 ? 1 : -1;
+        int sign = diff_y > 0 ? 1 : -1;
         for (int j = sign; j != diff_y; j += sign) {
-            int i = float(j * k);
-            int x_index = xi_lidar + i;
-            int y_index = yi_lidar + j;
-
-            updated_pts.emplace_back(Vec2i(x_index, y_index));
-            heights.emplace_back(lidar_height - j * dh);
+            int i = int(float(j) * k);
+            UpdateCell(Vec2i(xi_lidar + i, yi_lidar + j), false, lidar_height - j * dh);
         }
     } else {
         if (diff_x == 0) {
             return;
         }
-
-        k = float(diff_y) / diff_x;
-        sign = diff_x > 0 ? 1 : -1;
-
+        float k = float(diff_y) / diff_x;
         float dh = (lidar_height - height) / diff_x;
-
+        int sign = diff_x > 0 ? 1 : -1;
         for (int i = sign; i != diff_x; i += sign) {
-            int j = float(i * k);
-            int x_index = xi_lidar + i;
-            int y_index = yi_lidar + j;
-
-            updated_pts.emplace_back(Vec2i(x_index, y_index));
-            heights.emplace_back(lidar_height - i * dh);
+            int j = int(float(i) * k);
+            UpdateCell(Vec2i(xi_lidar + i, yi_lidar + j), false, lidar_height - i * dh);
         }
-    }
-
-    for (int i = 0; i < updated_pts.size(); ++i) {
-        UpdateCell(updated_pts[i], false, heights[i]);
     }
 }
 
@@ -272,18 +249,16 @@ nav_msgs::msg::OccupancyGrid G2P5Map::ToROS() {
                     int y = (byi << SUB_GRID_SIZE) + syi;
 
                     if (x >= 0 && x < image_width && y >= 0 && y < image_height) {
-                        unsigned int hit_cnt = 0, visit_cnt = 0;
-                        grids_[bxi][byi].GetHitAndVisit(sxi, syi, hit_cnt, visit_cnt);
-
-                        float occ = (visit_cnt > 3) ? (float)hit_cnt / (float)visit_cnt : -1;
+                        float lo = 0.0f, h = 0.0f;
+                        grids_[bxi][byi].GetLogOdds(sxi, syi, lo, h);
 
                         /// 注意这里有转置符号
-                        if (occ < 0) {
-                            continue;
-                        } else if (occ > options_.occupancy_ratio_) {
+                        if (lo >= SubGrid::kLogOddsOcc) {
+                            // 占据（黑色）
                             tmp_area++;
                             occu_map.data[MapIdx(image_width, x, y)] = 100;
-                        } else {
+                        } else if (lo <= SubGrid::kLogOddsFree) {
+                            // 自由空间（白色），扩展一格
                             int index = MapIdx(image_width, x, y);
                             index_min = std::max(0, index - 1);
                             index_max = std::min(grid_map_size_1, index + 1);
@@ -295,6 +270,7 @@ nav_msgs::msg::OccupancyGrid G2P5Map::ToROS() {
                                 }
                             }
                         }
+                        // lo 在 (kLogOddsFree, kLogOddsOcc) 之间 → 未知，保持 -1
                     } else {
                         continue;
                     }
@@ -332,18 +308,15 @@ cv::Mat G2P5Map::ToCV() {
                     int y = (byi << SUB_GRID_SIZE) + syi;
 
                     if (x >= 0 && x < image_width && y >= 0 && y < image_height) {
-                        unsigned int hit_cnt = 0, visit_cnt = 0;
-                        grids_[bxi][byi].GetHitAndVisit(sxi, syi, hit_cnt, visit_cnt);
-
-                        float occ = visit_cnt ? (hit_cnt == 0 ? 0 : (float)hit_cnt / (float)visit_cnt) : -1;
-                        // assert(occ <= 1.0);
+                        float lo = 0.0f, h = 0.0f;
+                        grids_[bxi][byi].GetLogOdds(sxi, syi, lo, h);
 
                         /// 注意这里有转置符号
-                        if (occ < 0) {
-                            continue;
-                        } else if (occ > options_.occupancy_ratio_) {  // 0.49
+                        if (lo >= SubGrid::kLogOddsOcc) {
+                            // 占据（黑色）
                             image.at<cv::Vec3b>(y, x) = black_color;
-                        } else {
+                        } else if (lo <= SubGrid::kLogOddsFree) {
+                            // 自由空间（白色），扩展一格
                             index_y_min = std::max(0, y - 1);
                             index_y_max = std::min(image_height_1, y + 1);
                             index_x_min = std::max(0, x - 1);
@@ -356,6 +329,7 @@ cv::Mat G2P5Map::ToCV() {
                                 }
                             }
                         }
+                        // lo 在 (kLogOddsFree, kLogOddsOcc) 之间 → 未知，保持灰色
                     } else {
                         continue;
                     }
