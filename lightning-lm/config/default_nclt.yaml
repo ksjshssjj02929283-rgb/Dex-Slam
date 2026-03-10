@@ -13,6 +13,8 @@ fasterlio:
   time_scale: 1e-3             # 兼容不同数据集的时间单位，仅对Velodyne LiDAR(lidar_type=2)生效
 
   skip_lidar_num: 0 # 点云的跳帧情况
+  kf_dis_th: 2.0    # 关键帧距离阈值（米），超过此值才建立新关键帧
+  kf_angle_th: 15.0 # 关键帧角度阈值（度），超过此值才建立新关键帧
   point_filter_num: 6 # 点云采样参数
   max_iteration: 6 # 最大迭代次数
   filter_size_scan: 0.5 # 对scan进行的降采样
@@ -43,6 +45,9 @@ g2p5:
   min_th_floor: 0.50  # 距离地面这个高度的障碍物被扫入栅格地图中
   max_th_floor: 1.0  # 距离地面这个高度的障碍物被扫入栅格地图中
   grid_map_resolution: 0.2 # 栅格地图分辨率
+  build_nav_map: false                  # 是否对保存的地图做噪声过滤生成导航地图
+  navigation_map_filter_mode: "normal"  # 滤波强度: "normal"(10), "high"(50), "super"(100)
+  save_debug_map: false                 # 是否保存滤波中间结果（mask、连通域等）
 
 system:
   with_loop_closing: true # 是否需要回环检测
