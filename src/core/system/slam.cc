@@ -67,8 +67,8 @@ bool SlamSystem::Init(const std::string& yaml_path) {
         g2p5_->Init(yaml_path);
 
         if (options_.with_loop_closing_) {
-            /// 当发生回环时，触发一次重绘
-            lc_->SetLoopClosedCB([this]() { g2p5_->RedrawGlobalMap(); });
+            /// 当发生回环时，触发一次后端异步重绘（使用优化后位姿重建地图并回传给前端）
+            lc_->SetLoopClosedCB([this]() { g2p5_->RedrawGlobalMapBackend(); });
         }
 
         if (options_.with_2dvisualization_) {
@@ -175,6 +175,14 @@ void SlamSystem::SaveMap(const std::string& path) {
 
     LOG(INFO) << "slam map saving to " << save_path;
 
+    // ---- Step 1: 对最后一帧强制执行一次回环检测 + 全局优化 ----
+    if (options_.with_loop_closing_ && lc_) {
+        LOG(INFO) << "SaveMap: running final loop closure check and global optimization...";
+        lc_->FinalizeAndWait();
+        LOG(INFO) << "SaveMap: final optimization done";
+    }
+
+    // ---- Step 2: 保存地图文件 ----
     if (!std::filesystem::exists(save_path)) {
         std::filesystem::create_directories(save_path);
     } else {
@@ -197,59 +205,9 @@ void SlamSystem::SaveMap(const std::string& path) {
     // pcl::io::savePCDFileBinaryCompressed(save_path + "/global_no_loop.pcd", *global_map_no_loop);
     // pcl::io::savePCDFileBinaryCompressed(save_path + "/global_raw.pcd", *global_map_raw);
 
-    if (options_.with_gridmap_) {
-        /// 存为ROS兼容的模式
-        auto map = g2p5_->GetNewestMap()->ToROS();
-        const int width = map.info.width;
-        const int height = map.info.height;
-
-        cv::Mat nav_image(height, width, CV_8UC1);
-        for (int y = 0; y < height; ++y) {
-            const int rowStartIndex = y * width;
-            for (int x = 0; x < width; ++x) {
-                const int index = rowStartIndex + x;
-                int8_t data = map.data[index];
-                if (data == 0) {                                   // Free
-                    nav_image.at<uchar>(height - 1 - y, x) = 255;  // White
-                } else if (data == 100) {                          // Occupied
-                    nav_image.at<uchar>(height - 1 - y, x) = 0;    // Black
-                } else {                                           // Unknown
-                    nav_image.at<uchar>(height - 1 - y, x) = 128;  // Gray
-                }
-            }
-        }
-
-        cv::imwrite(save_path + "/map.pgm", nav_image);
-
-        /// yaml
-        std::ofstream yamlFile(save_path + "/map.yaml");
-        if (!yamlFile.is_open()) {
-            LOG(ERROR) << "failed to write map.yaml";
-            return;  // 文件打开失败
-        }
-
-        try {
-            YAML::Emitter emitter;
-            emitter << YAML::BeginMap;
-            emitter << YAML::Key << "image" << YAML::Value << "map.pgm";
-            emitter << YAML::Key << "mode" << YAML::Value << "trinary";
-            emitter << YAML::Key << "width" << YAML::Value << map.info.width;
-            emitter << YAML::Key << "height" << YAML::Value << map.info.height;
-            emitter << YAML::Key << "resolution" << YAML::Value << float(0.05);
-            std::vector<double> orig{map.info.origin.position.x, map.info.origin.position.y, 0};
-            emitter << YAML::Key << "origin" << YAML::Value << orig;
-            emitter << YAML::Key << "negate" << YAML::Value << 0;
-            emitter << YAML::Key << "occupied_thresh" << YAML::Value << 0.65;
-            emitter << YAML::Key << "free_thresh" << YAML::Value << 0.25;
-
-            emitter << YAML::EndMap;
-
-            yamlFile << emitter.c_str();
-            yamlFile.close();
-        } catch (...) {
-            yamlFile.close();
-            return;
-        }
+    // ---- Step 3: 保存 2D 栅格地图（重建 + 可选噪声过滤 + 写 map.png/map.yaml）----
+    if (options_.with_gridmap_ && g2p5_) {
+        g2p5_->SaveGridMap(save_path);
     }
 
     LOG(INFO) << "map saved";
