@@ -11,6 +11,7 @@
 
 #include "core/graph/optimizer.h"
 #include "core/types/edge_se3.h"
+#include "voxel_map/voxel_map_manager.hpp"
 
 #include <map>
 #include <pcl/kdtree/kdtree_flann.h>
@@ -69,6 +70,16 @@ class LoopClosing {
 
         bool with_height_ = true;
         double height_noise_ = 0.1;
+
+        // ---- VoxelMap 回环精化参数 ----
+        // 构建临时 VoxelMap 用的体素大小（比 LIO 更细以提高精化精度）
+        double lc_voxel_size_ = 0.5;
+        // IEKF 最大迭代次数
+        int lc_vmap_max_iter_ = 5;
+        // 迭代收敛阈值（平移+旋转范数）
+        double lc_vmap_conv_th_ = 1e-4;
+        // 最少有效点面匹配数（低于此值认为精化不可靠，保持 GICP 结果）
+        int lc_vmap_min_match_ = 20;
     };
 
     LoopClosing(Options options = Options()) { options_ = options; }
