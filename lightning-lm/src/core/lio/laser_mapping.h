@@ -10,7 +10,7 @@
 #include "common/imu.h"
 #include "common/keyframe.h"
 #include "common/options.h"
-#include "core/ivox3d/ivox3d.h"
+#include "voxel_map/voxel_map_manager.hpp"
 #include "core/lio/eskf.hpp"
 #include "core/lio/imu_processing.h"
 #include "pointcloud_preprocess.h"
@@ -42,7 +42,7 @@ class LaserMapping {
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-    using IVoxType = IVox<3, IVoxNodeType::DEFAULT, PointType>;
+    using VoxelMapType = voxel_map::VoxelMapManager;
 
     LaserMapping(Options options = Options());
     ~LaserMapping() {
@@ -105,6 +105,9 @@ class LaserMapping {
      */
     CloudPtr GetGlobalMap(bool use_lio_pose, bool use_voxel = true, float res = 0.1);
 
+    /// 获取 VoxelMap 指针（用于外部可视化等）
+    std::shared_ptr<VoxelMapType> GetVoxelMap() const { return vmap_; }
+
    private:
     // sync lidar with imu
     bool SyncPackages();
@@ -134,8 +137,8 @@ class LaserMapping {
     int lidar_type_ = 0;  // 0: not init, 1: livox (lidar acc in G), 2: velodyne, 3: ouster
 
     /// modules
-    IVoxType::Options ivox_options_;
-    std::shared_ptr<IVoxType> ivox_ = nullptr;                    // localmap in ivox
+    voxel_map::VoxelMapConfig vmap_config_;
+    std::shared_ptr<VoxelMapType> vmap_ = nullptr;                // localmap in voxel_map
     std::shared_ptr<PointCloudPreprocess> preprocess_ = nullptr;  // point cloud preprocess
     std::shared_ptr<ImuProcess> p_imu_ = nullptr;                 // imu process
 
@@ -155,14 +158,16 @@ class LaserMapping {
     CloudPtr scan_undistort_{new PointCloudType()};   // scan after undistortion
     CloudPtr scan_down_body_{new PointCloudType()};   // downsampled scan in body
     CloudPtr scan_down_world_{new PointCloudType()};  // downsampled scan in world
-    std::vector<PointVector> nearest_points_;         // nearest points of current scan
-    std::vector<Vec4f> corr_pts_;                     // inlier pts
-    std::vector<Vec4f> corr_norm_;                    // inlier plane norms
     pcl::VoxelGrid<PointType> voxel_scan_;            // voxel filter for current scan
 
-    std::vector<float> residuals_;           // point-to-plane residuals
-    std::vector<bool> point_selected_surf_;  // selected points
-    std::vector<Vec4f> plane_coef_;          // plane coeffs
+    /// VoxelMap matching data
+    std::vector<voxel_map::pointWithCov> pv_list_;    // points with covariance for voxel_map
+    std::vector<voxel_map::ptpl> ptpl_list_;          // point-to-plane match results
+
+    /// IEKF 预缓存：body_cov 和 crossmat 在 IEKF 循环外仅计算一次
+    std::vector<Eigen::Matrix3d> body_cov_list_;      // body 坐标系下的点测量协方差
+    std::vector<Eigen::Vector3d> body_points_list_;   // body 坐标系下的点坐标缓存
+    bool iekf_first_iter_ = true;                     // 标记是否为 IEKF 首次迭代（需要 hash 查找）
 
     std::mutex mtx_buffer_;
     std::deque<double> time_buffer_;
