@@ -21,6 +21,10 @@
 
 namespace lightning::g2p5 {
 
+// 前向声明（ApplyNavMapFilter 定义在 namespace 末尾）
+static cv::Mat ApplyNavMapFilter(const cv::Mat& original, const std::string& filter_mode,
+                                  bool save_debug_map, const std::string& debug_dir);
+
 G2P5::~G2P5() { Quit(); }
 
 void G2P5::Quit() {
@@ -384,9 +388,7 @@ void G2P5::Convert3DTo2DScan(Keyframe::Ptr kf, G2P5MapPtr &map) {
         floor_z_world_ = orig.z() + options_.default_floor_height_;
     }
     double lidar_h = orig.z() - floor_z_world_;  // LiDAR 世界系离地高度
-    std::cout << "orig.z(): " << orig.z() << std::endl;
-    std::cout << "lidar_h: " << lidar_h << std::endl;
-    std::cout << "floor_z_world_: " << floor_z_world_ << std::endl;
+
     // ── 0.1° 角度分箱 miss 射线去重（按世界 XY 方向）────────────────────
     constexpr int kNumAngleBins = 3600;
     constexpr double kBinStep = 2.0 * M_PI / kNumAngleBins;

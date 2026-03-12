@@ -49,9 +49,9 @@ options = {
   tracked_pose_filename = "tracked_pose.txt",
 }
 
-TRAJECTORY_BUILDER.pure_localization_trimmer = {
-  max_submaps_to_keep = 2,
-}
+-- TRAJECTORY_BUILDER.pure_localization_trimmer = {
+--   max_submaps_to_keep = 2,
+-- }
 
 POSE_INITIALIZER_2D.use_global_matching = false
 
