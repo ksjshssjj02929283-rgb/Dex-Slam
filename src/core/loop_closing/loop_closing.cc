@@ -20,6 +20,8 @@
 #include "core/types/vertex_se3.h"
 #include "io/yaml_io.h"
 
+#include <Eigen/Dense>
+
 namespace lightning {
 
 LoopClosing::~LoopClosing() {
@@ -507,7 +509,130 @@ void LoopClosing::ComputeForCandidate(lightning::LoopCandidate& c) {
     }
     Mat4f T_icp = gicp.getFinalTransformation();
 
-    // ---- 第五步：提取相对位姿（使用 ICP 结果）----
+    // // ---- 第五步（NEW）：VoxelMap 迭代精化 ----
+    // // 以 prev_cloud（kf1 局部系）构建临时 VoxelMap，在 GICP 结果基础上做点到平面迭代精化。
+    // // 坐标约定：VoxelMap "world" = kf1 局部系；cur_cloud 仍为 kf2 body 系。
+    // [&]() {
+    //     // --- 1. 构建临时 VoxelMap（用 prev_cloud） ---
+    //     voxel_map::VoxelMapConfig vmap_cfg;
+    //     vmap_cfg.voxel_size = options_.lc_voxel_size_;
+
+    //     voxel_map::VoxelMapManager vmap(vmap_cfg);
+
+    //     std::vector<voxel_map::pointWithCov> prev_pv;
+    //     prev_pv.reserve(prev_cloud->size());
+    //     for (const auto& pt : prev_cloud->points) {
+    //         voxel_map::pointWithCov pv;
+    //         pv.point = Eigen::Vector3d(pt.x, pt.y, pt.z);  // world = kf1 local
+    //         // 地图点协方差：用固定小值（传感器先验，只影响平面估计置信度）
+    //         pv.cov = Eigen::Matrix3d::Identity() * 1e-3;
+    //         prev_pv.push_back(pv);
+    //     }
+    //     vmap.InitializeMap(prev_pv);
+
+    //     // --- 2. 初始化迭代位姿（从 GICP 结果开始） ---
+    //     Eigen::Matrix4d T_cur = T_icp.cast<double>();
+    //     Eigen::Matrix3d R_cur = T_cur.block<3, 3>(0, 0);
+    //     Eigen::Vector3d t_cur = T_cur.block<3, 1>(0, 3);
+
+    //     // 预缓存 cur_cloud 的 body 坐标（不变）
+    //     const size_t n_pts = cur_cloud->size();
+    //     std::vector<Eigen::Vector3d> body_pts(n_pts);
+    //     for (size_t i = 0; i < n_pts; ++i) {
+    //         body_pts[i] = Eigen::Vector3d(cur_cloud->points[i].x,
+    //                                       cur_cloud->points[i].y,
+    //                                       cur_cloud->points[i].z);
+    //     }
+
+    //     // --- 3. IEKF 迭代（高斯牛顿，6-DOF：[dt(3), dφ(3)]） ---
+    //     for (int iter = 0; iter < options_.lc_vmap_max_iter_; ++iter) {
+    //         // 3a. 构建查询点列表（point_world = R_cur * p_body + t_cur）
+    //         std::vector<voxel_map::pointWithCov> query_pv(n_pts);
+    //         for (size_t i = 0; i < n_pts; ++i) {
+    //             query_pv[i].point_world = R_cur * body_pts[i] + t_cur;
+    //             query_pv[i].point_body  = body_pts[i];
+    //             // 简化协方差：只含测量噪声，不含状态不确定性
+    //             query_pv[i].cov = Eigen::Matrix3d::Identity() * 1e-3;
+    //         }
+
+    //         // 3b. FindCorrespondences → ptpl_list
+    //         std::vector<voxel_map::ptpl> ptpl_list;
+    //         vmap.FindCorrespondences(query_pv, ptpl_list);
+
+    //         int n_match = static_cast<int>(ptpl_list.size());
+    //         if (n_match < options_.lc_vmap_min_match_) {
+    //             LOG(INFO) << "lc vmap iter=" << iter
+    //                       << " match=" << n_match << " < min=" << options_.lc_vmap_min_match_
+    //                       << ", abort refinement";
+    //             return;  // 不可靠，保留 GICP 结果
+    //         }
+
+    //         // 3c. 构建高斯牛顿方程：H^T H δx = H^T r
+    //         //   残差 r_i = -(n·p_w + d)  （负号：驱动位置向平面收敛）
+    //         //   Jacobian H_i(1×6) = [n^T,  -(n^T R [p_b]×)]
+    //         //     对 δt: d(n·(R·p_b+t))/dδt = n^T
+    //         //     对 δφ: d(n·R·(I+[δφ]×)p_b)/dδφ = n^T R [p_b]× → 带负号
+    //         Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
+    //         Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
+
+    //         for (const auto& pl : ptpl_list) {
+    //             const Eigen::Vector3d& n = pl.normal;
+    //             const Eigen::Vector3d& pb = pl.point;   // body 坐标
+    //             double d = pl.d;
+    //             Eigen::Vector3d pw = pl.point_world;     // world 坐标（已在 query_pv 中计算）
+
+    //             double res = -(n.dot(pw) + d);           // 残差（负号）
+
+    //             // Jacobian 行向量（1×6）
+    //             // 平移分量：n^T
+    //             Eigen::RowVector3d Jt = n.transpose();
+    //             // 旋转分量：n^T * R * [pb]× = (R^T n)^T skew(pb) → 但我们要 H 对 [dt, dφ]
+    //             // d(n·R·exp([δφ])·pb)/dδφ|_{δφ=0} = n^T * R * skew(pb)  (注意顺序)
+    //             // 带外面的负号：负残差对 δφ 的导数就是 n^T R skew(pb)
+    //             Eigen::RowVector3d Jr =
+    //                 n.transpose() * R_cur *
+    //                 (Eigen::Matrix3d() << 0, -pb.z(), pb.y(),
+    //                                       pb.z(), 0, -pb.x(),
+    //                                      -pb.y(), pb.x(), 0).finished();
+
+    //             Eigen::Matrix<double, 1, 6> Ji;
+    //             Ji << Jt, Jr;
+
+    //             // 加入信息矩阵（均匀权重，可扩展为用 pl.plane_cov 加权）
+    //             H += Ji.transpose() * Ji;
+    //             b += Ji.transpose() * res;
+    //         }
+
+    //         // 3d. 求解线性方程 H δx = b
+    //         Eigen::Matrix<double, 6, 1> dx = H.ldlt().solve(b);
+
+    //         // 3e. 更新位姿
+    //         t_cur += dx.head<3>();
+    //         Eigen::Vector3d dphi = dx.tail<3>();
+    //         double angle = dphi.norm();
+    //         if (angle > 1e-10) {
+    //             Eigen::AngleAxisd aa(angle, dphi / angle);
+    //             R_cur = aa.toRotationMatrix() * R_cur;
+    //         }
+
+    //         // 3f. 收敛检查
+    //         if (dx.norm() < options_.lc_vmap_conv_th_) {
+    //             LOG(INFO) << "lc vmap converged at iter=" << iter
+    //                       << " dx_norm=" << dx.norm()
+    //                       << " match=" << n_match;
+    //             break;
+    //         }
+    //     }
+
+    //     // --- 4. 用精化后位姿替换 T_icp ---
+    //     T_icp.block<3, 3>(0, 0) = R_cur.cast<float>();
+    //     T_icp.block<3, 1>(0, 3) = t_cur.cast<float>();
+
+    //     LOG(INFO) << "lc vmap refinement done,"
+    //               << " trans_delta=" << (t_cur - T_cur.block<3, 1>(0, 3)).norm() << "m";
+    // }();
+
+    // ---- 第六步：提取相对位姿（使用 ICP/VoxelMap 精化结果）----
     // T_icp 是 kf1 局部系中 kf2 的修正相对位姿，直接作为回环约束 c.Tij_
     Mat4d T = T_icp.cast<double>();
     Quatd q(T.block<3, 3>(0, 0));
@@ -515,7 +640,7 @@ void LoopClosing::ComputeForCandidate(lightning::LoopCandidate& c) {
     Vec3d t = T.block<3, 1>(0, 3);
     c.Tij_ = SE3(q, t);
 
-    // ---- 第六步：保存调试数据 ----
+    // ---- 第七步：保存调试数据 ----
     // 仅在候选帧完全通过验证（GICP + NDT score 阈值）时才保存调试数据并触发发布。
     // 若 NDT score 不达标，后续 ComputeLoopCandidates 会将该候选丢弃，不应发布其调试点云。
     if (c.ndt_score_ <= options_.ndt_score_th_) {

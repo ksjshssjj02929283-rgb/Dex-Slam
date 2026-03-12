@@ -61,18 +61,38 @@ ament_target_dependencies(lightning.utils
 )
 
 # ----------------------------------------------------------------------------
-# 4. LIO 模块 - 激光惯性里程计
+# 4a. VoxelMap 模块 - 自适应八叉树体素地图
+# ----------------------------------------------------------------------------
+add_library(lightning.core.voxel_map STATIC
+    core/voxel_map/src/octo_tree.cpp
+    core/voxel_map/src/voxel_map_manager.cpp
+)
+
+target_include_directories(lightning.core.voxel_map PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/voxel_map/include
+)
+
+target_link_libraries(lightning.core.voxel_map
+    lightning.common
+    ${third_party_libs}
+    tbb
+)
+
+# ----------------------------------------------------------------------------
+# 4b. LIO 模块 - 激光惯性里程计
 # ----------------------------------------------------------------------------
 add_library(lightning.core.lio STATIC
     core/lio/eskf.cc
     core/lio/imu_processing.cc
     core/lio/laser_mapping.cc
     core/lio/pointcloud_preprocess.cc
+    core/lio/sliding_window_ba.cc
 )
 
 target_link_libraries(lightning.core.lio
     lightning.common
     lightning.utils
+    lightning.core.voxel_map
     ${third_party_libs}
     ${PCL_LIBRARIES}
 )
@@ -93,6 +113,7 @@ add_library(lightning.core.loop STATIC
 target_link_libraries(lightning.core.loop
     lightning.common
     lightning.io
+    lightning.core.voxel_map
     ${third_party_libs}
 )
 
