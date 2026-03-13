@@ -160,6 +160,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
 
   // === Service Clients ===
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_filter_client_;
@@ -190,6 +191,11 @@ private:
     change_map_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/set_map_changed",
         std::bind(&LocalizationManagerNode::HandleChangeMap, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    save_map_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/save_map",
+        std::bind(&LocalizationManagerNode::HandleSaveMap, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // 创建服务客户端
@@ -421,47 +427,8 @@ private:
     
     try {
       if (localization_node_) {
-        // 在结束轨迹前保存 pbstream（包含增量更新后的 global static submap）
-        if (!FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
-          std::string save_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
-          
-          RCLCPP_INFO(get_logger(), "=== Starting map save procedure ===");
-          RCLCPP_INFO(get_logger(), "Saving updated map to: %s", save_filename.c_str());
-
-          auto start_time = std::chrono::steady_clock::now();
-          
-          try {
-            RCLCPP_INFO(get_logger(), "Calling SerializeState...");
-            localization_node_->SerializeState(save_filename, true /* include_unfinished_submaps */);
-            
-            auto end_time = std::chrono::steady_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-            
-            RCLCPP_INFO(get_logger(), "Successfully saved updated map with global static submap (took %ld ms)", 
-                        duration.count());
-          } catch (const std::exception& e) {
-            RCLCPP_ERROR(get_logger(), "Failed to save pbstream: %s", e.what());
-            // 继续停止流程，即使保存失败
-          }
-
-          // 保存地图图像（map.png + map.yaml）
-          // 注意：必须在 FinishAllTrajectories 之前调用，以确保 PoseEstimator 仍然可用
-          try {
-            const std::string map_filestream = FLAGS_map_folder + "/" + FLAGS_map_name + "/map";
-            RCLCPP_INFO(get_logger(), "Saving map image to: %s.png", map_filestream.c_str());
-            bool save_map_success = localization_node_->SaveMap(map_filestream, 0.05 /*resolution, unused*/);
-            if (save_map_success) {
-              RCLCPP_INFO(get_logger(), "Map image saved successfully: %s.png/.yaml", map_filestream.c_str());
-            } else {
-              RCLCPP_WARN(get_logger(), "SaveMap returned false for %s (may be non-fatal)", map_filestream.c_str());
-            }
-          } catch (const std::exception& e) {
-            RCLCPP_ERROR(get_logger(), "Failed to save map image: %s", e.what());
-            // 继续停止流程
-          }
-        } else {
-          RCLCPP_WARN(get_logger(), "Map folder or name not specified, skipping map save");
-        }
+        // 在结束轨迹前保存地图（包含增量更新后的 global static submap）
+        SaveMapInternal();
         
         // 结束所有轨迹
         localization_node_->FinishAllTrajectories();
@@ -478,6 +445,83 @@ private:
       RCLCPP_ERROR(get_logger(), "Error while stopping localization: %s", e.what());
       state_ = LocalizationState::ERROR;
     }
+  }
+
+  /**
+   * @brief 保存地图的核心逻辑（pbstream + map.png/yaml）
+   *        必须在 FinishAllTrajectories 之前调用。
+   * @return true 表示 pbstream 和图像均保存成功，false 表示至少有一项失败
+   */
+  bool SaveMapInternal() {
+    if (!localization_node_) {
+      RCLCPP_ERROR(get_logger(), "Cannot save map: localization node is not running");
+      return false;
+    }
+
+    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
+      RCLCPP_WARN(get_logger(), "Map folder or name not specified, skipping map save");
+      return false;
+    }
+
+    bool overall_success = true;
+
+    // 保存 pbstream（包含增量更新后的 global static submap）
+    std::string save_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
+    RCLCPP_INFO(get_logger(), "=== Starting map save procedure ===");
+    RCLCPP_INFO(get_logger(), "Saving updated map to: %s", save_filename.c_str());
+
+    auto start_time = std::chrono::steady_clock::now();
+    try {
+      RCLCPP_INFO(get_logger(), "Calling SerializeState...");
+      localization_node_->SerializeState(save_filename, true /* include_unfinished_submaps */);
+
+      auto end_time = std::chrono::steady_clock::now();
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+      RCLCPP_INFO(get_logger(), "Successfully saved updated map with global static submap (took %ld ms)",
+                  duration.count());
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(get_logger(), "Failed to save pbstream: %s", e.what());
+      overall_success = false;
+    }
+
+    // 保存地图图像（map.png + map.yaml）
+    // 注意：必须在 FinishAllTrajectories 之前调用，以确保 PoseEstimator 仍然可用
+    try {
+      const std::string map_filestream = FLAGS_map_folder + "/" + FLAGS_map_name + "/map";
+      RCLCPP_INFO(get_logger(), "Saving map image to: %s.png", map_filestream.c_str());
+      bool save_map_success = localization_node_->SaveMap(map_filestream, 0.05 /*resolution, unused*/);
+      if (save_map_success) {
+        RCLCPP_INFO(get_logger(), "Map image saved successfully: %s.png/.yaml", map_filestream.c_str());
+      } else {
+        RCLCPP_WARN(get_logger(), "SaveMap returned false for %s (may be non-fatal)", map_filestream.c_str());
+        overall_success = false;
+      }
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(get_logger(), "Failed to save map image: %s", e.what());
+      overall_success = false;
+    }
+
+    return overall_success;
+  }
+
+  void HandleSaveMap(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING) {
+      response->success = false;
+      response->message = "Localization is not running, cannot save map";
+      RCLCPP_WARN(get_logger(), "save_map service called but localization is not running");
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "save_map service called, saving map...");
+    bool success = SaveMapInternal();
+
+    response->success = success;
+    response->message = success ? "Map saved successfully" : "Map save completed with errors (check logs)";
   }
 
   bool ValidateMapResources() {
