@@ -47,6 +47,9 @@ options = {
   tracked_pose_format = "tum",
   tracked_pose_directory = os.getenv("HOME") .. "/.dexe/data/",
   tracked_pose_filename = "tracked_pose.txt",
+  save_navigation_map = true,
+  navigation_map_filter_mode = "normal",
+  save_debug_map = false,
 }
 
 TRAJECTORY_BUILDER.pure_localization_trimmer = {

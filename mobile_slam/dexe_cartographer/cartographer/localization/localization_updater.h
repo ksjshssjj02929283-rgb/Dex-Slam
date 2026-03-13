@@ -114,6 +114,9 @@ public:
   }
 
 private:
+  // 从 pose_graph_ 的所有轨迹节点重新生成 global_static_submap_
+  // 当旧格式 pbstream（不含 kGlobalStaticSubmap 字段）被加载时，作为 fallback
+  std::shared_ptr<mapping::Submap2D> GenerateGlobalStaticSubmap(double resolution);
   const proto::LocalizationUpdaterOptions options_;
   common::ThreadPool thread_pool_;
 

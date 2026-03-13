@@ -244,8 +244,10 @@ void WritePbStream(
                    writer);
   SerializeTrajectoryNodes(pose_graph.GetTrajectoryNodes(), writer);
   SerializeTrajectoryData(pose_graph.GetTrajectoryData(), writer);
-  SerializeImuData(pose_graph.GetImuData(), writer);
-  SerializeOdometryData(pose_graph.GetOdometryData(), writer);
+  // IMU/Odometry raw sensor data is not needed for localization or re-mapping,
+  // skip serialization to reduce pbstream file size.
+  // SerializeImuData(pose_graph.GetImuData(), writer);
+  // SerializeOdometryData(pose_graph.GetOdometryData(), writer);
   SerializeFixedFramePoseData(pose_graph.GetFixedFramePoseData(), writer);
   SerializeLandmarkNodes(pose_graph.GetLandmarkNodes(), writer);
   

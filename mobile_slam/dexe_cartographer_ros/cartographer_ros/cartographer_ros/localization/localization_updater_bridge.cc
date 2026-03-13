@@ -25,12 +25,17 @@
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 #include "cartographer/io/color.h"
+#include "cartographer/io/image.h"
+#include "cartographer/io/file_writer.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
+#include "cartographer/mapping/probability_values.h"
+#include "cartographer/localization/2d/local_map_updater_2d.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer_ros/conversion/msg_conversion.h"
 #include "cartographer_ros/conversion/time_conversion.h"
@@ -252,6 +257,147 @@ LocalizationUpdaterBridge::FetchSubmapTextures(
 bool LocalizationUpdaterBridge::SerializeState(const std::string& filename,
                                                const bool include_unfinished_submaps) {
   return localization_updater_->SerializeStateToFile(include_unfinished_submaps, filename);
+}
+
+bool LocalizationUpdaterBridge::SaveMap(const std::string& map_filename,
+                                        const float occ_thresh,
+                                        const float free_thresh) {
+  LOG(INFO) << "LocalizationUpdaterBridge::SaveMap - saving to: " << map_filename;
+
+  // 通过 PoseEstimator2D 获取当前全局 submap
+  // PERSISTENT 策略下返回 global_dynamic_submap_（含运行时更新）
+  // NONE 策略下返回 global_static_submap_（原始地图）
+  auto* pose_estimator = localization_updater_->GetPoseEstimator2D();
+  if (!pose_estimator) {
+    LOG(ERROR) << "SaveMap: PoseEstimator2D is null";
+    return false;
+  }
+
+  auto* local_map_updater = pose_estimator->GetLocalMapUpdater();
+  if (!local_map_updater) {
+    LOG(ERROR) << "SaveMap: LocalMapUpdater2D is null";
+    return false;
+  }
+
+  auto submap = local_map_updater->GetGlobalSubmap();
+  if (!submap) {
+    // 如果 GetGlobalSubmap 返回 nullptr（如 NONE 策略但未初始化），尝试静态 submap
+    submap = pose_estimator->GetGlobalStaticSubmap();
+    if (!submap) {
+      LOG(ERROR) << "SaveMap: Global submap is null, cannot generate map image";
+      return false;
+    }
+  }
+
+  const cartographer::mapping::Grid2D* grid = submap->grid();
+  if (!grid) {
+    LOG(ERROR) << "SaveMap: Grid is null";
+    return false;
+  }
+
+  const cartographer::mapping::ProbabilityGrid* probability_grid =
+      static_cast<const cartographer::mapping::ProbabilityGrid*>(grid);
+
+  // 裁剪空白边缘，与 SaveGridMapFromRange / DrawToSubmapTexture 保持一致
+  Eigen::Array2i offset;
+  cartographer::mapping::CellLimits cropped_cell_limits;
+  probability_grid->ComputeCroppedLimits(&offset, &cropped_cell_limits);
+
+  const cartographer::mapping::MapLimits& limits = probability_grid->limits();
+  const double resolution = limits.resolution();
+  const int width = cropped_cell_limits.num_x_cells;
+  const int height = cropped_cell_limits.num_y_cells;
+
+  LOG(INFO) << "SaveMap: cropped grid dimensions " << width << "x" << height
+            << " (original "
+            << limits.cell_limits().num_x_cells << "x"
+            << limits.cell_limits().num_y_cells << ")"
+            << ", resolution=" << resolution;
+
+  // 构建强度/透明度数组（与 MapBuilderBridge::SaveGridMapFromRange 相同逻辑）
+  std::vector<char> intensity_data;
+  std::vector<char> alpha_data;
+  intensity_data.reserve(width * height);
+  alpha_data.reserve(width * height);
+
+  for (int i = 0; i < height; ++i) {
+    for (int j = 0; j < width; ++j) {
+      // 使用裁剪偏移量访问正确的 cell
+      const Eigen::Array2i cell_index(j + offset.x(), i + offset.y());
+      if (!probability_grid->IsKnown(cell_index)) {
+        intensity_data.push_back(0);
+        alpha_data.push_back(0);
+      } else {
+        const float probability = probability_grid->GetProbability(cell_index);
+        const int log_odds_integer =
+            ::cartographer::mapping::ProbabilityToLogOddsInteger(probability);
+        const int delta = 128 - log_odds_integer;
+        const uint8_t alpha_value = delta > 0 ? 0 : static_cast<uint8_t>(-delta);
+        const uint8_t value = delta > 0 ? static_cast<uint8_t>(delta) : 0;
+        intensity_data.push_back(static_cast<char>(value));
+        alpha_data.push_back(static_cast<char>((value || alpha_value) ? alpha_value : 1));
+      }
+    }
+  }
+
+  // 计算 slice_pose（与 DrawToSubmapTexture / SaveGridMapFromRange 一致，考虑裁剪偏移）
+  const double max_x = limits.max().x() - resolution * offset.y();
+  const double max_y = limits.max().y() - resolution * offset.x();
+
+  const auto local_pose = submap->local_pose();
+  const auto slice_pose = local_pose.inverse() *
+      cartographer::transform::Rigid3d::Translation(Eigen::Vector3d(max_x, max_y, 0.));
+
+  // 填充 SubmapSlice
+  std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice> submap_slices;
+  const ::cartographer::mapping::SubmapId virtual_id{0, 0};
+  ::cartographer::io::SubmapSlice& submap_slice = submap_slices[virtual_id];
+  submap_slice.pose = local_pose;
+  submap_slice.width = width;
+  submap_slice.height = height;
+  submap_slice.resolution = resolution;
+  submap_slice.slice_pose = slice_pose;
+  submap_slice.cairo_data.clear();
+  submap_slice.surface = cartographer::io::DrawTexture(
+      intensity_data, alpha_data, width, height, &submap_slice.cairo_data);
+
+  // 生成图像
+  auto result = ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
+  ::cartographer::io::Image image(std::move(result.surface));
+
+  // 保存 PNG
+  WritePng(image, map_filename + ".png", occ_thresh, free_thresh);
+
+  // 计算原点并保存 YAML
+  const Eigen::Vector2d map_origin(
+      -result.origin.x() * resolution,
+      (result.origin.y() - image.height()) * resolution);
+
+  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
+  WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh, free_thresh);
+
+  LOG(INFO) << "SaveMap: successfully saved " << map_filename << ".png/.yaml"
+            << " (" << image.width() << "x" << image.height() << " pixels)";
+
+  // 生成 navigation map（对 map.png 进行噪声过滤，生成适合导航的地图）
+  if (node_options_.save_navigation_map) {
+    // 从 map_filename 推导 map 目录
+    std::string map_dir;
+    size_t last_slash = map_filename.find_last_of("/");
+    if (last_slash != std::string::npos) {
+      map_dir = map_filename.substr(0, last_slash + 1);
+    } else {
+      map_dir = "./";
+    }
+    WriteNavigationMap(map_filename + ".png",
+                       map_filename + "_navigation.png",
+                       node_options_.navigation_map_filter_mode,
+                       node_options_.save_debug_map,
+                       map_dir);
+    LOG(INFO) << "SaveMap: navigation map saved to " << map_filename << "_navigation.png";
+  }
+
+  return true;
 }
 
 /**

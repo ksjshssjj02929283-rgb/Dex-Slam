@@ -110,6 +110,12 @@ class LocalizationUpdaterBridge {
   bool SerializeState(const std::string& filename,
                       const bool include_unfinished_submaps);
 
+  // 保存地图（map.png + map.yaml），从当前全局 submap 生成
+  // map_filename 为不含后缀的路径前缀，例如 "/path/to/map"
+  bool SaveMap(const std::string& map_filename,
+               const float occ_thresh,
+               const float free_thresh);
+
   std::unique_ptr<::cartographer::io::SubmapTextures>
   FetchSubmapTextures(
       const ::cartographer::mapping::SubmapId& submap_id,

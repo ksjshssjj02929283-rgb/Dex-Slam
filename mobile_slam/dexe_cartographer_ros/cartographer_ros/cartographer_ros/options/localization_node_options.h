@@ -51,6 +51,11 @@ struct LocalizationNodeOptions {
 
   float mapping_occ_thresh = 0.65;
   float mapping_free_thresh = 0.196;
+
+  // Navigation map options
+  bool save_navigation_map = false;
+  std::string navigation_map_filter_mode = "normal";  // "normal", "high", "super"
+  bool save_debug_map = false;
 };
 
 LocalizationNodeOptions CreateLocalizationNodeOptions(

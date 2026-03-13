@@ -592,8 +592,11 @@ void LocalizationNode::PublishLocalTrajectoryData()
 bool LocalizationNode::SaveMap(
   const std::string & map_filename, const double resolution)
 {
-  return false;
-  // return localization_updater_bridge_.SaveMap(map_filename, resolution);
+  absl::MutexLock lock(&localization_updater_mutex_);
+  return localization_updater_bridge_.SaveMap(
+      map_filename,
+      static_cast<float>(node_options_.mapping_occ_thresh),
+      static_cast<float>(node_options_.mapping_free_thresh));
 }
 
 

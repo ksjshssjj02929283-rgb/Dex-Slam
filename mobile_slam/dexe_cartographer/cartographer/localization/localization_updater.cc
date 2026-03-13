@@ -30,6 +30,9 @@
 #include "cartographer/mapping/internal/collated_trajectory_builder.h"
 #include "cartographer/mapping/internal/global_trajectory_builder.h"
 #include "cartographer/mapping/internal/motion_filter.h"
+#include "cartographer/mapping/2d/probability_grid.h"
+#include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/sensor/internal/collator.h"
 #include "cartographer/sensor/internal/trajectory_collator.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -447,6 +450,188 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
 }
 
 /**
+ * @brief 从 pose_graph_ 的所有轨迹节点重新生成 global_static_submap_
+ *        用于旧格式 pbstream（不含 kGlobalStaticSubmap 字段）的 fallback
+ * 
+ * @param resolution 栅格地图分辨率（米/格）
+ * @return std::shared_ptr<mapping::Submap2D> 生成的全局静态 submap
+ */
+std::shared_ptr<mapping::Submap2D> LocalizationUpdater::GenerateGlobalStaticSubmap(double resolution) {
+  namespace cmapping = ::cartographer::mapping;
+
+  LOG(INFO) << "Generating global static submap from trajectory nodes (fallback for old pbstream)...";
+  
+  // 1. 获取所有 trajectory nodes
+  cmapping::MapById<cmapping::NodeId, cmapping::TrajectoryNode> nodes =
+      pose_graph_->GetTrajectoryNodes();
+  
+  if (nodes.empty()) {
+    LOG(WARNING) << "No trajectory nodes found for global submap generation";
+    return nullptr;
+  }
+  
+  LOG(INFO) << "Found " << nodes.size() << " trajectory nodes for global submap generation";
+  
+  // 2. 计算地图原点
+  const Eigen::Vector2f origin =
+      nodes.begin()->data.global_pose.translation().head<2>().cast<float>();
+
+  // 3. 创建大的 submap 来积累所有数据
+  constexpr int kLargeSubmapSize = 2000;
+  auto global_submap = std::make_shared<cmapping::Submap2D>(
+      origin,
+      std::unique_ptr<cmapping::Grid2D>(
+          static_cast<cmapping::Grid2D*>(
+              absl::make_unique<cmapping::ProbabilityGrid>(
+                  cmapping::MapLimits(resolution,
+                           origin.cast<double>(),
+                           cmapping::CellLimits(kLargeSubmapSize, kLargeSubmapSize)),
+                  &conversion_tables_).release())),
+      &conversion_tables_,
+      std::make_unique<sensor::PointCloud>(),
+      std::make_unique<sensor::PointCloud>(),
+      0, std::map<int, cmapping::MapLine2D>{});
+  
+  // 4. 获取配置参数
+  const cmapping::proto::ProbabilityGridRangeDataInserterOptions2D* prob_grid_options_ptr = nullptr;
+  const cmapping::proto::SubmapsOptions2D* submaps_options_ptr = nullptr;
+  const cmapping::scan_matching::proto::LineMatcherOptions* line_matcher_options_ptr = nullptr;
+  
+  for (const auto& options_with_ids : all_trajectory_builder_options_) {
+    const auto& traj_opts = options_with_ids.trajectory_builder_options();
+    if (traj_opts.has_trajectory_builder_2d_options()) {
+      const auto& traj_2d_opts = traj_opts.trajectory_builder_2d_options();
+      submaps_options_ptr = &traj_2d_opts.submaps_options();
+      line_matcher_options_ptr = &traj_2d_opts.line_matcher_options();
+      const auto& rdi_opts = submaps_options_ptr->range_data_inserter_options();
+      if (rdi_opts.range_data_inserter_type() ==
+          cmapping::proto::RangeDataInserterOptions::PROBABILITY_GRID_INSERTER_2D) {
+        prob_grid_options_ptr =
+            &rdi_opts.probability_grid_range_data_inserter_options_2d();
+      }
+      break;
+    }
+  }
+  
+  // 设置 cloud/line culling 参数
+  if (submaps_options_ptr) {
+    global_submap->SetCloudCullingProb(submaps_options_ptr->cloud_culling_prob());
+    global_submap->SetLineCullingParam(
+        submaps_options_ptr->min_line_length(),
+        submaps_options_ptr->max_line_length(),
+        submaps_options_ptr->line_culling_obs());
+  }
+  
+  // 5. 创建 range data 插入器
+  cmapping::proto::ProbabilityGridRangeDataInserterOptions2D inserter_options;
+  if (prob_grid_options_ptr) {
+    inserter_options.set_hit_probability(prob_grid_options_ptr->hit_probability());
+    inserter_options.set_miss_probability(prob_grid_options_ptr->miss_probability());
+    inserter_options.set_insert_free_space(prob_grid_options_ptr->insert_free_space());
+  } else {
+    LOG(WARNING) << "Using default range data inserter parameters";
+    inserter_options.set_hit_probability(0.65);
+    inserter_options.set_miss_probability(0.48);
+    inserter_options.set_insert_free_space(true);
+  }
+  auto range_data_inserter =
+      absl::make_unique<cmapping::ProbabilityGridRangeDataInserter2D>(inserter_options);
+  
+  // 6. 创建 line matcher
+  std::unique_ptr<cmapping::scan_matching::LineMatcher2D> line_matcher;
+  if (line_matcher_options_ptr) {
+    line_matcher = std::make_unique<cmapping::scan_matching::LineMatcher2D>(
+        *line_matcher_options_ptr);
+  }
+  
+  // 7. 遍历所有节点，积累数据
+  int nodes_with_real_range_data = 0;
+  int nodes_with_synthetic_range_data = 0;
+  
+  for (const auto& node : nodes) {
+    // 7a. 插入 range data（栅格地图）
+    if (!node.data.constant_data->range_datas.empty()) {
+      nodes_with_real_range_data++;
+      for (const auto& range_data : node.data.constant_data->range_datas) {
+        sensor::RangeData global_range_data;
+        global_range_data.origin = (node.data.global_pose *
+                                    range_data.origin.cast<double>()).cast<float>();
+        global_range_data.returns = sensor::TransformPointCloud(
+            range_data.returns, node.data.global_pose.cast<float>());
+        global_range_data.misses = sensor::TransformPointCloud(
+            range_data.misses, node.data.global_pose.cast<float>());
+        global_submap->InsertRangeData(global_range_data, range_data_inserter.get());
+      }
+    } else {
+      const auto& point_cloud =
+          node.data.constant_data->filtered_gravity_aligned_point_cloud;
+      if (!point_cloud.empty()) {
+        nodes_with_synthetic_range_data++;
+        sensor::RangeData global_range_data;
+        global_range_data.origin = node.data.global_pose.cast<float>().translation();
+        global_range_data.returns = sensor::TransformPointCloud(
+            point_cloud, node.data.global_pose.cast<float>());
+        global_submap->InsertRangeData(global_range_data, range_data_inserter.get());
+      }
+    }
+    
+    // 7b. 插入点云数据
+    auto transformed_cloud = sensor::TransformPointCloud(
+        node.data.constant_data->filtered_gravity_aligned_point_cloud,
+        node.data.global_pose.cast<float>());
+    auto transformed_highlight_cloud = sensor::TransformPointCloud(
+        node.data.constant_data->highlight_point_cloud,
+        node.data.global_pose.cast<float>());
+    global_submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
+    
+    // 7c. 插入线特征数据
+    const auto& lines = node.data.constant_data->lines;
+    if (!lines.empty() && line_matcher) {
+      transform::Rigid2d global_pose_2d = transform::Project2D(node.data.global_pose);
+      std::map<int, std::vector<sensor::LineData>> tracked_line_data;
+      line_matcher->TrackLineFromMap(global_pose_2d, lines,
+                                     *global_submap->line_map_2d_list(),
+                                     tracked_line_data);
+      std::map<int, std::vector<sensor::LineData>> global_tracked_lines;
+      for (const auto& tracked_element : tracked_line_data) {
+        for (const auto& line : tracked_element.second) {
+          sensor::LineData global_line = sensor::TransformLineData(global_pose_2d, line);
+          global_tracked_lines[tracked_element.first].push_back(global_line);
+        }
+      }
+      if (!global_tracked_lines.empty()) {
+        global_submap->InsertLineData(global_tracked_lines);
+      }
+    }
+  }
+  
+  // 8. 完成 submap 构建（执行 LineDataCulling）
+  global_submap->Finish();
+  
+  // 9. 重建 ikd-tree
+  global_submap->RebuildIkdTrees();
+  
+  LOG(INFO) << "=== Fallback Global Static Submap Generation Statistics ===";
+  LOG(INFO) << "Trajectory nodes processed: " << nodes.size();
+  LOG(INFO) << "  - Nodes with real range data: " << nodes_with_real_range_data;
+  LOG(INFO) << "  - Nodes with synthetic range data: " << nodes_with_synthetic_range_data;
+  
+  const auto* cloud = global_submap->cloud();
+  LOG(INFO) << "Point Cloud: " << (cloud ? cloud->size() : 0) << " points";
+  
+  const auto* line_map_2d_list = global_submap->line_map_2d_list();
+  LOG(INFO) << "Line Features: " 
+            << (line_map_2d_list ? line_map_2d_list->GetLineMapData2DList().size() : 0)
+            << " line segments";
+  LOG(INFO) << "===========================================================";
+  
+  // 10. 保存到成员变量
+  global_static_submap_ = global_submap;
+  
+  return global_submap;
+}
+
+/**
  * @brief 从pbstream中读取数据
  * 
  * @param reader 
@@ -647,28 +832,15 @@ std::map<int, int> LocalizationUpdater::LoadState(
     }
   }
 
-  if (load_frozen_state) {
-    // Add information about which nodes belong to which submap.
-    // This is required, even without constraints.
-    for (const mapping::proto::PoseGraph::Constraint& constraint_proto :
-         pose_graph_proto.constraint()) {
-      if (constraint_proto.tag() !=
-          mapping::proto::PoseGraph::Constraint::INTRA_SUBMAP) {
-        continue;
-      }
-      pose_graph_->AddNodeToSubmap(
-          mapping::NodeId{constraint_proto.node_id().trajectory_id(),
-                 constraint_proto.node_id().node_index()},
-          mapping::SubmapId{constraint_proto.submap_id().trajectory_id(),
-                            constraint_proto.submap_id().submap_index()});
-    }
-  } else {
-    // When loading unfrozen trajectories, 'AddSerializedConstraints' will
-    // take care of adding information about which nodes belong to which
-    // submap.
-    pose_graph_->AddSerializedConstraints(
-        mapping::FromProto(pose_graph_proto.constraint()));
-  }
+  // Load all constraints via AddSerializedConstraints regardless of frozen state.
+  // This populates both data_.submap_data[submap_id].node_ids (for INTRA_SUBMAP
+  // constraints) and data_.constraints, ensuring constraints are preserved when
+  // the state is re-serialized after a localization run.
+  // Note: Previously, frozen trajectories only called AddNodeToSubmap (skipping
+  // AddSerializedConstraints), which left data_.constraints empty and caused
+  // constraints() to return 0 entries when re-saving the pbstream.
+  pose_graph_->AddSerializedConstraints(
+      mapping::FromProto(pose_graph_proto.constraint()));
   CHECK(reader->eof());
   
   // 验证global static submap是否加载成功
@@ -754,6 +926,35 @@ std::map<int, int> LocalizationUpdater::LoadStateFromFile(
   
   // 加载状态
   std::map<int, int> trajectory_remapping = LoadState(&stream, load_frozen_state);
+  
+  // Fallback：如果 pbstream 是旧格式（不含 kGlobalStaticSubmap 字段），
+  // 则从 pose_graph_ 的轨迹节点重新生成 global_static_submap_
+  if (!global_static_submap_) {
+    LOG(WARNING) << "global_static_submap_ is null after LoadState. "
+                 << "This pbstream was likely generated by an older version of the mapping node. "
+                 << "Regenerating global static submap from trajectory nodes...";
+    
+    // 从轨迹 options 获取 resolution
+    double resolution = 0.05;  // 默认分辨率
+    for (const auto& options_with_ids : all_trajectory_builder_options_) {
+      const auto& traj_opts = options_with_ids.trajectory_builder_options();
+      if (traj_opts.has_trajectory_builder_2d_options()) {
+        const auto& traj_2d_opts = traj_opts.trajectory_builder_2d_options();
+        if (traj_2d_opts.submaps_options().has_grid_options_2d()) {
+          resolution = traj_2d_opts.submaps_options().grid_options_2d().resolution();
+        }
+        break;
+      }
+    }
+    
+    auto generated_submap = GenerateGlobalStaticSubmap(resolution);
+    if (!generated_submap) {
+      LOG(ERROR) << "Failed to generate global static submap from trajectory nodes! "
+                 << "Localization will fail. Please rebuild the map.";
+    } else {
+      LOG(INFO) << "Successfully generated global static submap as fallback.";
+    }
+  }
   
   return trajectory_remapping;
 }

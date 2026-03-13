@@ -46,7 +46,7 @@ DEFINE_string(configuration_directory, "",
 DEFINE_string(configuration_basename, "",
               "Basename, i.e. not containing any directory prefix, of the "
               "configuration file.");
-DEFINE_bool(load_frozen_state, false,
+DEFINE_bool(load_frozen_state, true,
             "Load the saved state as frozen (non-optimized) trajectories.");
 DEFINE_bool(
     start_trajectory_with_default_topics, true,
@@ -440,8 +440,24 @@ private:
             RCLCPP_INFO(get_logger(), "Successfully saved updated map with global static submap (took %ld ms)", 
                         duration.count());
           } catch (const std::exception& e) {
-            RCLCPP_ERROR(get_logger(), "Failed to save map: %s", e.what());
+            RCLCPP_ERROR(get_logger(), "Failed to save pbstream: %s", e.what());
             // 继续停止流程，即使保存失败
+          }
+
+          // 保存地图图像（map.png + map.yaml）
+          // 注意：必须在 FinishAllTrajectories 之前调用，以确保 PoseEstimator 仍然可用
+          try {
+            const std::string map_filestream = FLAGS_map_folder + "/" + FLAGS_map_name + "/map";
+            RCLCPP_INFO(get_logger(), "Saving map image to: %s.png", map_filestream.c_str());
+            bool save_map_success = localization_node_->SaveMap(map_filestream, 0.05 /*resolution, unused*/);
+            if (save_map_success) {
+              RCLCPP_INFO(get_logger(), "Map image saved successfully: %s.png/.yaml", map_filestream.c_str());
+            } else {
+              RCLCPP_WARN(get_logger(), "SaveMap returned false for %s (may be non-fatal)", map_filestream.c_str());
+            }
+          } catch (const std::exception& e) {
+            RCLCPP_ERROR(get_logger(), "Failed to save map image: %s", e.what());
+            // 继续停止流程
           }
         } else {
           RCLCPP_WARN(get_logger(), "Map folder or name not specified, skipping map save");
