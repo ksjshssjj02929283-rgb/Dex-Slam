@@ -9,6 +9,7 @@
 #include "common/loop_candidate.h"
 #include "common/nav_state.h"
 #include "common/point_def.h"
+#include "voxel_map/voxel_types.hpp"
 
 namespace lightning::ui {
 
@@ -55,6 +56,9 @@ class PangolinWindow {
 
     /// 更新回环边信息
     void UpdateLoopEdges(const std::vector<std::pair<int, int>>& loop_edges);
+
+    /// 更新 VoxelMap 平面数据（用于 UI 绘制）
+    void UpdateVoxelMapPlanes(const std::vector<voxel_map::PlaneVis>& planes);
 
     /// 等待显示线程结束，并释放资源
     void Quit();

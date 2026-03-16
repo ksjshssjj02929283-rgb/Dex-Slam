@@ -86,7 +86,12 @@ void build_single_residual(const pointWithCov& pv, const OctoTree* current_octo,
 // ============================================================================
 // 获取需要更新的平面（用于可视化）
 // ============================================================================
+/// 无距离过滤版本（遍历全量）
 void GetUpdatePlane(const OctoTree* current_octo, int pub_max_voxel_layer, std::vector<Plane>& plane_list);
+
+/// 带距离过滤版本：current_pos + radius_sq 用于在遍历时提前剔除远端体素
+void GetUpdatePlane(const OctoTree* current_octo, int pub_max_voxel_layer, std::vector<Plane>& plane_list,
+                    const Eigen::Vector3d& current_pos, double radius_sq);
 
 }  // namespace voxel_map
 }  // namespace lightning

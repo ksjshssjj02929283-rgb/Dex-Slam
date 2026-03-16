@@ -24,16 +24,24 @@ fasterlio:
   voxel_map:
     voxel_size: 0.5                  # 顶层体素大小（米）- Livox 精度高，可以更小
     max_layer: 2                     # 八叉树最大层数
-    layer_point_size: [5, 5, 5]      # 每层触发平面拟合的最小点数
-    max_points_size: 50              # 每个体素最大点数
-    max_cov_points_size: 50          # 保留协方差更新的最大点数
+    layer_point_size: [10, 10, 10]      # 每层触发平面拟合的最小点数
+    max_points_size: 500              # 每个体素最大点数
+    max_cov_points_size: 500          # 保留协方差更新的最大点数
     planer_threshold: 0.01           # 平面判定阈值
     sigma_num: 3.0                   # sigma 倍数
     ranging_cov: 0.02                # Livox 测距方差更小
     angle_cov: 0.001                 # Livox 角度方差更小
-    pub_max_voxel_layer: 1           # 可视化的最大体素层级
+    pub_max_voxel_layer: 0           # 可视化的最大体素层级
+    pub_voxel_map: false              # 是否发布 VoxelMap 平面（可视化），false 时跳过 GetUpdatedPlanesForVis
 
   esti_plane_threshold: 0.1        # default=0.1
+
+  # IVox 参数（与 VoxelMap 共同用于点面匹配定位）
+  use_ivox: true                   # 是否启用 IVox 约束（前段）
+  ivox_grid_resolution: 0.2        # IVox 体素大小（米），适当增大提高鲁棒性
+  ivox_nearby_type: 18             # 邻域类型: 0/6/18/26，26最大搜索范围最鲁棒
+
+  use_voxel_map: true              # 是否启用 VoxelMap 约束（后段）
 
   use_aa: true  # use anderson-acceleration
 

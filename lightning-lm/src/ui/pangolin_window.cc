@@ -11,6 +11,7 @@ bool PangolinWindow::Init() {
     impl_->lidarloc_need_update_.store(false);
     impl_->current_scan_need_update_.store(false);
     impl_->loop_debug_need_update_.store(false);
+    impl_->voxel_planes_need_update_.store(false);
 
     bool inited = impl_->Init();
     // 创建渲染线程
@@ -119,6 +120,12 @@ void PangolinWindow::UpdateLoopEdges(const std::vector<std::pair<int, int>>& loo
     for (const auto& edge : loop_edges) {
         impl_->loop_info_.push_back(edge);
     }
+}
+
+void PangolinWindow::UpdateVoxelMapPlanes(const std::vector<voxel_map::PlaneVis>& planes) {
+    std::lock_guard<std::mutex> lock(impl_->mtx_voxel_planes_);
+    impl_->voxel_planes_ = planes;
+    impl_->voxel_planes_need_update_.store(true);
 }
 
 void PangolinWindow::SetCurrentScanSize(int current_scan_size) { impl_->max_size_of_current_scan_ = current_scan_size; }

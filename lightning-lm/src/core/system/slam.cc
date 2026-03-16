@@ -136,9 +136,11 @@ bool SlamSystem::Init(const std::string& yaml_path) {
                 rviz_opt.pub_trajectory = yaml["rviz"]["pub_trajectory"].as<bool>(true);
                 rviz_opt.pub_keyframes = yaml["rviz"]["pub_keyframes"].as<bool>(true);
                 rviz_opt.pub_loop_edges = yaml["rviz"]["pub_loop_edges"].as<bool>(true);
+                rviz_opt.pub_voxel_map = yaml["rviz"]["pub_voxel_map"].as<bool>(true);
                 rviz_opt.local_map_downsample = yaml["rviz"]["local_map_downsample"].as<int>(5);
             }
             rviz_pub_ = std::make_shared<RVizPublisher>(node_, rviz_opt);
+            lio_->SetRVizPublisher(rviz_pub_);
         }
 
         LOG(INFO) << "online slam node has been created.";

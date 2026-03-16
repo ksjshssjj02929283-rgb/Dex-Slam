@@ -31,9 +31,17 @@ fasterlio:
     sigma_num: 3.0                   # 3σ 检验的 sigma 倍数
     ranging_cov: 0.04                # 测距方差 (m²)
     angle_cov: 0.001                 # 角度方差 (rad²)
-    pub_max_voxel_layer: 1           # 可视化的最大体素层级
+    pub_max_voxel_layer: 0           # 可视化的最大体素层级
+    pub_voxel_map: false              # 是否发布 VoxelMap 平面（可视化），false 时跳过 GetUpdatedPlanesForVis
 
   esti_plane_threshold: 0.1        # default=0.1
+
+  # IVox 参数（与 VoxelMap 共同用于点面匹配定位）
+  use_ivox: true                   # 是否启用 IVox 约束（前段）
+  ivox_grid_resolution: 0.5
+  ivox_nearby_type: 18
+
+  use_voxel_map: true              # 是否启用 VoxelMap 约束（后段）
 
   use_aa: true  # use anderson-acceleration
 
