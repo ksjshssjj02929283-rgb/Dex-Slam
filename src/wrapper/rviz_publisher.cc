@@ -2,6 +2,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/common/transforms.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include "voxel_map/voxel_map_vis.hpp"
 
 namespace lightning {
 
@@ -60,6 +61,11 @@ RVizPublisher::RVizPublisher(rclcpp::Node::SharedPtr node, Options options)
         "/lightning/loop/scan", 10);
     loop_aligned_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
         "/lightning/loop/aligned", 10);
+
+    if (options_.pub_voxel_map) {
+        voxel_map_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/lightning/voxel_map/planes", 10);
+    }
 
     timer_ = node_->create_wall_timer(
         std::chrono::milliseconds(100),
@@ -478,6 +484,24 @@ void RVizPublisher::PublishTimerCallback() {
         
         loop_debug_updated_ = false;
     }
+
+    // 发布 VoxelMap 平面（MarkerArray）
+    if (options_.pub_voxel_map && voxel_map_updated_ && voxel_map_pub_) {
+        std::lock_guard<std::mutex> lock(mtx_voxel_map_);
+        auto marker_array = voxel_map::toMarkerArray(voxel_map_planes_, "map", "voxel_plane");
+        // 为所有 marker 补充时间戳
+        for (auto& m : marker_array.markers) {
+            m.header.stamp = now;
+        }
+        voxel_map_pub_->publish(marker_array);
+        voxel_map_updated_ = false;
+    }
+}
+
+void RVizPublisher::UpdateVoxelMap(const std::vector<voxel_map::PlaneVis>& planes) {
+    std::lock_guard<std::mutex> lock(mtx_voxel_map_);
+    voxel_map_planes_ = planes;
+    voxel_map_updated_ = true;
 }
 
 sensor_msgs::msg::PointCloud2 RVizPublisher::ToRosCloud(CloudPtr cloud, const std::string& frame_id) {
