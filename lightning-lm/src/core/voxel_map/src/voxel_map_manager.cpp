@@ -292,5 +292,39 @@ std::vector<PlaneVis> VoxelMapManager::GetAllPlanesForVis(int max_layer) {
     return result;
 }
 
+/// 带距离过滤的重载：只返回距 current_pos 在 radius 米以内的平面
+std::vector<PlaneVis> VoxelMapManager::GetUpdatedPlanesForVis(const Eigen::Vector3d& current_pos, double radius) {
+    if (radius <= 0.0) {
+        return GetUpdatedPlanesForVis();
+    }
+
+    const double radius_sq = radius * radius;
+    std::vector<Plane> raw_planes;
+    // 距离过滤下沉到 GetUpdatePlane：直接用体素中心剔除远端体素，不进入其子树
+    for (auto iter = voxel_map_.begin(); iter != voxel_map_.end(); ++iter) {
+        GetUpdatePlane(iter->second, config_.pub_max_voxel_layer, raw_planes, current_pos, radius_sq);
+    }
+
+    std::vector<PlaneVis> result;
+    result.reserve(raw_planes.size());
+    for (auto& p : raw_planes) {
+        if (!p.is_plane) continue;
+        PlaneVis vis;
+        vis.center = p.center;
+        vis.normal = p.normal;
+        vis.x_normal = p.x_normal;
+        vis.y_normal = p.y_normal;
+        vis.max_eigen_value = p.max_eigen_value;
+        vis.mid_eigen_value = p.mid_eigen_value;
+        vis.min_eigen_value = p.min_eigen_value;
+        vis.is_plane = p.is_plane;
+        vis.id = p.id;
+        vis.radius = p.radius;
+        vis.plane_cov_trace = p.plane_cov.block<3, 3>(0, 0).diagonal().sum();
+        result.push_back(vis);
+    }
+    return result;
+}
+
 }  // namespace voxel_map
 }  // namespace lightning

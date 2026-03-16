@@ -86,7 +86,6 @@ add_library(lightning.core.lio STATIC
     core/lio/imu_processing.cc
     core/lio/laser_mapping.cc
     core/lio/pointcloud_preprocess.cc
-    core/lio/sliding_window_ba.cc
 )
 
 target_link_libraries(lightning.core.lio
@@ -101,6 +100,10 @@ ament_target_dependencies(lightning.core.lio
     "rclcpp"
     "sensor_msgs"
     "nav_msgs"
+    "visualization_msgs"
+    "geometry_msgs"
+    "pcl_conversions"
+    "tf2_geometry_msgs"
 )
 
 # ----------------------------------------------------------------------------
@@ -197,6 +200,10 @@ add_library(lightning.ui STATIC
     ui/ui_trajectory.cc
 )
 
+target_include_directories(lightning.ui PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/voxel_map/include
+)
+
 target_link_libraries(lightning.ui
     lightning.common
     ${third_party_libs}
@@ -241,6 +248,10 @@ ament_target_dependencies(lightning.system
 add_library(lightning.wrapper STATIC
     wrapper/bag_io.cc
     wrapper/rviz_publisher.cc
+)
+
+target_include_directories(lightning.wrapper PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/voxel_map/include
 )
 
 target_link_libraries(lightning.wrapper

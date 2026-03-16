@@ -15,6 +15,7 @@
 
 #include "common/keyframe.h"
 #include "common/loop_candidate.h"
+#include "voxel_map/voxel_types.hpp"
 
 #include "ui/pangolin_window.h"
 #include "ui/ui_car.h"
@@ -61,6 +62,7 @@ class PangolinWindowImpl {
     std::mutex mtx_nav_state_;
     std::mutex mtx_gps_pose_;
     std::mutex mtx_loop_info_;
+    std::mutex mtx_voxel_planes_;  // VoxelMap 平面数据锁
 
     std::mutex mtx_reset_;
 
@@ -72,6 +74,7 @@ class PangolinWindowImpl {
     std::atomic<bool> current_scan_need_update_;   // 更新当前扫描
     std::atomic<bool> lidarloc_need_update_;       // 雷达位置？
     std::atomic<bool> loop_debug_need_update_;     // 回环调试数据更新
+    std::atomic<bool> voxel_planes_need_update_;   // VoxelMap 平面数据更新
 
     pcl::PointCloud<PointType>::Ptr current_scan_ = nullptr;  // 当前scan
     SE3 newest_frontend_pose_;                                // 最新pose
@@ -92,6 +95,9 @@ class PangolinWindowImpl {
     // 地图点云
     std::map<int, CloudPtr> cloud_global_map_;
     std::map<int, CloudPtr> cloud_dynamic_map_;
+
+    // VoxelMap 平面（用于 OpenGL 绘制）
+    std::vector<lightning::voxel_map::PlaneVis> voxel_planes_;  // 渲染用平面副本
 
     /// 滤波器状态
     Sophus::SE3d pose_;
@@ -114,6 +120,7 @@ class PangolinWindowImpl {
     void CreateDisplayLayout();
 
     void DrawAll();  // 作图：画定位窗口
+    void DrawVoxelPlanes();    // 绘制 VoxelMap 平面圆盘
 
     /// 渲染点云，调用各种Update函数
     void RenderClouds();
@@ -121,7 +128,8 @@ class PangolinWindowImpl {
     bool UpdateDynamicMap();
     bool UpdateState();
     bool UpdateCurrentScan();
-    bool UpdateLoopDebug();  // 更新回环调试信息
+    bool UpdateLoopDebug();    // 更新回环调试信息
+    bool UpdateVoxelPlanes();  // 拷贝最新平面数据到渲染缓存
 
     void RenderLabels();
 
@@ -143,6 +151,7 @@ class PangolinWindowImpl {
     bool following_loc_ = true;       // 相机是否追踪定位结果
     bool draw_frontend_traj_ = true;  // 可视化前端轨迹
     bool draw_backend_traj_ = true;   // 可视化后端轨迹
+    bool show_voxel_planes_ = true; // 是否显示 VoxelMap 平面
 
     // text
     pangolin::GlText gltext_label_global_;

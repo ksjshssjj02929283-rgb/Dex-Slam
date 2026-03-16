@@ -10,6 +10,7 @@
 #include "common/imu.h"
 #include "common/keyframe.h"
 #include "common/options.h"
+#include "core/ivox3d/ivox3d.h"
 #include "voxel_map/voxel_map_manager.hpp"
 #include "core/lio/eskf.hpp"
 #include "core/lio/imu_processing.h"
@@ -22,6 +23,8 @@ namespace lightning {
 namespace ui {
 class PangolinWindow;
 }
+
+class RVizPublisher;
 
 /**
  * laser mapping
@@ -42,15 +45,11 @@ class LaserMapping {
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
+    using IVoxType = IVox<3, IVoxNodeType::DEFAULT, PointType>;
     using VoxelMapType = voxel_map::VoxelMapManager;
 
     LaserMapping(Options options = Options());
-    ~LaserMapping() {
-        scan_down_body_ = nullptr;
-        scan_undistort_ = nullptr;
-        scan_down_world_ = nullptr;
-        LOG(INFO) << "laser mapping deconstruct";
-    }
+    ~LaserMapping();
 
     /// init without ros
     bool Init(const std::string &config_yaml);
@@ -73,6 +72,9 @@ class LaserMapping {
     void SaveMap();
 
     void SetUI(std::shared_ptr<ui::PangolinWindow> ui) { ui_ = ui; }
+
+    /// 设置 RViz 发布器（用于 voxel map 平面发布）
+    void SetRVizPublisher(std::shared_ptr<RVizPublisher> pub) { rviz_publisher_ = pub; }
 
     /// 获取关键帧
     Keyframe::Ptr GetKeyframe() const { return last_kf_; }
@@ -139,8 +141,14 @@ class LaserMapping {
     /// modules
     voxel_map::VoxelMapConfig vmap_config_;
     std::shared_ptr<VoxelMapType> vmap_ = nullptr;                // localmap in voxel_map
+    IVoxType::Options ivox_options_;
+    std::shared_ptr<IVoxType> ivox_ = nullptr;                    // incremental voxel map (IVox)
     std::shared_ptr<PointCloudPreprocess> preprocess_ = nullptr;  // point cloud preprocess
     std::shared_ptr<ImuProcess> p_imu_ = nullptr;                 // imu process
+
+    bool use_ivox_ = true;        // 是否启用 IVox 约束
+    bool use_voxel_map_ = true;   // 是否启用 VoxelMap 约束
+    bool pub_voxel_map_ = true;   // 是否发布 VoxelMap 平面（可视化）
 
     /// local map related
     double filter_size_map_min_ = 0;
@@ -162,12 +170,21 @@ class LaserMapping {
 
     /// VoxelMap matching data
     std::vector<voxel_map::pointWithCov> pv_list_;    // points with covariance for voxel_map
-    std::vector<voxel_map::ptpl> ptpl_list_;          // point-to-plane match results
+    std::vector<voxel_map::ptpl> ptpl_list_;          // point-to-plane match results (VoxelMap)
 
-    /// IEKF 预缓存：body_cov 和 crossmat 在 IEKF 循环外仅计算一次
+    /// IVox matching data (point-to-plane via kNN + esti_plane)
+    using PointVector = std::vector<PointType, Eigen::aligned_allocator<PointType>>;
+    std::vector<PointVector> nearest_points_;         // kNN neighbors for each down-sampled point
+    std::vector<bool> point_selected_surf_;           // whether point has a valid plane match (IVox)
+    std::vector<Vec4f> plane_coef_;                   // plane coefficients [nx,ny,nz,d] for each IVox match
+    std::vector<Vec4f> corr_pts_;                     // [px,py,pz, residual] for valid IVox matches
+    std::vector<Vec4f> corr_norm_;                    // [nx,ny,nz, 0] for valid IVox matches
+    std::vector<float> residuals_;                    // per-point residual for IVox (used for median stats)
+
+    /// IEKF 预缓存：body_cov 和 crossmat 在 IEKF 循环外仅计算一次（VoxelMap 需要）
     std::vector<Eigen::Matrix3d> body_cov_list_;      // body 坐标系下的点测量协方差
     std::vector<Eigen::Vector3d> body_points_list_;   // body 坐标系下的点坐标缓存
-    bool iekf_first_iter_ = true;                     // 标记是否为 IEKF 首次迭代（需要 hash 查找）
+    bool iekf_first_iter_ = true;                     // 标记是否为 IEKF 首次迭代（VoxelMap hash 查找）
 
     std::mutex mtx_buffer_;
     std::deque<double> time_buffer_;
@@ -207,12 +224,15 @@ class LaserMapping {
 
     NavState state_point_;  // ekf current state
 
+    SE3 T_lidar_body_;  // lidar to body transform
+
     Vec3d pos_lidar_;  // lidar position after eskf update
     SO3 euler_cur_;    // rotation in euler angles
     bool extrinsic_est_en_ = true;
     bool use_aa_ = false;  // use anderson acceleration?
 
     std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;
+    std::shared_ptr<RVizPublisher> rviz_publisher_ = nullptr;  // RViz 发布器（用于 voxel map 平面）
 };
 
 }  // namespace lightning

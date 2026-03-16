@@ -350,8 +350,73 @@ void PangolinWindowImpl::DrawAll() {
     }
     glPointSize(1.0);  // 恢复默认点尺寸
 
+    // 绘制 VoxelMap 平面
+    if (show_voxel_planes_) {
+        DrawVoxelPlanes();
+    }
+
     // 文字
     RenderLabels();
+}
+
+bool PangolinWindowImpl::UpdateVoxelPlanes() {
+    if (!voxel_planes_need_update_.load()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mtx_voxel_planes_);
+    voxel_planes_need_update_.store(false);
+    return true;
+}
+
+void PangolinWindowImpl::DrawVoxelPlanes() {
+    std::lock_guard<std::mutex> lock(mtx_voxel_planes_);
+    if (voxel_planes_.empty()) return;
+
+    // 使用 GL_TRIANGLE_FAN 绘制椭圆平面圆盘，颜色按 plane_cov_trace jet 映射
+    constexpr int kSlices = 32;
+    constexpr double kTwoPi = 2.0 * M_PI;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    for (const auto& p : voxel_planes_) {
+        if (!p.is_plane) continue;
+
+        // Jet colormap
+        double trace = std::min(p.plane_cov_trace, 0.25) / 0.25;
+        trace = std::pow(trace, 0.2);
+        float r, g, b;
+        if (trace < 0.25) {
+            r = 0.0f; g = static_cast<float>(4.0 * trace); b = 1.0f;
+        } else if (trace < 0.5) {
+            r = 0.0f; g = 1.0f; b = static_cast<float>(1.0 - 4.0 * (trace - 0.25));
+        } else if (trace < 0.75) {
+            r = static_cast<float>(4.0 * (trace - 0.5)); g = 1.0f; b = 0.0f;
+        } else {
+            r = 1.0f; g = static_cast<float>(1.0 - 4.0 * (trace - 0.75)); b = 0.0f;
+        }
+        glColor4f(r, g, b, 0.5f);
+
+        // 椭圆半径（与 RViz MarkerArray 一致）
+        double rx = 1.5 * std::sqrt(p.max_eigen_value);
+        double ry = 1.5 * std::sqrt(p.mid_eigen_value);
+
+        Eigen::Vector3d cx = p.center;
+        Eigen::Vector3d ex = p.x_normal * rx;
+        Eigen::Vector3d ey = p.y_normal * ry;
+
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex3d(cx(0), cx(1), cx(2));
+        for (int s = 0; s <= kSlices; ++s) {
+            double theta = kTwoPi * s / kSlices;
+            Eigen::Vector3d pt = cx + std::cos(theta) * ex + std::sin(theta) * ey;
+            glVertex3d(pt(0), pt(1), pt(2));
+        }
+        glEnd();
+    }
+
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);  // 恢复默认颜色
+    glDisable(GL_BLEND);
 }
 
 void PangolinWindowImpl::RenderClouds() {
@@ -363,6 +428,7 @@ void PangolinWindowImpl::RenderClouds() {
     UpdateState();
     UpdateCurrentScan();
     UpdateLoopDebug();  // 更新回环调试信息
+    UpdateVoxelPlanes(); // 更新 VoxelMap 平面
 
     // 绘制
     pangolin::Display(dis_3d_main_name_).Activate(s_cam_main_);
@@ -456,6 +522,7 @@ void PangolinWindowImpl::Render() {
     // menu
     pangolin::CreatePanel("menu").SetBounds(0.0, 1.0, 0.0, pangolin::Attach::Pix(menu_width_));
     pangolin::Var<bool> menu_follow_loc("menu.Follow", false, true);                     // 跟踪实时定位
+    pangolin::Var<bool> menu_show_voxel_planes("menu.Show Voxel Planes", true, true);   // 显示 VoxelMap 平面
     pangolin::Var<bool> menu_draw_frontend_traj("menu.Draw Frontend Traj", true, true);  // 前端实时轨迹
     pangolin::Var<bool> menu_draw_backend_traj("menu.Draw Backend Traj", false, true);   // 后端实时轨迹
     pangolin::Var<bool> menu_reset_3d_view("menu.Reset 3D View", false, false);          // 重置俯视视角
@@ -479,6 +546,7 @@ void PangolinWindowImpl::Render() {
         following_loc_ = menu_follow_loc;
         draw_frontend_traj_ = menu_draw_frontend_traj;
         draw_backend_traj_ = menu_draw_backend_traj;
+        show_voxel_planes_ = menu_show_voxel_planes;
 
         if (menu_reset_3d_view) {
             s_cam_main_.SetModelViewMatrix(pangolin::ModelViewLookAt(0, 0, 1000, 0, 0, 0, pangolin::AxisY));
