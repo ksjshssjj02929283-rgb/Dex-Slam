@@ -425,7 +425,7 @@ void build_single_residual(const pointWithCov& pv, const OctoTree* current_octo,
 }
 
 // ============================================================================
-// 获取需要更新可视化的平面
+// 获取需要更新可视化的平面（无距离过滤）
 // ============================================================================
 void GetUpdatePlane(const OctoTree* current_octo, int pub_max_voxel_layer, std::vector<Plane>& plane_list) {
     if (current_octo->layer_ > pub_max_voxel_layer) {
@@ -439,6 +439,35 @@ void GetUpdatePlane(const OctoTree* current_octo, int pub_max_voxel_layer, std::
             for (size_t i = 0; i < 8; i++) {
                 if (current_octo->leaves_[i] != nullptr) {
                     GetUpdatePlane(current_octo->leaves_[i], pub_max_voxel_layer, plane_list);
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// 获取需要更新可视化的平面（带距离过滤）
+// current_pos + radius_sq：在遍历时用体素中心做提前剔除，避免深入远端子树
+// ============================================================================
+void GetUpdatePlane(const OctoTree* current_octo, int pub_max_voxel_layer, std::vector<Plane>& plane_list,
+                    const Eigen::Vector3d& current_pos, double radius_sq) {
+    if (current_octo->layer_ > pub_max_voxel_layer) {
+        return;
+    }
+    // 用体素中心做距离预判：若体素中心已超出 radius，跳过整颗子树
+    Eigen::Vector3d center(current_octo->voxel_center_[0], current_octo->voxel_center_[1],
+                           current_octo->voxel_center_[2]);
+    if ((center - current_pos).squaredNorm() > radius_sq) {
+        return;
+    }
+    if (current_octo->plane_ptr_->is_update) {
+        plane_list.push_back(*current_octo->plane_ptr_);
+    }
+    if (current_octo->layer_ < current_octo->max_layer_) {
+        if (!current_octo->plane_ptr_->is_plane) {
+            for (size_t i = 0; i < 8; i++) {
+                if (current_octo->leaves_[i] != nullptr) {
+                    GetUpdatePlane(current_octo->leaves_[i], pub_max_voxel_layer, plane_list, current_pos, radius_sq);
                 }
             }
         }

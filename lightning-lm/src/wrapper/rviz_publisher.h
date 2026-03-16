@@ -11,6 +11,7 @@
 #include "common/keyframe.h"
 #include "common/point_def.h"
 #include "common/nav_state.h"
+#include "voxel_map/voxel_types.hpp"
 
 namespace lightning {
 
@@ -24,6 +25,7 @@ public:
         bool pub_trajectory = true;
         bool pub_keyframes = true;
         bool pub_loop_edges = true;
+        bool pub_voxel_map = true;     // VoxelMap 平面可视化
 
         int local_map_downsample = 5;
         int global_map_downsample = 10;
@@ -50,6 +52,9 @@ public:
     void UpdateCurrentPose(const SE3& pose);  // 实时位姿
     void UpdateNavState(const NavState& state);  // 完整状态（位姿+速度+偏置）
 
+    /// 更新 VoxelMap 平面数据，下一定时器周期发布 MarkerArray
+    void UpdateVoxelMap(const std::vector<voxel_map::PlaneVis>& planes);
+
 private:
     void PublishTimerCallback();
     sensor_msgs::msg::PointCloud2 ToRosCloud(CloudPtr cloud, const std::string& frame_id);
@@ -70,6 +75,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_submap_pub_;      // 回环submap
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_scan_pub_;        // 回环当前scan
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_aligned_pub_;     // 配准后的scan
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr voxel_map_pub_; // VoxelMap 平面
 
     rclcpp::TimerBase::SharedPtr timer_;
 
@@ -107,6 +113,10 @@ private:
     bool dynamic_map_updated_ = false;
     bool pose_updated_ = false;
     bool loop_debug_updated_ = false;  // 回环调试数据更新标志
+    bool voxel_map_updated_ = false;   // VoxelMap 平面更新标志
+
+    std::mutex mtx_voxel_map_;                           // VoxelMap 平面数据锁
+    std::vector<voxel_map::PlaneVis> voxel_map_planes_;  // 缓存的平面数据
 };
 
 }  // namespace lightning

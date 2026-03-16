@@ -115,6 +115,8 @@ class VoxelMapManager {
      * @note  调用后会清除 is_update 标志
      */
     std::vector<PlaneVis> GetUpdatedPlanesForVis();
+    /// 带距离过滤的版本：只返回距 current_pos 在 radius 米以内的平面（radius<=0 表示不过滤）
+    std::vector<PlaneVis> GetUpdatedPlanesForVis(const Eigen::Vector3d& current_pos, double radius);
 
     /**
      * @brief 获取地图中所有平面（用于全量发布）
