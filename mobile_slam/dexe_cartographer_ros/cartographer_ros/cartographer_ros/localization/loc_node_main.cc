@@ -21,7 +21,6 @@
 #include <chrono>
 #include <mutex>
 #include <filesystem>
-#include <csignal>
 #include <atomic>
 
 #include <rclcpp/rclcpp.hpp>
@@ -32,6 +31,7 @@
 #include "absl/memory/memory.h"
 #include "cartographer/localization/localization_updater.h"
 #include "cartographer_ros/localization/localization_node.h"
+#include "cartographer_ros/localization/map_persistence_manager.h"
 #include "cartographer_ros/options/localization_node_options.h"
 #include "cartographer_ros/mapping/ros_log_sink.h"
 #include "gflags/gflags.h"
@@ -62,10 +62,23 @@ DEFINE_string(
     map_name, "",
     "Name of the map to be saved. If empty, a map will not be saved.");
 
-namespace cartographer_ros {
+// ---------------------------------------------------------------------------
+// MapPersistenceManager GFlags（可在 launch 文件的 arguments 中覆盖）
+// ---------------------------------------------------------------------------
+DEFINE_double(
+    auto_save_interval_s, 1800.0,
+    "Interval in seconds between automatic map saves (default: 1800 = 30 min). "
+    "The save is triggered only when the robot velocity is below threshold.");
+DEFINE_double(
+    auto_save_linear_velocity_threshold, 0.01,
+    "Linear velocity threshold (m/s) below which the robot is considered static "
+    "for periodic map saving.");
+DEFINE_double(
+    auto_save_angular_velocity_threshold, 0.01,
+    "Angular velocity threshold (rad/s) below which the robot is considered static "
+    "for periodic map saving.");
 
-// 全局指针，用于信号处理
-static std::weak_ptr<class LocalizationManagerNode> g_node;
+namespace cartographer_ros {
 
 /**
  * @brief LocalizationManager - 管理LocalizationNode生命周期的ROS2节点
@@ -105,20 +118,20 @@ public:
   }
 
   ~LocalizationManagerNode() {
-    RCLCPP_INFO(get_logger(), "Shutting down LocalizationManager Node");
-    Shutdown();
+    // RCLCPP_INFO(get_logger(), "Shutting down LocalizationManager Node");
+    // Shutdown();
   }
 
   // 显式的shutdown方法，确保能够完成清理
   void Shutdown() {
-    // 使用atomic标志避免重复调用，减少锁的持有时间
+    // 使用atomic标志避免重复调用
     bool expected = false;
     if (!shutdown_flag_.compare_exchange_strong(expected, true)) {
       return;  // 已经在执行shutdown
     }
-    
+
     RCLCPP_INFO(get_logger(), "Performing shutdown sequence...");
-    
+
     // 取消所有定时器（不需要锁）
     if (health_check_timer_) {
       health_check_timer_->cancel();
@@ -126,10 +139,7 @@ public:
     if (auto_start_timer_) {
       auto_start_timer_->cancel();
     }
-    
-    // 停止定位并保存地图（内部有自己的状态管理）
-    StopLocalization();
-    
+
     RCLCPP_INFO(get_logger(), "Shutdown sequence completed");
   }
 
@@ -170,6 +180,9 @@ private:
   // === Monitoring ===
   rclcpp::TimerBase::SharedPtr health_check_timer_;
   rclcpp::TimerBase::SharedPtr auto_start_timer_;
+
+  // === Map Persistence ===
+  std::unique_ptr<MapPersistenceManager> map_persistence_manager_;
 
   void InitializeServices() {
     // 创建服务
@@ -406,6 +419,17 @@ private:
       }
 
       state_ = LocalizationState::RUNNING;
+
+      // 创建地图持久化管理器（定时自动保存 + 外部调用保存）
+      map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
+          this,
+          [this]() -> localization::LocalizationNode* {
+            return localization_node_.get();
+          },
+          [this]() -> std::pair<std::string, std::string> {
+            return {FLAGS_map_folder, FLAGS_map_name};
+          });
+
       RCLCPP_INFO(get_logger(), "Localization started successfully");
       return true;
 
@@ -426,15 +450,26 @@ private:
     state_ = LocalizationState::STOPPING;
     
     try {
+      // 先停止自动保存定时器，防止与下面的手动保存并发
+      if (map_persistence_manager_) {
+        map_persistence_manager_->Stop();
+      }
+
       if (localization_node_) {
-        // 在结束轨迹前保存地图（包含增量更新后的 global static submap）
-        SaveMapInternal();
+        // 在结束轨迹前通过持久化管理器保存地图（pbstream + map.png/yaml）
+        if (map_persistence_manager_) {
+          map_persistence_manager_->SaveNow();
+        } else {
+          // 降级：直接调用（map_persistence_manager 未初始化时的保底路径）
+          SaveMapInternal();
+        }
         
         // 结束所有轨迹
         localization_node_->FinishAllTrajectories();
         localization_node_.reset();
       }
-      
+
+      map_persistence_manager_.reset();
       node_options_.reset();
       trajectory_options_.reset();
       
@@ -517,8 +552,17 @@ private:
       return;
     }
 
-    RCLCPP_INFO(get_logger(), "save_map service called, saving map...");
-    bool success = SaveMapInternal();
+    if (map_persistence_manager_ && map_persistence_manager_->IsSaving()) {
+      response->success = false;
+      response->message = "A save operation is already in progress";
+      RCLCPP_WARN(get_logger(), "save_map service: periodic save is already running, try later");
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "save_map service called, saving map via MapPersistenceManager...");
+    bool success = map_persistence_manager_
+                       ? map_persistence_manager_->SaveNow()
+                       : SaveMapInternal();
 
     response->success = success;
     response->message = success ? "Map saved successfully" : "Map save completed with errors (check logs)";
@@ -676,19 +720,6 @@ private:
 
 } // namespace cartographer_ros
 
-// 信号处理函数
-void SignalHandler(int signal) {
-  // 尝试获取节点并执行shutdown
-  if (auto node = cartographer_ros::g_node.lock()) {
-    node->Shutdown();
-  } else {
-    RCLCPP_ERROR(rclcpp::get_logger("LocalizationManager"), "Node already destroyed");
-  }
-  
-  // 调用 ROS2 的 shutdown
-  rclcpp::shutdown();
-}
-
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
@@ -709,35 +740,20 @@ int main(int argc, char** argv) {
   }
 
   cartographer_ros::ScopedRosLogSink ros_log_sink;
-  
+
   // 创建节点
   auto node = std::make_shared<cartographer_ros::LocalizationManagerNode>();
-  
-  // 设置全局节点指针用于信号处理
-  cartographer_ros::g_node = node;
-  
-  // 注册信号处理器
-  std::signal(SIGINT, SignalHandler);
-  std::signal(SIGTERM, SignalHandler);
 
   rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
   executor.add_node(node);
-  
+
   try {
     executor.spin();
   } catch (const std::exception& e) {
     std::cerr << "[LocalizationManager] Exception in executor: " << e.what() << std::endl;
   }
-  
-  // 确保调用shutdown（如果还没有被信号处理器调用）
-  if (node) {
-    node->Shutdown();
-  }
-  
-  // 重置全局指针
-  cartographer_ros::g_node.reset();
-  
+
   rclcpp::shutdown();
-  
+
   return 0;
 }

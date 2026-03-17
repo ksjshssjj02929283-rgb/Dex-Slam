@@ -27,7 +27,7 @@ def generate_launch_description():
     
     map_name_arg = DeclareLaunchArgument(
         'map_name',
-        default_value='offline_map',
+        default_value='offline_map_2',
         description='Map name to load for localization')
     
     config_file_arg = DeclareLaunchArgument(
