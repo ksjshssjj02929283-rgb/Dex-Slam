@@ -429,19 +429,9 @@ bool LaserMapping::Run() {
 void LaserMapping::MakeKF() {
     Keyframe::Ptr kf = std::make_shared<Keyframe>(kf_id_++, scan_undistort_, state_point_);
 
-    if (last_kf_) {
-        /// opt pose 用之前的递推
-        SE3 delta = last_kf_->GetLIOPose().inverse() * kf->GetLIOPose();
-        kf->SetOptPose(last_kf_->GetOptPose() * delta);
-    } else {
-        kf->SetOptPose(kf->GetLIOPose());
-
-        // 首帧：缓存外参 T_lidar_body（lidar←body），用于 SW-BA 坐标变换
-        // T_wb = kf->GetLIOPose() = state_point_.GetPose()
-        // T_wl = T_wb * T_bl^{-1}，其中 T_bl = body←lidar 即 offset_R_lidar_, offset_t_lidar_
-        // T_lidar_body 即 T_lb（lidar←body）：R = offset_R_lidar_, t = offset_t_lidar_
-        T_lidar_body_ = SE3(state_point_.offset_R_lidar_, state_point_.offset_t_lidar_);
-    }
+    // opt_pose 统一用 LIO pose 占位，正式传播由 HandleKF（后端线程，PoseOptimization 串行之后）完成。
+    // 这样无论 SLAM 模式还是非 SLAM 模式，MakeKF 都不读取任何其他帧的 opt_pose，彻底避免数据竞争。
+    kf->SetOptPose(kf->GetLIOPose());
 
     kf->SetState(state_point_);
 

@@ -105,6 +105,7 @@ loop_closing:
   max_range: 30.0       # KD-Tree 半径搜索距离阈值（单位：米，对应 LIO-SAM historyKeyframeSearchRadius）
   ndt_score_th: 1.0     # NDT 配准通过阈值（TransformationProbability，越高越严）
   with_height: true
+  height_noise: 1.0
   # LIO-SAM 风格候选检测参数
   history_search_time_diff: 30.0   # 时间差过滤阈值（秒），对应 LIO-SAM historyKeyframeSearchTimeDiff
   max_candidates_per_check: 3      # 每次触发最多处理的候选帧数（KD-Tree 按距离排序，取最近的）

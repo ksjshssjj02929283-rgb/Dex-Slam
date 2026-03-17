@@ -98,12 +98,14 @@ rviz:
   map_rate: 1.0
 
 loop_closing:
+  online_mode: true
   loop_kf_gap: 10
   min_id_interval: 10
   closest_id_th: 5
   max_range: 10.0
   ndt_score_th: 1.0
   with_height: true
+  height_noise: 1.0
   history_search_time_diff: 30.0
   max_candidates_per_check: 5
   history_keyframe_search_num: 25
