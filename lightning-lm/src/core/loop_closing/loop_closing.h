@@ -69,7 +69,7 @@ class LoopClosing {
         double rk_loop_th_ = 5.2 / 5;  // 回环的 Cauchy 鲁棒核阈值
 
         bool with_height_ = true;
-        double height_noise_ = 0.1;
+        double height_noise_ = 1.0;  // 回环边高度维权重（单位：米），仅当 with_height_ = true 时生效
 
         // ---- VoxelMap 回环精化参数 ----
         // 构建临时 VoxelMap 用的体素大小（比 LIO 更细以提高精化精度）

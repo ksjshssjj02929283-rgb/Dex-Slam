@@ -223,6 +223,10 @@ bool G2P5::ResizeMap(const std::vector<Keyframe::Ptr> &kfs, G2P5MapPtr &map) {
             return false;
         }
 
+        if (!cloud || cloud->empty()) {
+            continue;
+        }
+
         for (size_t i = 0; i < cloud->points.size(); i += 10) {
             float range = cloud->points[i].getVector3fMap().norm();
 
@@ -375,6 +379,10 @@ void G2P5::Convert3DTo2DScan(Keyframe::Ptr kf, G2P5MapPtr &map) {
     double min_th = options_.min_th_floor_;
     double max_th = options_.max_th_floor_;
     auto cloud = kf->GetCloud();
+
+    if (!cloud || cloud->empty()) {
+        return;
+    }
 
     // ── 地面高度估计（世界 Z 轴，与倾角无关）───────────────────────────────
     if (options_.esti_floor_) {

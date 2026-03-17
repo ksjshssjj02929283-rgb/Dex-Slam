@@ -52,8 +52,10 @@ void PangolinWindowImpl::Reset(const std::vector<Keyframe::Ptr> &keyframes) {
     std::size_t i = keyframes.size() > max_size_of_current_scan_ ? keyframes.size() - max_size_of_current_scan_ : 0;
     for (; i < keyframes.size(); ++i) {
         const auto &keyframe = keyframes.at(i);
+        auto kf_cloud = keyframe->GetCloud();
+        if (!kf_cloud || kf_cloud->empty()) continue;
         current_scan_ui_ = std::make_shared<ui::UiCloud>();
-        CloudPtr tmp_cloud = std::make_shared<PointCloudType>(*(keyframe->GetCloud()));
+        CloudPtr tmp_cloud = std::make_shared<PointCloudType>(*kf_cloud);
         current_scan_ui_->SetCloud(math::VoxelGrid(tmp_cloud, 0.5), keyframe->GetOptPose());
         current_scan_ui_->SetRenderColor(ui::UiCloud::UseColor::HEIGHT_COLOR);
 
@@ -169,27 +171,27 @@ bool PangolinWindowImpl::UpdateLoopDebug() {
     
     // 检查是否需要更新回环调试点云
     if (loop_debug_need_update_.load()) {
-        // 更新回环submap点云 (鲜红色) - 点云已经在map坐标系下
+        // 更新回环submap点云 (红色) - 点云已统一变换到世界坐标系，SE3() 不再叠加额外变换
         if (loop_submap_ && !loop_submap_->empty()) {
             loop_submap_ui_ = std::make_shared<ui::UiCloud>();
-            loop_submap_ui_->SetCloud(loop_submap_, SE3());  // 点云已在map坐标系
+            loop_submap_ui_->SetCloud(loop_submap_, SE3());
             loop_submap_ui_->SetCustomColor(Vec4f(1.0, 0.0, 0.0, 1.0));  // 鲜红色，完全不透明
             loop_submap_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
         }
         
-        // 更新回环scan点云 (鲜黄色) - 使用当前帧的位姿
-        if (loop_scan_ && !loop_scan_->empty()) {
-            loop_scan_ui_ = std::make_shared<ui::UiCloud>();
-            loop_scan_ui_->SetCloud(loop_scan_, loop_scan_pose_);  // 使用current_kf_pose
-            loop_scan_ui_->SetCustomColor(Vec4f(1.0, 1.0, 0.0, 1.0));  // 鲜黄色，完全不透明
-            loop_scan_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
-        }
+        // // 更新回环scan点云 (黄色) - 点云已统一变换到世界坐标系，SE3() 不再叠加额外变换
+        // if (loop_scan_ && !loop_scan_->empty()) {
+        //     loop_scan_ui_ = std::make_shared<ui::UiCloud>();
+        //     loop_scan_ui_->SetCloud(loop_scan_, SE3());  // 点云已在世界系，不叠加 scan_pose
+        //     loop_scan_ui_->SetCustomColor(Vec4f(1.0, 1.0, 0.0, 1.0));  // 鲜黄色，完全不透明
+        //     loop_scan_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
+        // }
         
-        // 更新回环aligned点云 (鲜绿色) - NDT输出的点云已经变换到map坐标系
+        // 更新回环aligned点云 (黄色) - 点云已统一变换到世界坐标系，SE3() 不再叠加额外变换
         if (loop_aligned_ && !loop_aligned_->empty()) {
             loop_aligned_ui_ = std::make_shared<ui::UiCloud>();
-            loop_aligned_ui_->SetCloud(loop_aligned_, SE3());  // NDT输出已在map坐标系
-            loop_aligned_ui_->SetCustomColor(Vec4f(0.0, 0.0, 1.0, 1.0));  // 蓝色，完全不透明
+            loop_aligned_ui_->SetCloud(loop_aligned_, SE3());
+            loop_aligned_ui_->SetCustomColor(Vec4f(1.0, 1.0, 0.0, 1.0));  // 黄色，完全不透明
             loop_aligned_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
         }
         
@@ -338,7 +340,7 @@ void PangolinWindowImpl::DrawAll() {
     }
     
     // 渲染回环调试点云 (最后渲染，显示在最上层，使用更大的点)
-    glPointSize(2.5);  // 增大回环点云的点尺寸
+    glPointSize(5);  // 增大回环点云的点尺寸
     if (loop_submap_ui_) {
         loop_submap_ui_->Render();
     }
@@ -426,7 +428,7 @@ void PangolinWindowImpl::RenderClouds() {
     UpdateGlobalMap();
     UpdateDynamicMap();
     UpdateState();
-    UpdateCurrentScan();
+    // UpdateCurrentScan();
     UpdateLoopDebug();  // 更新回环调试信息
     UpdateVoxelPlanes(); // 更新 VoxelMap 平面
 
