@@ -28,10 +28,16 @@ bool LaserMapping::Init(const std::string &config_yaml) {
 
     // localmap init (after LoadParams)
     if (use_voxel_map_) {
-        vmap_ = std::make_shared<VoxelMapType>(vmap_config_);
+        voxel_map_ = std::make_shared<VoxelMapType>(vmap_config_);
     }
     if (use_ivox_) {
-        ivox_ = std::make_shared<IVoxType>(ivox_options_);
+        // 将 ivox_options_ 转换为 IVoxConfig，统一通过 IVoxManager 管理
+        ivox_config_.resolution            = ivox_options_.resolution_;
+        ivox_config_.nearby_type           = ivox_options_.nearby_type_;
+        ivox_config_.capacity              = ivox_options_.capacity_;
+        ivox_config_.filter_size_map_min   = static_cast<float>(filter_size_map_min_);
+        ivox_config_.esti_plane_threshold  = fasterlio::ESTI_PLANE_THRESHOLD;
+        ivox_manager_ = std::make_shared<IVoxManagerType>(ivox_config_);
     }
     LOG(INFO) << "LaserMapping: use_ivox=" << use_ivox_ << " use_voxel_map=" << use_voxel_map_;
 
@@ -235,11 +241,11 @@ bool LaserMapping::Run() {
                 pv.point_body = p_body;
                 pv.point_world = p_world;
                 pv.point = p_world;   // OctoTree 内部使用世界坐标
-                Eigen::Matrix3d body_cov = vmap_->CalcBodyCov(p_body);
+                Eigen::Matrix3d body_cov = voxel_map_->CalcBodyCov(p_body);
                 pv.cov = VoxelMapType::PropagateCovToWorld(body_cov, p_body, R_wl, cov_rot, cov_trans);
                 pv_first.push_back(pv);
             }
-            vmap_->InitializeMap(pv_first);
+            voxel_map_->InitializeMap(pv_first);
         }
 
         // IVox：用降采样后的点云初始化，保持与后续帧一致的分辨率
@@ -259,7 +265,7 @@ bool LaserMapping::Run() {
                 scan_down_world_->points[i].z = static_cast<float>(p_world(2));
                 scan_down_world_->points[i].intensity = pb.intensity;
             }
-            ivox_->AddPoints(scan_down_world_->points);
+            ivox_manager_->GetIVox()->AddPoints(scan_down_world_->points);
             LOG(INFO) << "IVox first frame init: " << first_pts << " pts";
         }
 
@@ -315,15 +321,13 @@ bool LaserMapping::Run() {
         for (int i = 0; i < cur_pts; ++i) idx[i] = i;
         std::for_each(std::execution::par_unseq, idx.begin(), idx.end(), [&](const size_t &i) {
             body_points_list_[i] = scan_down_body_->points[i].getVector3fMap().cast<double>();
-            body_cov_list_[i] = vmap_->CalcBodyCov(body_points_list_[i]);
+            body_cov_list_[i] = voxel_map_->CalcBodyCov(body_points_list_[i]);
         });
         iekf_first_iter_ = true;
     }
     if (use_ivox_) {
-        // IVox 需要 nearest_points_ / point_selected_surf_ / plane_coef_ / residuals_
+        // IVox 需要 nearest_points_ / residuals_（其余临时数组由 IVoxManager 内部管理）
         nearest_points_.resize(cur_pts);
-        point_selected_surf_.resize(cur_pts, true);
-        plane_coef_.resize(cur_pts, Vec4f::Zero());
         residuals_.resize(cur_pts, 0.0f);
     }
 
@@ -375,7 +379,7 @@ bool LaserMapping::Run() {
     Timer::Evaluate([&, this]() { MapIncremental(); }, "    Incremental Mapping");
 
     // LOG(INFO) << "[ mapping ]: In num: " << scan_undistort_->points.size() << " down " << cur_pts
-    //           << " Map voxel num: " << vmap_->NumVoxels() << " effect num : " << effect_feat_num_;
+    //           << " Map voxel num: " << voxel_map_->NumVoxels() << " effect num : " << effect_feat_num_;
 
     /// keyframes
     if (last_kf_ == nullptr) {
@@ -408,7 +412,7 @@ bool LaserMapping::Run() {
 
     // 发布 VoxelMap 平面（UI 和 RViz），仅在 use_voxel_map_ 且 pub_voxel_map_ 启用时执行
     if (use_voxel_map_ && pub_voxel_map_) {
-        auto planes = vmap_->GetUpdatedPlanesForVis(state_point_.pos_, 50.0);
+        auto planes = voxel_map_->GetUpdatedPlanesForVis(state_point_.pos_, 50.0);
         if (!planes.empty()) {
             if (ui_) {
                 ui_->UpdateVoxelMapPlanes(planes);
@@ -576,66 +580,17 @@ void LaserMapping::MapIncremental() {
     if (use_voxel_map_) {
         if (!pv_list_.empty()) {
             Timer::Evaluate(
-                [&, this]() { vmap_->UpdateMap(pv_list_); },
+                [&, this]() { voxel_map_->UpdateMap(pv_list_); },
                 "    VoxelMap Update");
         }
     }
 
     // IVox 地图更新（受 use_ivox_ 开关控制）
-    // 对齐原始版本：根据最近邻距离判断是否需要加入新点，避免地图过密
+    // 通过 IVoxManager::UpdateMap 统一管理，含最近邻去重滤波
     if (use_ivox_) {
-        PointVector points_to_add;
-        PointVector point_no_need_downsample;
-
-        size_t cur_pts = scan_down_body_->size();
-        points_to_add.reserve(cur_pts);
-        point_no_need_downsample.reserve(cur_pts);
-
-        std::vector<size_t> idx(cur_pts);
-        for (size_t i = 0; i < cur_pts; ++i) idx[i] = i;
-
-        // scan_down_world_ 在 ObsModel 最后一轮已填入最终世界坐标
-        std::for_each(idx.begin(), idx.end(), [&](const size_t &i) {
-            PointType &point_world = scan_down_world_->points[i];
-
-            if (!nearest_points_[i].empty() && flg_EKF_inited_) {
-                const PointVector &points_near = nearest_points_[i];
-
-                Eigen::Vector3f center =
-                    ((point_world.getVector3fMap() / filter_size_map_min_).array().floor() + 0.5f)
-                    * filter_size_map_min_;
-
-                Eigen::Vector3f dis_2_center = points_near[0].getVector3fMap() - center;
-
-                if (fabs(dis_2_center.x()) > 0.5f * filter_size_map_min_ &&
-                    fabs(dis_2_center.y()) > 0.5f * filter_size_map_min_ &&
-                    fabs(dis_2_center.z()) > 0.5f * filter_size_map_min_) {
-                    point_no_need_downsample.emplace_back(point_world);
-                    return;
-                }
-
-                bool need_add = true;
-                float dist = math::calc_dist(point_world.getVector3fMap(), center);
-                if (static_cast<int>(points_near.size()) >= fasterlio::NUM_MATCH_POINTS) {
-                    for (int readd_i = 0; readd_i < fasterlio::NUM_MATCH_POINTS; readd_i++) {
-                        if (math::calc_dist(points_near[readd_i].getVector3fMap(), center) < dist + 1e-6f) {
-                            need_add = false;
-                            break;
-                        }
-                    }
-                }
-                if (need_add) {
-                    points_to_add.emplace_back(point_world);
-                }
-            } else {
-                points_to_add.emplace_back(point_world);
-            }
-        });
-
         Timer::Evaluate(
             [&, this]() {
-                ivox_->AddPoints(points_to_add);
-                ivox_->AddPoints(point_no_need_downsample);
+                ivox_manager_->UpdateMap(scan_down_world_->points, nearest_points_, flg_EKF_inited_);
             },
             "    IVox Add Points");
     }
@@ -661,8 +616,9 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
     for (size_t i = 0; i < index.size(); ++i) index[i] = i;
 
     // ----------------------------------------------------------------
-    //  IVox 匹配：完全对齐原始版本，每轮 IEKF 迭代都重新做
-    //  坐标变换 + kNN 查询 + 平面拟合，保证与当前状态 s 一致
+    //  IVox 匹配：通过 IVoxManager::FindCorrespondences 统一管理
+    //  包含坐标变换 + kNN 查询 + 平面拟合 + 马氏距离检验
+    //  nearest_points_ 同步更新，供本帧 EKF 收敛后 MapIncremental 使用
     // ----------------------------------------------------------------
     if (use_ivox_) {
         Timer::Evaluate(
@@ -670,55 +626,11 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
                 auto R_wl = (s.rot_ * s.offset_R_lidar_).cast<float>();
                 auto t_wl = (s.rot_ * s.offset_t_lidar_ + s.pos_).cast<float>();
 
-                std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&](const size_t &i) {
-                    PointType &point_body  = scan_down_body_->points[i];
-                    PointType &point_world = scan_down_world_->points[i];
-
-                    // 坐标转换到世界系
-                    Vec3f p_body = point_body.getVector3fMap();
-                    point_world.getVector3fMap() = R_wl * p_body + t_wl;
-                    point_world.intensity = point_body.intensity;
-
-                    // kNN 查询
-                    nearest_points_[i].clear();
-                    ivox_->GetClosestPoint(point_world, nearest_points_[i], fasterlio::NUM_MATCH_POINTS);
-                    point_selected_surf_[i] = (nearest_points_[i].size() >= fasterlio::MIN_NUM_MATCH_POINTS);
-
-                    // 平面拟合
-                    if (point_selected_surf_[i]) {
-                        point_selected_surf_[i] =
-                            math::esti_plane(plane_coef_[i], nearest_points_[i], fasterlio::ESTI_PLANE_THRESHOLD);
-                    }
-
-                    // 马氏距离检验
-                    if (point_selected_surf_[i]) {
-                        auto temp = point_world.getVector4fMap();
-                        temp[3] = 1.0f;
-                        float pd2 = plane_coef_[i].dot(temp);
-                        bool valid_corr = p_body.norm() > 81.0f * pd2 * pd2;
-                        if (valid_corr) {
-                            point_selected_surf_[i] = true;
-                            residuals_[i] = pd2;
-                        } else {
-                            point_selected_surf_[i] = false;
-                        }
-                    }
-                });
-
-                // 收集有效 IVox 匹配
-                int ivox_eff = 0;
-                corr_pts_.resize(cnt_pts);
-                corr_norm_.resize(cnt_pts);
-                for (int i = 0; i < cnt_pts; ++i) {
-                    if (point_selected_surf_[i]) {
-                        corr_norm_[ivox_eff] = plane_coef_[i];
-                        corr_pts_[ivox_eff] = scan_down_body_->points[i].getVector4fMap();
-                        corr_pts_[ivox_eff][3] = residuals_[i];
-                        ivox_eff++;
-                    }
-                }
-                corr_pts_.resize(ivox_eff);
-                corr_norm_.resize(ivox_eff);
+                ivox_manager_->FindCorrespondences(
+                    scan_down_body_, scan_down_world_,
+                    R_wl.matrix(), t_wl,
+                    corr_pts_, corr_norm_, residuals_,
+                    nearest_points_);
             },
             "    ObsModel (IVox Match)");
     } else {
@@ -758,7 +670,7 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
             Timer::Evaluate(
                 [&, this]() {
                     ptpl_list_.clear();
-                    vmap_->FindCorrespondences(pv_list_, ptpl_list_);
+                    voxel_map_->FindCorrespondences(pv_list_, ptpl_list_);
                 },
                 "    ObsModel (VoxelMap Match)");
         } else {

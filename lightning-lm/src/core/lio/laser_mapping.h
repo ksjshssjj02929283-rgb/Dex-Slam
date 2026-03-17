@@ -11,6 +11,7 @@
 #include "common/keyframe.h"
 #include "common/options.h"
 #include "core/ivox3d/ivox3d.h"
+#include "core/ivox3d/ivox_manager.hpp"
 #include "voxel_map/voxel_map_manager.hpp"
 #include "core/lio/eskf.hpp"
 #include "core/lio/imu_processing.h"
@@ -45,8 +46,9 @@ class LaserMapping {
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-    using IVoxType = IVox<3, IVoxNodeType::DEFAULT, PointType>;
-    using VoxelMapType = voxel_map::VoxelMapManager;
+    using IVoxType        = IVox<3, IVoxNodeType::DEFAULT, PointType>;
+    using IVoxManagerType = IVoxManager;
+    using VoxelMapType    = voxel_map::VoxelMapManager;
 
     LaserMapping(Options options = Options());
     ~LaserMapping();
@@ -108,7 +110,7 @@ class LaserMapping {
     CloudPtr GetGlobalMap(bool use_lio_pose, bool use_voxel = true, float res = 0.1);
 
     /// 获取 VoxelMap 指针（用于外部可视化等）
-    std::shared_ptr<VoxelMapType> GetVoxelMap() const { return vmap_; }
+    std::shared_ptr<VoxelMapType> GetVoxelMap() const { return voxel_map_; }
 
    private:
     // sync lidar with imu
@@ -140,11 +142,12 @@ class LaserMapping {
 
     /// modules
     voxel_map::VoxelMapConfig vmap_config_;
-    std::shared_ptr<VoxelMapType> vmap_ = nullptr;                // localmap in voxel_map
-    IVoxType::Options ivox_options_;
-    std::shared_ptr<IVoxType> ivox_ = nullptr;                    // incremental voxel map (IVox)
-    std::shared_ptr<PointCloudPreprocess> preprocess_ = nullptr;  // point cloud preprocess
-    std::shared_ptr<ImuProcess> p_imu_ = nullptr;                 // imu process
+    std::shared_ptr<VoxelMapType> voxel_map_ = nullptr;                    // localmap in voxel_map
+    IVoxConfig ivox_config_;
+    IVoxType::Options ivox_options_;                                   // 保留用于从 yaml 配置参数后一次性传给 IVoxManager
+    std::shared_ptr<IVoxManagerType> ivox_manager_ = nullptr;       // IVox 地图管理器
+    std::shared_ptr<PointCloudPreprocess> preprocess_ = nullptr;      // point cloud preprocess
+    std::shared_ptr<ImuProcess> p_imu_ = nullptr;                     // imu process
 
     bool use_ivox_ = true;        // 是否启用 IVox 约束
     bool use_voxel_map_ = true;   // 是否启用 VoxelMap 约束
@@ -174,11 +177,9 @@ class LaserMapping {
 
     /// IVox matching data (point-to-plane via kNN + esti_plane)
     using PointVector = std::vector<PointType, Eigen::aligned_allocator<PointType>>;
-    std::vector<PointVector> nearest_points_;         // kNN neighbors for each down-sampled point
-    std::vector<bool> point_selected_surf_;           // whether point has a valid plane match (IVox)
-    std::vector<Vec4f> plane_coef_;                   // plane coefficients [nx,ny,nz,d] for each IVox match
+    std::vector<PointVector> nearest_points_;         // kNN neighbors for each down-sampled point (used for map update dedup)
     std::vector<Vec4f> corr_pts_;                     // [px,py,pz, residual] for valid IVox matches
-    std::vector<Vec4f> corr_norm_;                    // [nx,ny,nz, 0] for valid IVox matches
+    std::vector<Vec4f> corr_norm_;                    // [nx,ny,nz, d] for valid IVox matches
     std::vector<float> residuals_;                    // per-point residual for IVox (used for median stats)
 
     /// IEKF 预缓存：body_cov 和 crossmat 在 IEKF 循环外仅计算一次（VoxelMap 需要）
