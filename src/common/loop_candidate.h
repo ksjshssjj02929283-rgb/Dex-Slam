@@ -21,6 +21,7 @@ struct LoopCandidate {
     SE3 Tij_;
 
     double ndt_score_ = 0.0;
+    double icp_fitness_ = 1.0;  // GICP getFitnessScore()，越小越好，供 AddLoopFactor 构建噪声模型
 };
 
 }  // namespace lightning
