@@ -105,6 +105,7 @@ loop_closing:
   max_range: 30.0
   ndt_score_th: 1.0
   with_height: true
+  height_noise: 1.0
   history_search_time_diff: 30.0
   max_candidates_per_check: 3
   history_keyframe_search_num: 25
