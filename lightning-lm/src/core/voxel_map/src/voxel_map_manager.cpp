@@ -72,8 +72,16 @@ void VoxelMapManager::InitializeMap(const std::vector<pointWithCov>& points_with
 // 增量更新地图 (对应原 updateVoxelMap)
 // ============================================================================
 void VoxelMapManager::UpdateMap(const std::vector<pointWithCov>& points_with_cov) {
-    for (size_t i = 0; i < points_with_cov.size(); i++) {
-        const pointWithCov& p_v = points_with_cov[i];
+    // ------------------------------------------------------------------
+    // Phase 1 (单线程): 建立 active_map
+    //   - key  : OctoTree* （体素对象指针，不同体素互相独立）
+    //   - value: 该体素本帧收到的所有点（指针，避免拷贝）
+    // 在此阶段完成所有哈希查找 + 新体素创建，确保 voxel_map_ 写操作无竞争。
+    // ------------------------------------------------------------------
+    std::unordered_map<OctoTree*, std::vector<const pointWithCov*>> active_map;
+    active_map.reserve(points_with_cov.size());  // 上界预分配，避免 rehash
+
+    for (const pointWithCov& p_v : points_with_cov) {
         float loc_xyz[3];
         for (int j = 0; j < 3; j++) {
             loc_xyz[j] = p_v.point[j] / config_.voxel_size;
@@ -82,20 +90,39 @@ void VoxelMapManager::UpdateMap(const std::vector<pointWithCov>& points_with_cov
             }
         }
         VOXEL_LOC position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
+
+        OctoTree* octo = nullptr;
         auto iter = voxel_map_.find(position);
         if (iter != voxel_map_.end()) {
-            voxel_map_[position]->UpdateOctoTree(p_v);
+            octo = iter->second;
         } else {
-            OctoTree* octo_tree = new OctoTree(config_.max_layer, 0, config_.layer_point_size, config_.max_points_size,
-                                               config_.max_cov_points_size, config_.planer_threshold);
-            voxel_map_[position] = octo_tree;
-            voxel_map_[position]->quater_length_ = config_.voxel_size / 4;
-            voxel_map_[position]->voxel_center_[0] = (0.5 + position.x) * config_.voxel_size;
-            voxel_map_[position]->voxel_center_[1] = (0.5 + position.y) * config_.voxel_size;
-            voxel_map_[position]->voxel_center_[2] = (0.5 + position.z) * config_.voxel_size;
-            voxel_map_[position]->UpdateOctoTree(p_v);
+            // 新体素：创建并插入全局地图
+            octo = new OctoTree(config_.max_layer, 0, config_.layer_point_size, config_.max_points_size,
+                                config_.max_cov_points_size, config_.planer_threshold);
+            octo->quater_length_ = config_.voxel_size / 4;
+            octo->voxel_center_[0] = (0.5 + position.x) * config_.voxel_size;
+            octo->voxel_center_[1] = (0.5 + position.y) * config_.voxel_size;
+            octo->voxel_center_[2] = (0.5 + position.z) * config_.voxel_size;
+            voxel_map_[position] = octo;
         }
+        active_map[octo].push_back(&p_v);
     }
+
+    // ------------------------------------------------------------------
+    // Phase 2 (并行): 对 active_map 中每个体素串行处理其点列表
+    //   - 同一体素的多个点仍为串行（UpdateOctoTree 无内部锁）
+    //   - 不同体素之间完全独立，可安全并行
+    // ------------------------------------------------------------------
+    std::vector<OctoTree*> active_octos;
+    active_octos.reserve(active_map.size());
+    for (auto& kv : active_map) active_octos.push_back(kv.first);
+
+    std::for_each(std::execution::par_unseq, active_octos.begin(), active_octos.end(),
+                  [&active_map](OctoTree* octo) {
+                      for (const pointWithCov* pv : active_map.at(octo)) {
+                          octo->UpdateOctoTree(*pv);
+                      }
+                  });
 }
 
 // ============================================================================
