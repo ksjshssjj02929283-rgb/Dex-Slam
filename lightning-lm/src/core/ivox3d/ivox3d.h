@@ -256,7 +256,21 @@ bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointVector& cloud, 
 
 template <int dim, IVoxNodeType node_type, typename PointType>
 void IVox<dim, node_type, PointType>::AddPoints(const PointVector& points_to_add) {
-    std::for_each(points_to_add.begin(), points_to_add.end(), [this](const auto& pt) {
+    if (points_to_add.empty()) return;
+
+    // ------------------------------------------------------------------
+    // Phase 1 (单线程): hash 查找 + 新体素创建 + LRU 更新 + capacity 淘汰
+    //
+    //   grids_map_ 和 grids_cache_ 是共享结构，必须串行访问。
+    //   同时建立平坦映射表 node_pt_pairs：(NodeType*, PointType*)，
+    //   按 NodeType* 分组供 Phase 2 并行插入。
+    // ------------------------------------------------------------------
+
+    // 平坦映射表：每个点对应它归属的 NodeType*（同 key 的点 NodeType* 相同）
+    std::vector<std::pair<NodeType*, const PointType*>> node_pt_pairs;
+    node_pt_pairs.reserve(points_to_add.size());
+
+    for (const auto& pt : points_to_add) {
         auto key = Pos2Grid(math::ToEigen<float, dim>(pt));
 
         auto iter = grids_map_.find(key);
@@ -267,18 +281,53 @@ void IVox<dim, node_type, PointType>::AddPoints(const PointVector& points_to_add
             grids_cache_.push_front({key, NodeType(center, options_.resolution_)});
             grids_map_.insert({key, grids_cache_.begin()});
 
-            grids_cache_.front().second.InsertPoint(pt);
-
             if (grids_map_.size() >= options_.capacity_) {
                 grids_map_.erase(grids_cache_.back().first);
                 grids_cache_.pop_back();
             }
+
+            node_pt_pairs.emplace_back(&grids_cache_.front().second, &pt);
         } else {
-            iter->second->second.InsertPoint(pt);
+            // LRU: 将已有体素移到 cache 头部
             grids_cache_.splice(grids_cache_.begin(), grids_cache_, iter->second);
             grids_map_[key] = grids_cache_.begin();
+
+            node_pt_pairs.emplace_back(&iter->second->second, &pt);
         }
-    });
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 2 (并行): 按 NodeType* 分组，对每组并行调用 InsertPoint
+    //
+    //   先按 NodeType* 排序，使同一体素的点连续（避免 unordered_map 分配）；
+    //   再用 par_unseq 并行处理各分组——不同体素的 NodeType 完全独立，
+    //   InsertPoint 只写 this->points_，无竞争。
+    // ------------------------------------------------------------------
+
+    // 按 NodeType* 排序，使同一体素的点连续
+    std::sort(node_pt_pairs.begin(), node_pt_pairs.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // 收集各组的起始位置
+    std::vector<size_t> group_starts;
+    group_starts.reserve(32);
+    group_starts.push_back(0);
+    for (size_t i = 1; i < node_pt_pairs.size(); ++i) {
+        if (node_pt_pairs[i].first != node_pt_pairs[i - 1].first) {
+            group_starts.push_back(i);
+        }
+    }
+
+    // 并行：每个分组内串行插入（同体素多点通常极少，串行可接受）
+    std::for_each(std::execution::par_unseq, group_starts.begin(), group_starts.end(),
+                  [&](const size_t start) {
+                      NodeType* node = node_pt_pairs[start].first;
+                      size_t end = start;
+                      while (end < node_pt_pairs.size() && node_pt_pairs[end].first == node) {
+                          node->InsertPoint(*node_pt_pairs[end].second);
+                          ++end;
+                      }
+                  });
 }
 
 template <int dim, IVoxNodeType node_type, typename PointType>
