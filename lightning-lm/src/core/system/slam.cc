@@ -177,10 +177,12 @@ void SlamSystem::SaveMap(const std::string& path) {
 
     LOG(INFO) << "slam map saving to " << save_path;
 
-    // ---- Step 1: 对最后一帧强制执行一次回环检测 + 全局优化 ----
+    // ---- Step 1: 等待回环线程结束并执行一次最终全局优化 ----
+    // 每帧都做了回环检测，但不一定每帧都触发 PGO；SaveMap 前强制跑一次，
+    // 确保最近积累的运动边/回环边都参与最终优化，写回正确的 opt_pose。
     if (options_.with_loop_closing_ && lc_) {
-        LOG(INFO) << "SaveMap: running final loop closure check and global optimization...";
-        lc_->FinalizeAndWait();
+        LOG(INFO) << "SaveMap: running final global optimization...";
+        lc_->RunFinalOptimization();
         LOG(INFO) << "SaveMap: final optimization done";
     }
 
@@ -270,15 +272,15 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
             
             // 更新回环调试点云
             auto loop_debug_data = lc_->GetLoopDebugData();
-            if (loop_debug_data.valid) {
+            if (loop_debug_data != nullptr) {
                 ui_->UpdateLoopDebug(
-                    loop_debug_data.loop_submap,
-                    loop_debug_data.current_scan,
-                    loop_debug_data.aligned_scan,
-                    loop_debug_data.loop_kf_pose,
-                    loop_debug_data.current_kf_pose,
-                    loop_debug_data.aligned_pose,
-                    loop_debug_data.ndt_score);
+                    loop_debug_data->loop_submap,
+                    loop_debug_data->current_scan,
+                    loop_debug_data->aligned_scan,
+                    loop_debug_data->loop_kf_pose,
+                    loop_debug_data->current_kf_pose,
+                    loop_debug_data->aligned_pose,
+                    loop_debug_data->ndt_score);
             }
         }
     }
@@ -293,15 +295,15 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
             
             // 更新回环调试点云（包含submap、原始scan和配准结果）
             auto loop_debug_data = lc_->GetLoopDebugData();
-            if (loop_debug_data.valid) {
+            if (loop_debug_data != nullptr) {
                 rviz_pub_->UpdateLoopDebugClouds(
-                    loop_debug_data.loop_submap,
-                    loop_debug_data.current_scan,
-                    loop_debug_data.aligned_scan,
-                    loop_debug_data.loop_kf_pose,
-                    loop_debug_data.current_kf_pose,
-                    loop_debug_data.aligned_pose,
-                    loop_debug_data.ndt_score);
+                    loop_debug_data->loop_submap,
+                    loop_debug_data->current_scan,
+                    loop_debug_data->aligned_scan,
+                    loop_debug_data->loop_kf_pose,
+                    loop_debug_data->current_kf_pose,
+                    loop_debug_data->aligned_pose,
+                    loop_debug_data->ndt_score);
             }
         }
 
@@ -388,15 +390,15 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
             
             // 更新回环调试点云
             auto loop_debug_data = lc_->GetLoopDebugData();
-            if (loop_debug_data.valid) {
+            if (loop_debug_data != nullptr) {
                 ui_->UpdateLoopDebug(
-                    loop_debug_data.loop_submap,
-                    loop_debug_data.current_scan,
-                    loop_debug_data.aligned_scan,
-                    loop_debug_data.loop_kf_pose,
-                    loop_debug_data.current_kf_pose,
-                    loop_debug_data.aligned_pose,
-                    loop_debug_data.ndt_score);
+                    loop_debug_data->loop_submap,
+                    loop_debug_data->current_scan,
+                    loop_debug_data->aligned_scan,
+                    loop_debug_data->loop_kf_pose,
+                    loop_debug_data->current_kf_pose,
+                    loop_debug_data->aligned_pose,
+                    loop_debug_data->ndt_score);
             }
         }
     }
@@ -411,15 +413,15 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
             
             // 更新回环调试点云（包含submap、原始scan和配准结果）
             auto loop_debug_data = lc_->GetLoopDebugData();
-            if (loop_debug_data.valid) {
+            if (loop_debug_data != nullptr) {
                 rviz_pub_->UpdateLoopDebugClouds(
-                    loop_debug_data.loop_submap,
-                    loop_debug_data.current_scan,
-                    loop_debug_data.aligned_scan,
-                    loop_debug_data.loop_kf_pose,
-                    loop_debug_data.current_kf_pose,
-                    loop_debug_data.aligned_pose,
-                    loop_debug_data.ndt_score);
+                    loop_debug_data->loop_submap,
+                    loop_debug_data->current_scan,
+                    loop_debug_data->aligned_scan,
+                    loop_debug_data->loop_kf_pose,
+                    loop_debug_data->current_kf_pose,
+                    loop_debug_data->aligned_pose,
+                    loop_debug_data->ndt_score);
             }
         }
 
