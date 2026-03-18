@@ -7,6 +7,8 @@
 #include "common/loop_candidate.h"
 #include "utils/pointcloud_utils.h"
 
+#include <thread>
+#include <algorithm>
 #include <pcl/common/common.h>
 #include <pcl/common/transforms.h>
 #include <pcl/registration/gicp.h>
@@ -18,7 +20,9 @@
 #include "core/types/edge_se3.h"
 #include "core/types/edge_se3_height_prior.h"
 #include "core/types/vertex_se3.h"
+#include "core/miao/core/types/edge_se3_prior.h"
 #include "io/yaml_io.h"
+#include "utils/timer.h"
 
 #include <Eigen/Dense>
 
@@ -73,6 +77,12 @@ void LoopClosing::Init(const std::string yaml_path) {
                          << options_.online_mode_;
         }
         try {
+            options_.verbose_ = yaml.GetValue<bool>("loop_closing", "verbose");
+        } catch (const YAML::Exception&) {
+            LOG(WARNING) << "loop_closing.verbose not set in yaml, using default: "
+                         << options_.verbose_;
+        }
+        try {
             options_.history_search_time_diff_ =
                 yaml.GetValue<double>("loop_closing", "history_search_time_diff");
         } catch (const YAML::Exception&) {
@@ -100,6 +110,14 @@ void LoopClosing::Init(const std::string yaml_path) {
                 yaml.GetValue<int>("loop_closing", "max_candidates_per_check");
         } catch (const YAML::Exception&) {}
         try {
+            options_.optimize_every_n_nodes_ =
+                yaml.GetValue<int>("loop_closing", "optimize_every_n_nodes");
+        } catch (const YAML::Exception&) {}
+        try {
+            options_.fix_first_node_ =
+                yaml.GetValue<bool>("loop_closing", "fix_first_node");
+        } catch (const YAML::Exception&) {}
+        try {
             options_.icp_fitness_score_th_ =
                 yaml.GetValue<float>("loop_closing", "icp_fitness_score_th");
         } catch (const YAML::Exception&) {}
@@ -111,129 +129,24 @@ void LoopClosing::Init(const std::string yaml_path) {
 
     if (options_.online_mode_) {
         LOG(INFO) << "loop closing module is running in online mode";
-        kf_thread_.SetProcFunc([this](Keyframe::Ptr kf) { HandleKF(kf); });
+        kf_thread_.SetProcFunc([this](Keyframe::Ptr kf) { 
+            Timer::Evaluate([this, kf]() { HandleKF(kf); }, "HandleKF");
+        });
         kf_thread_.SetName("handle loop closure");
         kf_thread_.Start();
     }
+
+    // 取硬件并发数的一半（最少 2 线程），为前端保留资源
+    int num_pool_threads = std::max(2, static_cast<int>(std::thread::hardware_concurrency()) / 2);
+    thread_pool_ = std::make_unique<common::ThreadPool>(num_pool_threads);
+    LOG(INFO) << "LoopClosing ThreadPool created with " << num_pool_threads << " threads.";
 }
 
 void LoopClosing::AddKF(Keyframe::Ptr kf) {
     if (options_.online_mode_) {
         kf_thread_.AddMessage(kf);
     } else {
-        HandleKF(kf);
-    }
-}
-
-void LoopClosing::FinalizeAndWait() {
-    // 1. 在线模式下，等待异步队列中所有关键帧处理完毕
-    if (options_.online_mode_) {
-        kf_thread_.Quit();  // 排空队列并 join 线程
-    }
-
-    if (cur_kf_ == nullptr) {
-        LOG(WARNING) << "FinalizeAndWait: no keyframe processed yet, skip";
-        return;
-    }
-
-    LOG(INFO) << "FinalizeAndWait: forcing final loop check on kf " << cur_kf_->GetID();
-
-    // 2. 强制对最后一帧执行一次回环检测（绕过冷却期约束）
-    ForceFinalLoopCheck();
-    ComputeLoopCandidates();
-
-    if (candidates_.empty()) {
-        LOG(INFO) << "FinalizeAndWait: no new loops found for final frame, skip extra optimization";
-        return;
-    }
-
-    // 3. 有新回环约束：只添加回环边（顶点已在队列刷新阶段添加，不重复添加，避免破坏优化器）
-    AddLoopFactor();
-
-    optimizer_->InitializeOptimization();
-    optimizer_->SetVerbose(false);
-    optimizer_->Optimize(20);
-
-    // 外点剔除
-    for (auto& e : edge_loops_) {
-        if (e->GetRobustKernel() == nullptr) continue;
-        if (e->Chi2() > e->GetRobustKernel()->Delta()) {
-            e->SetLevel(1);
-        } else {
-            e->SetRobustKernel(nullptr);
-        }
-    }
-
-    // 写回所有顶点的优化结果
-    for (auto& vert : kf_vert_) {
-        all_keyframes_[vert->GetId()]->SetOptPose(vert->Estimate());
-    }
-
-    // 重建 kf_poses_cloud_，与最新的 opt_pose 保持一致
-    kf_poses_cloud_->clear();
-    kf_poses_cloud_->reserve(all_keyframes_.size());
-    for (const auto& kf : all_keyframes_) {
-        Vec3d t = kf->GetOptPose().translation();
-        pcl::PointXYZ pt;
-        pt.x = static_cast<float>(t.x());
-        pt.y = static_cast<float>(t.y());
-        pt.z = static_cast<float>(t.z());
-        kf_poses_cloud_->push_back(pt);
-    }
-
-    if (loop_cb_) {
-        loop_cb_();
-    }
-
-    LOG(INFO) << "FinalizeAndWait: done, total loops: " << edge_loops_.size();
-}
-
-void LoopClosing::ForceFinalLoopCheck() {
-    candidates_.clear();
-
-    if (kf_poses_cloud_->empty()) {
-        return;
-    }
-
-    uint64_t cur_id = cur_kf_->GetID();
-    Vec3d t_cur = cur_kf_->GetOptPose().translation();
-    pcl::PointXYZ query;
-    query.x = static_cast<float>(t_cur.x());
-    query.y = static_cast<float>(t_cur.y());
-    query.z = static_cast<float>(t_cur.z());
-
-    std::vector<int> indices;
-    std::vector<float> sq_dists;
-    kdtree_history_poses_->setInputCloud(kf_poses_cloud_);
-    kdtree_history_poses_->radiusSearch(query, options_.max_range_, indices, sq_dists);
-
-    if (indices.empty()) {
-        return;
-    }
-
-    double cur_time = cur_kf_->GetState().timestamp_;
-    Keyframe::Ptr check_first = nullptr;
-    for (int idx : indices) {
-        auto kf = all_keyframes_[idx];
-        double time_diff = std::abs(cur_time - kf->GetState().timestamp_);
-        if (time_diff < options_.history_search_time_diff_) {
-            continue;
-        }
-        if (check_first &&
-            std::abs(static_cast<int64_t>(kf->GetID() - check_first->GetID())) <= options_.min_id_interval_) {
-            continue;
-        }
-        LoopCandidate c(kf->GetID(), cur_id);
-        c.Tij_ = kf->GetOptPose().inverse() * cur_kf_->GetOptPose();
-        candidates_.emplace_back(c);
-        check_first = kf;
-    }
-
-    if (!candidates_.empty()) {
-        if (static_cast<int>(candidates_.size()) > options_.max_candidates_per_check_) {
-            candidates_.resize(options_.max_candidates_per_check_);
-        }
-        LOG(INFO) << "ForceFinalLoopCheck: found " << candidates_.size() << " candidates for kf " << cur_id;
+        Timer::Evaluate([this, kf]() { HandleKF(kf); }, "HandleKF");
     }
 }
 
@@ -255,26 +168,35 @@ void LoopClosing::HandleKF(Keyframe::Ptr kf) {
         cur_kf_->SetOptPose(prev_kf->GetOptPose() * delta_lio);
     }
 
-    // 清空上一次的调试数据
-    loop_debug_data_.valid = false;
+
 
     // 检测回环候选（此时 kf_poses_cloud_ 不含当前帧，搜索在历史帧中进行）
-    DetectLoopCandidates();
+    Timer::Evaluate([this]() { DetectLoopCandidates(); }, "DetectLoopCandidates");
 
     // if (options_.verbose_) {
     //     LOG(INFO) << "lc: get kf " << cur_kf_->GetID() << " candi: " << candidates_.size();
     // }
 
     // 计算回环位姿
-    ComputeLoopCandidates();
+    Timer::Evaluate([this]() { ComputeLoopCandidates(); }, "ComputeLoopCandidates");
 
-    // 位姿图优化
-    PoseOptimization();
+    // 每帧无条件将当前帧加入因子图（顶点 + 运动边 + 高度约束 + anchor 先验）
+    // 必须在 AddLoopFactor 之前调用，确保当前帧顶点已存在于图中，
+    // 否则 AddLoopFactor 中 optimizer_->GetVertex(cur_id) 会返回 nullptr。
+    AddOdomFactor(kf);
+
+    // 将回环检测结果追加到因子图（消费 loop_index_queue_）
+    // 此时当前帧顶点已由 AddOdomFactor 加入，回环边两端顶点均已在图中。
+    AddLoopFactor();
+
+    // 有新回环或累积满 N 帧时执行 PGO；否则只追加 KD-Tree 点
+    if (ShouldRunOptimization()) {
+        Timer::Evaluate([this]() { PoseOptimization(); }, "PoseOptimization");
+    }
 
     // 将当前帧位置加入 KD-Tree 点云（供下一帧搜索使用）
-    // 注意：若本帧触发了 PGO，PoseOptimization 内部已重建完整的 kf_poses_cloud_（含当前帧），
-    // 此时不能重复追加；若未触发 PGO，kf_poses_cloud_ 不含当前帧，需要追加。
-    // 通过大小对齐判断：kf_poses_cloud_ 应与 all_keyframes_ 等长
+    // PoseOptimization 内部会全量重建 kf_poses_cloud_（含当前帧），此时 size == all_keyframes_.size()，
+    // 不会重复追加；未触发 PGO 时 kf_poses_cloud_ 不含当前帧，正常追加。
     if (kf_poses_cloud_->size() < all_keyframes_.size()) {
         Vec3d t = cur_kf_->GetOptPose().translation();
         pcl::PointXYZ pt;
@@ -304,11 +226,19 @@ void LoopClosing::DetectLoopCandidates() {
         return;
     }
 
-    // ---- LIO-SAM 风格：loopIndexContainer 防重复 ----
-    // 如果当前帧已经参与过回环检测，跳过（避免对同一位置重复触发）
-    if (loop_index_container_.count(cur_id) > 0) {
-        LOG(INFO) << "lc: skip kf " << cur_id << " (already in loop_index_container)";
-        return;
+    // ---- 防重复检测 ----
+    // loop_index_container_ 以 {min_id, max_id} 规范化存储，双向查重：
+    // 只要 cur_id 出现在任意已有回环对中（作为 first 或 second），就跳过。
+    {
+        std::lock_guard<std::mutex> lk(loop_index_mutex_);
+        bool found = std::any_of(loop_index_container_.begin(), loop_index_container_.end(),
+            [cur_id](const std::pair<uint64_t, uint64_t>& p) {
+                return p.first == cur_id || p.second == cur_id;
+            });
+        if (found) {
+            LOG(INFO) << "lc: skip kf " << cur_id << " (already in loop_index_container)";
+            return;
+        }
     }
 
     // 冷却期检查（继承 lightning-lm 的 loop_kf_gap_ 机制）
@@ -379,14 +309,31 @@ void LoopClosing::ComputeLoopCandidates() {
         return;
     }
 
-    // 执行计算
-    std::for_each(candidates_.begin(), candidates_.end(), [this](LoopCandidate& c) { ComputeForCandidate(c); });
+    // 多个候选帧的点云配准完全独立，投入 ThreadPool 并行执行，
+    // WaitUntilIdle() 充当 WhenDone 的 barrier 语义，全部完成后再汇总结果。
+    std::vector<std::shared_ptr<common::Task>> tasks;
+    tasks.reserve(candidates_.size());
+    for (auto& c : candidates_) {
+        auto task = std::make_shared<common::Task>();
+        task->SetWorkItem([this, &c] { ComputeForCandidate(c); });
+        thread_pool_->Schedule(task);
+        tasks.emplace_back(std::move(task));
+    }
+    // 等待所有配准任务完成
+    thread_pool_->WaitUntilIdle();
+
     // 保存成功的候选
     std::vector<LoopCandidate> succ_candidates;
-    for (const auto& lc : candidates_) {
-        LOG(INFO) << "candi " << lc.idx1_ << ", " << lc.idx2_ << " s: " << lc.ndt_score_;
-        if (lc.ndt_score_ > options_.ndt_score_th_) {
-            succ_candidates.emplace_back(lc);
+    for (const auto& c : candidates_) {
+        bool pass = c.ndt_score_ > options_.ndt_score_th_;
+        if (options_.verbose_) {
+            LOG(INFO) << "candi " << c.idx1_ << " -> " << c.idx2_
+                    << " score=" << c.ndt_score_
+                    << " fitness=" << c.icp_fitness_
+                    << (pass ? " [PASS]" : " [FAIL]");
+        }
+        if (pass) {
+            succ_candidates.emplace_back(c);
         }
     }
 
@@ -397,8 +344,14 @@ void LoopClosing::ComputeLoopCandidates() {
     candidates_.swap(succ_candidates);
 
     // LIO-SAM 风格：将成功的回环对记录到 loop_index_container_，防止后续重复检测
-    for (const auto& c : candidates_) {
-        loop_index_container_[c.idx2_] = c.idx1_;
+    // 以 {min_id, max_id} 规范化存储，支持双向查重
+    {
+        std::lock_guard<std::mutex> lk(loop_index_mutex_);
+        for (const auto& c : candidates_) {
+            uint64_t a = c.idx1_, b = c.idx2_;
+            if (a > b) std::swap(a, b);
+            loop_index_container_.emplace(a, b);
+        }
     }
 
     // LIO-SAM 风格：将通过 NDT 验证的回环结果写入三队列，供 AddLoopFactor 消费
@@ -407,6 +360,11 @@ void LoopClosing::ComputeLoopCandidates() {
         loop_index_queue_.emplace_back(c.idx1_, c.idx2_);
         loop_pose_queue_.emplace_back(c.Tij_);
         loop_score_queue_.emplace_back(c.icp_fitness_);  // 存 raw fitness，供 AddLoopFactor 构建 LIO-SAM 风格噪声
+    }
+
+    // 本轮是否有新回环：在 AddLoopFactor 消费队列前快照（消费后队列清空）
+    if (!candidates_.empty()) {
+        has_new_loop_ = !loop_index_queue_.empty();
     }
 }
 
@@ -438,7 +396,9 @@ void LoopClosing::LoopFindNearKeyframes(CloudPtr& near_keyframes, int key, int s
 }
 
 void LoopClosing::ComputeForCandidate(lightning::LoopCandidate& c) {
-    LOG(INFO) << "aligning " << c.idx1_ << " with " << c.idx2_;
+    if (options_.verbose_) {
+        LOG(INFO) << "aligning " << c.idx1_ << " with " << c.idx2_;
+    }
 
     auto kf1 = all_keyframes_.at(c.idx1_);
     auto kf2 = all_keyframes_.at(c.idx2_);
@@ -565,8 +525,12 @@ void LoopClosing::ComputeForCandidate(lightning::LoopCandidate& c) {
     // 同时保存 raw fitness score，供 AddLoopFactor 构建噪声模型
     c.icp_fitness_ = icp_fitness;
 
-    // ---- 第七步：保存调试数据 ----
+    // ---- 第七步：保存调试数据（仅 verbose 模式）----
     if (c.ndt_score_ <= options_.ndt_score_th_) {
+        return;
+    }
+
+    if (!options_.verbose_) {
         return;
     }
 
@@ -575,68 +539,117 @@ void LoopClosing::ComputeForCandidate(lightning::LoopCandidate& c) {
     CloudPtr cur_cloud_world(new PointCloudType);
     pcl::transformPointCloud(*cur_cloud, *cur_cloud_world, T_kf2_corrected);
 
-    loop_debug_data_.loop_submap = prev_cloud;         // 已是世界系
-    loop_debug_data_.current_scan = cur_cloud_world;   // 世界系
-    loop_debug_data_.aligned_scan = icp_output;        // ICP 输出已在世界系
-    loop_debug_data_.loop_kf_pose = SE3();
-    loop_debug_data_.current_kf_pose = SE3();
-    loop_debug_data_.aligned_pose = SE3();
-    loop_debug_data_.loop_kf_id = c.idx1_;
-    loop_debug_data_.current_kf_id = c.idx2_;
-    loop_debug_data_.ndt_score = c.ndt_score_;
-    loop_debug_data_.valid = true;
+    // ComputeForCandidate 在 ThreadPool 中并行执行，需加锁保护 loop_debug_data_。
+    // 同一帧可能有多个候选同时通过 ICP，将所有成功候选的点云累积追加（而非覆盖），
+    // 使 UI 能一次性显示本轮所有有效回环的 submap 和 aligned scan。
+    {
+        std::lock_guard<std::mutex> lk(loop_debug_mutex_);
+        if (loop_debug_data_ == nullptr) {
+            // 第一个成功候选：创建新的调试数据对象
+            loop_debug_data_ = std::make_unique<LoopDebugData>();
+            loop_debug_data_->loop_submap  = std::make_shared<PointCloudType>(*prev_cloud);
+            loop_debug_data_->aligned_scan = std::make_shared<PointCloudType>(*icp_output);
+            loop_debug_data_->current_scan = std::make_shared<PointCloudType>(*cur_cloud_world);
+        } else {
+            // 后续成功候选：追加合并（所有候选均在同一世界坐标系下，可以直接合并）
+            *loop_debug_data_->loop_submap  += *prev_cloud;
+            *loop_debug_data_->aligned_scan += *icp_output;
+            *loop_debug_data_->current_scan += *cur_cloud_world;
+        }
+        loop_debug_data_->loop_kf_pose    = SE3();
+        loop_debug_data_->current_kf_pose = SE3();
+        loop_debug_data_->aligned_pose    = SE3();
+        // loop_kf_id / current_kf_id 记录最后一个成功候选的 ID（仅供日志参考）
+        loop_debug_data_->loop_kf_id    = c.idx1_;
+        loop_debug_data_->current_kf_id = c.idx2_;
+        loop_debug_data_->ndt_score     = c.ndt_score_;
+    }
 
-    LOG(INFO) << "lc: kf " << c.idx1_ << " -> " << c.idx2_
-              << ", ndt_score=" << c.ndt_score_
-              << ", prev_cloud=" << prev_cloud->size()
-              << ", cur_cloud=" << cur_cloud->size();
+    if (options_.verbose_) {
+        LOG(INFO) << "lc: kf " << c.idx1_ << " -> " << c.idx2_
+                  << ", ndt_score=" << c.ndt_score_
+                  << ", prev_cloud=" << prev_cloud->size()
+                  << ", cur_cloud=" << cur_cloud->size();
+    }
 }
 
-void LoopClosing::PoseOptimization() {
-    auto v = std::make_shared<miao::VertexSE3>();
-    v->SetId(cur_kf_->GetID());
-    v->SetEstimate(cur_kf_->GetOptPose());
+bool LoopClosing::ShouldRunOptimization() {
+    ++num_nodes_since_last_optimization_;
 
-    optimizer_->AddVertex(v);
-    kf_vert_.emplace_back(v);
+    bool should =
+        has_new_loop_ ||
+        (options_.optimize_every_n_nodes_ > 0 &&
+         num_nodes_since_last_optimization_ >= options_.optimize_every_n_nodes_);
 
-    // 运动边：与前 1、前 2 帧的相对位姿约束
-    // 顶点的估计值是 opt_pose，因此运动边测量值也应在 opt 坐标系下计算，
-    // 即 last_kf->GetOptPose().inverse() * cur_kf_->GetOptPose()。
-    // 注意：cur_kf_->GetOptPose() 由 MakeKF 通过 opt_delta 初始化（继承上一次 PGO 结果
-    // 加上 LIO 增量），与 last_kf->GetOptPose() 处于同一 opt 坐标系，可直接相减得运动量。
-    for (int i = 1; i < 3; i++) {
-        int id = cur_kf_->GetID() - i;
-        if (id >= 0) {
-            auto last_kf = all_keyframes_[id];
-            auto e = std::make_shared<miao::EdgeSE3>();
-            e->SetVertex(0, optimizer_->GetVertex(last_kf->GetID()));
-            e->SetVertex(1, v);
-
-            SE3 motion = last_kf->GetOptPose().inverse() * cur_kf_->GetOptPose();
-            e->SetMeasurement(motion);
-            e->SetInformation(info_motion_);
-            optimizer_->AddEdge(e);
+    if (should) {
+        if (options_.verbose_) {
+            LOG(INFO) << "ShouldRunOptimization: yes"
+                      << " (has_new_loop=" << has_new_loop_
+                      << ", nodes_since_last=" << num_nodes_since_last_optimization_
+                      << ", every_n=" << options_.optimize_every_n_nodes_ << ")";
         }
+        num_nodes_since_last_optimization_ = 0;
     }
 
-    // 高度约束（平面场景）
-    if (options_.with_height_) {
-        auto e = std::make_shared<miao::EdgeHeightPrior>();
-        e->SetVertex(0, v);
-        e->SetMeasurement(0);
-        e->SetInformation(Mat1d::Identity() * 1.0 / (options_.height_noise_ * options_.height_noise_));
-        optimizer_->AddEdge(e);
-    }
+    return should;
+}
 
-    // 消费回环队列，向因子图添加回环边（LIO-SAM addLoopFactor 对应实现）
-    AddLoopFactor();
+void LoopClosing::AddOdomFactor(Keyframe::Ptr kf) {
+    uint64_t id = kf->GetID();
 
-    if (optimizer_->GetEdges().empty()) {
+    // 顶点已存在（重复调用保护）
+    if (optimizer_->GetVertex(id) != nullptr) {
         return;
     }
 
-    if (candidates_.empty()) {
+    auto v = std::make_shared<miao::VertexSE3>();
+    v->SetId(id);
+    v->SetEstimate(kf->GetOptPose());
+    optimizer_->AddVertex(v);
+    kf_vert_.emplace_back(v);
+
+    // ---- anchor：固定第一帧 ----
+    // 增量模式不支持 SetFixed，用极大信息阵的先验边代替（information = I * 1e9 ≈ SetFixed）
+    if (options_.fix_first_node_ && !first_node_fixed_ && kf_vert_.size() == 1) {
+        auto e_prior = std::make_shared<miao::EdgeSE3Prior>();
+        e_prior->SetVertex(0, v);
+        e_prior->SetMeasurement(v->Estimate());
+        e_prior->SetInformation(Mat6d::Identity() * 1e9);
+        optimizer_->AddEdge(e_prior);
+        first_node_fixed_ = true;
+        LOG(INFO) << "AddOdomFactor: fixed first node (kf " << id << ") via SE3Prior";
+    }
+
+    // ---- 运动边：与前 1、前 2 帧的相对位姿约束 ----
+    for (int i = 1; i < 3; i++) {
+        int64_t prev_id = static_cast<int64_t>(id) - i;
+        if (prev_id < 0) continue;
+        auto prev_v = optimizer_->GetVertex(prev_id);
+        if (prev_v == nullptr) continue;
+        auto prev_kf = all_keyframes_.at(prev_id);
+        auto e = std::make_shared<miao::EdgeSE3>();
+        e->SetVertex(0, prev_v);
+        e->SetVertex(1, v);
+        e->SetMeasurement(prev_kf->GetOptPose().inverse() * kf->GetOptPose());
+        e->SetInformation(info_motion_);
+        optimizer_->AddEdge(e);
+    }
+
+    // ---- 高度约束（平面场景）----
+    if (options_.with_height_) {
+        auto e_h = std::make_shared<miao::EdgeHeightPrior>();
+        e_h->SetVertex(0, v);
+        e_h->SetMeasurement(0);
+        e_h->SetInformation(Mat1d::Identity() * 1.0 / (options_.height_noise_ * options_.height_noise_));
+        optimizer_->AddEdge(e_h);
+    }
+}
+
+void LoopClosing::PoseOptimization() {
+    // AddOdomFactor 已在每帧 HandleKF 中无条件调用，AddLoopFactor 也已在 ComputeLoopCandidates 后
+    // 立即调用，此处因子图已完整连通，PoseOptimization 只负责 Optimize → 写回位姿 → 重建 KD-Tree。
+
+    if (optimizer_->GetEdges().empty()) {
         return;
     }
 
@@ -670,8 +683,23 @@ void LoopClosing::PoseOptimization() {
         all_keyframes_[vert->GetId()]->SetOptPose(pose);
     }
 
-    // PGO 修正了历史帧位姿，全量重建 kf_poses_cloud_，保持 KD-Tree 与 opt_pose 一致
-    // 否则下一帧的半径搜索仍用旧位置，导致漏检/误检
+    // 全量重建 kf_poses_cloud_，保持 KD-Tree 与最新 opt_pose 一致
+    RebuildHistoryPoses();
+
+    if (loop_cb_ && has_new_loop_) {
+        // 仅在本轮确实添加了回环边时触发重绘回调，
+        // 纯定期 N 帧优化（无新回环）不触发，避免无意义的地图重建。
+        loop_cb_();
+    }
+
+    has_new_loop_ = false;
+
+    if (options_.verbose_) {
+        LOG(INFO) << "PoseOptimization: done";
+    }
+}
+
+void LoopClosing::RebuildHistoryPoses() {
     kf_poses_cloud_->clear();
     kf_poses_cloud_->reserve(all_keyframes_.size());
     for (const auto& kf : all_keyframes_) {
@@ -682,12 +710,22 @@ void LoopClosing::PoseOptimization() {
         pt.z = static_cast<float>(t.z());
         kf_poses_cloud_->push_back(pt);
     }
+}
 
-    if (loop_cb_) {
-        loop_cb_();
+void LoopClosing::RunFinalOptimization() {
+    // 在线模式：等待异步队列耗尽，确保所有帧都已进入因子图
+    if (options_.online_mode_) {
+        kf_thread_.Quit();
     }
 
-    LOG(INFO) << "optimize finished, loops: " << edge_loops_.size();
+    if (kf_vert_.empty() || optimizer_->GetEdges().empty()) {
+        LOG(WARNING) << "RunFinalOptimization: graph empty, skip";
+        return;
+    }
+
+    LOG(INFO) << "RunFinalOptimization: running final PGO on " << kf_vert_.size() << " nodes";
+    PoseOptimization();
+    LOG(INFO) << "RunFinalOptimization: done";
 }
 
 // ---- LIO-SAM addLoopFactor 对应实现 ----
@@ -711,9 +749,16 @@ void LoopClosing::AddLoopFactor() {
         double variance = std::max(icp_fitness, 1e-6);
         Mat6d info = Mat6d::Identity() * (1.0 / variance);
 
+        auto v0 = optimizer_->GetVertex(idx1);
+        auto v1 = optimizer_->GetVertex(idx2);
+        if (v0 == nullptr || v1 == nullptr) {
+            LOG(WARNING) << "AddLoopFactor: vertex not found for kf " << idx1 << " or " << idx2 << ", skip";
+            continue;
+        }
+
         auto e = std::make_shared<miao::EdgeSE3>();
-        e->SetVertex(0, optimizer_->GetVertex(idx1));
-        e->SetVertex(1, optimizer_->GetVertex(idx2));
+        e->SetVertex(0, v0);
+        e->SetVertex(1, v1);
         e->SetMeasurement(Tij);
         e->SetInformation(info);
 
@@ -723,7 +768,10 @@ void LoopClosing::AddLoopFactor() {
         e->SetRobustKernel(rk);
 
         optimizer_->AddEdge(e);
-        edge_loops_.emplace_back(e);
+        {
+            std::lock_guard<std::mutex> lk(edge_loops_mutex_);
+            edge_loops_.emplace_back(e);
+        }
     }
 
     LOG(INFO) << "lc: added " << loop_index_queue_.size() << " loop factor(s)";

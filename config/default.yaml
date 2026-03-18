@@ -117,6 +117,10 @@ loop_closing:
   # ICP 精匹配参数（NDT 粗对齐后进行细化）
   icp_fitness_score_th: 0.3        # ICP fitness score 阈值（均方点距，越小越严），对应 LIO-SAM historyKeyframeFitnessScore
   icp_max_correspondence_dist: 1.5 # ICP 最大点对点对应距离（米）
+  # 位姿图优化触发策略（参考 Cartographer optimize_every_n_nodes）
+  # 每累积 N 个节点执行一次优化；有新回环时无条件触发（0 = 每帧都优化）
+  optimize_every_n_nodes: 10
+  fix_first_node: true             # 固定第一帧（anchor node），防止全局漂移（用强先验边实现，绕过增量模式 SetFixed 限制）
 
 
 ### localization ================================================================================================
