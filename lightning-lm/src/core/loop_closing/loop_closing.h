@@ -7,13 +7,18 @@
 
 #include "common/keyframe.h"
 #include "common/loop_candidate.h"
+#include "common/thread_pool.h"
 #include "utils/async_message_process.h"
 
 #include "core/graph/optimizer.h"
 #include "core/types/edge_se3.h"
+#include "core/miao/core/types/edge_se3_prior.h"
 #include "voxel_map/voxel_map_manager.hpp"
 
 #include <map>
+#include <memory>
+#include <set>
+#include <mutex>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_types.h>
 
@@ -27,7 +32,7 @@ class LoopClosing {
     struct Options {
         Options() {}
 
-        bool verbose_ = true;       // 输出调试信息
+        bool verbose_ = false;       // 输出调试信息
         bool online_mode_ = false;  // 切换离线-在线模式
 
         int loop_kf_gap_ = 20;       // 每隔多少个关键帧检查一次
@@ -52,6 +57,15 @@ class LoopClosing {
 
         // 每次触发时最多处理的候选帧数（超出部分按距离最近优先截取）
         int max_candidates_per_check_ = 3;
+
+        // ---- 位姿图优化触发策略（optimize_every_n_nodes）----
+        // 每累积 N 个新节点执行一次优化（0 = 每帧都优化，即保持旧行为）
+        // 有新回环时无条件触发一次优化（覆盖 N 帧计数）
+        int optimize_every_n_nodes_ = 10;
+
+        // 是否固定第一帧（anchor node）：通过强先验边约束初始位姿不漂移
+        // 等效于 g2o/Cartographer 中的 SetFixed，但绕过增量模式限制（用极大信息阵代替）
+        bool fix_first_node_ = true;
 
         // ---- ICP 精匹配参数（NDT 后进行细化）----
         // ICP fitness score 阈值（均方点距，越小越精，超出则认为配准失败）
@@ -91,22 +105,29 @@ class LoopClosing {
     void AddKF(Keyframe::Ptr kf);
 
     /**
-     * 建图结束时调用：等待异步队列耗尽，然后对最后一帧强制执行一次回环检测和全局优化。
-     * 该函数会阻塞直到所有工作完成，并在检测到新回环时调用 loop_cb_。
+     * 建图结束时调用（SaveMap 前）：在线模式下等待异步队列耗尽，然后执行一次最终全局优化。
+     * 阻塞直到完成，有回环时触发 loop_cb_。
      */
-    void FinalizeAndWait();
+    void RunFinalOptimization();
 
     /// 如果检测到新地回环并发生了优化，则调用回调
     using LoopClosedCallback = std::function<void()>;
     void SetLoopClosedCB(LoopClosedCallback cb) { loop_cb_ = cb; }
 
     /// 获取回环边（用于可视化）
+    /// 从 edge_loops_ 读取（因子图中实际加入的所有回环边，每条边独立存储，不会被覆盖），
+    /// 用 edge_loops_mutex_ 保护，避免与 kf_thread_ 写入产生数据竞争。
+    /// 注意：loop_index_container_ 是 map<cur_id→hist_id>，同一 cur_id 对应多个候选时会互相覆盖，
+    ///       因此不能用它做可视化数据源。
     std::vector<std::pair<int, int>> GetLoopEdges() const {
+        std::lock_guard<std::mutex> lk(edge_loops_mutex_);
         std::vector<std::pair<int, int>> edges;
-        for (const auto& c : candidates_) {
-            if (c.ndt_score_ > options_.ndt_score_th_) {
-                edges.emplace_back(c.idx1_, c.idx2_);
-            }
+        edges.reserve(edge_loops_.size());
+        for (const auto& e : edge_loops_) {
+            if (e->GetVertex(0) == nullptr || e->GetVertex(1) == nullptr) continue;
+            edges.emplace_back(
+                static_cast<int>(e->GetVertex(0)->GetId()),
+                static_cast<int>(e->GetVertex(1)->GetId()));
         }
         return edges;
     }
@@ -122,20 +143,21 @@ class LoopClosing {
         int loop_kf_id;                // 回环关键帧ID
         int current_kf_id;             // 当前关键帧ID
         double ndt_score;              // NDT匹配得分
-        bool valid;                    // 是否有效
-        
-        LoopDebugData() : valid(false), ndt_score(0.0) {}
+
+        LoopDebugData() : ndt_score(0.0) {}
     };
-    
-    LoopDebugData GetLoopDebugData() const { return loop_debug_data_; }
+
+    /// 取走最新的回环调试数据（move 语义，调用后内部指针置为 nullptr）。
+    /// 返回 nullptr 表示本轮尚无成功回环。
+    std::unique_ptr<LoopDebugData> GetLoopDebugData() {
+        std::lock_guard<std::mutex> lk(loop_debug_mutex_);
+        return std::move(loop_debug_data_);
+    }
 
    protected:
     void HandleKF(Keyframe::Ptr kf);
 
     void DetectLoopCandidates();
-
-    /// 强制对当前帧执行一次回环检测（绕过冷却期和防重复检查），用于建图收尾
-    void ForceFinalLoopCheck();
 
     /// 计算回环候选位姿
     void ComputeLoopCandidates();
@@ -152,6 +174,12 @@ class LoopClosing {
     void LoopFindNearKeyframes(CloudPtr& near_keyframes, int key, int search_num);
 
     /**
+     * 每帧关键帧到达时无条件调用：将该帧顶点加入因子图，并添加运动边 + 高度约束 + anchor 先验。
+     * 与 AddLoopFactor / PoseOptimization 解耦，职责单一：只负责"入图"，不触发优化。
+     */
+    void AddOdomFactor(Keyframe::Ptr kf);
+
+    /**
      * 消费回环队列，向 miao 优化器添加回环边（LIO-SAM addLoopFactor 对应实现）
      * 队列来源：ComputeLoopCandidates 成功后写入
      */
@@ -159,6 +187,17 @@ class LoopClosing {
 
     /// 优化位姿（miao 增量 PGO，lightning-lm 原有逻辑保留）
     void PoseOptimization();
+
+    /// 全量重建 kf_poses_cloud_，使 KD-Tree 与最新 opt_pose 保持一致
+    void RebuildHistoryPoses();
+
+    /**
+     * 参考 Cartographer pose_graph_2d AddNode 末尾的 kRunOptimization 判断：
+     *   - 有新回环 → true（重置计数器，无条件优化）
+     *   - 距上次优化已累积 N 帧 → true（重置计数器，定期优化）
+     *   - 否则 → false（只积累节点/边，不调用 Optimize）
+     */
+    bool ShouldRunOptimization();
 
     Options options_;
 
@@ -177,21 +216,35 @@ class LoopClosing {
 
     std::vector<std::shared_ptr<miao::VertexSE3>> kf_vert_;
     std::vector<std::shared_ptr<miao::EdgeSE3>> edge_loops_;
+    mutable std::mutex edge_loops_mutex_;  // 保护 edge_loops_ 的并发读写（kf_thread_ 写，主线程读）
 
     LoopClosedCallback loop_cb_;
 
-    mutable LoopDebugData loop_debug_data_;  // 回环调试数据
+    mutable std::unique_ptr<LoopDebugData> loop_debug_data_;  // 回环调试数据（nullptr 表示本轮无成功回环）
+    mutable std::mutex loop_debug_mutex_;    // 保护 loop_debug_data_ 的并发写入（ComputeForCandidate 在线程池中并行执行）
+
+    // Cartographer 风格线程池：ComputeLoopCandidates 中并行执行点云配准
+    std::unique_ptr<common::ThreadPool> thread_pool_;
+
+    // optimize_every_n_nodes 计数：距上次优化已累积的新节点数
+    int num_nodes_since_last_optimization_ = 0;
+
+    // 第一帧是否已通过强先验边固定（fix_first_node_ 选项生效后，只固定一次）
+    bool first_node_fixed_ = false;
 
     // ---- LIO-SAM 风格的候选帧搜索结构 ----
     // 关键帧位置点云（与 all_keyframes_ 同步，但滞后一帧——不含当前帧，用于 KD-Tree 搜索）
     pcl::PointCloud<pcl::PointXYZ>::Ptr kf_poses_cloud_;
     // KD-Tree 空间索引，用于半径搜索历史关键帧
     pcl::KdTreeFLANN<pcl::PointXYZ>::Ptr kdtree_history_poses_;
-    // 已检测到的回环对（cur_id → hist_id），防止对同一帧重复触发回环
-    std::map<uint64_t, uint64_t> loop_index_container_;
+    // 已检测到的回环对集合（以 {min_id, max_id} 规范化存储），支持双向查重：
+    // 无论 A→B 还是 B→A 查询，只要该对已存在就跳过，避免对同一关键帧对重复触发回环。
+    std::set<std::pair<uint64_t, uint64_t>> loop_index_container_;
+    mutable std::mutex loop_index_mutex_;  // 保护 loop_index_container_ 的并发读写
 
     // ---- LIO-SAM 风格的回环约束队列（解耦检测与优化）----
     // 成功通过 NDT 验证的回环对，等待 AddLoopFactor 消费
+    bool has_new_loop_ = false;  // 本轮是否有新回环（AddLoopFactor 消费前快照）
     std::vector<std::pair<int, int>> loop_index_queue_;  // (hist_id, cur_id)
     std::vector<SE3> loop_pose_queue_;                   // 对应的相对位姿 Tij
     std::vector<double> loop_score_queue_;               // 对应的 NDT 得分（用于计算噪声模型）

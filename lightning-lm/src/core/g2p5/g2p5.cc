@@ -64,8 +64,10 @@ void G2P5::RenderFront(Keyframe::Ptr kf) {
     }
 
     /// 向外回调
+    // 深拷贝后再传给外部：RenderFront 在前端线程执行，RenderBack 在后端线程
+    // 可能同时 Resize/析构 newest_map_（frontend_map_）的 grids_，必须隔离。
     if (map_update_cb_) {
-        map_update_cb_(newest_map_);
+        map_update_cb_(newest_map_->MakeDeepCopy());
     }
 }
 
@@ -173,8 +175,10 @@ void G2P5::RenderBack() {
         }
 
         /// 向外回调
+        // 深拷贝后再传给外部：回调（如 ToCV）可能与下一轮 RenderBack 的
+        // Resize/析构并发访问 newest_map_ 的 grids_，必须隔离。
         if (map_update_cb_) {
-            map_update_cb_(newest_map_);
+            map_update_cb_(newest_map_->MakeDeepCopy());
         }
 
         is_busy_ = false;

@@ -114,6 +114,8 @@ loop_closing:
   min_prev_cloud_size: 1000
   icp_fitness_score_th: 0.3
   icp_max_correspondence_dist: 1.5
+  optimize_every_n_nodes: 10  # 每累积 N 个节点执行一次 PGO；有新回环时无条件触发（0 = 每帧都优化）
+  fix_first_node: true        # 固定第一帧（anchor node），防止全局漂移
 
 
 ### localization ================================================================================================
