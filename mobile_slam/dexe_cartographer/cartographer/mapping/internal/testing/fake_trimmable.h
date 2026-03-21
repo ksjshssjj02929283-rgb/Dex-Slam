@@ -100,6 +100,25 @@ class FakeTrimmable : public Trimmable {
       int /*trajectory_id*/,
       PoseGraphInterface::TrajectoryState /*state*/) override {}
 
+  void TrimNode(const NodeId& /*node_id*/) override {}
+
+  void AddConstraint(
+      const PoseGraphInterface::Constraint& /*constraint*/) override {}
+
+  bool IsTrajectoryFrozen(int /*trajectory_id*/) const override {
+    return false;
+  }
+
+  const Submap2D* GetSubmap2D(const SubmapId& /*submap_id*/) const override {
+    return nullptr;
+  }
+
+  const std::set<NodeId>& GetSubmapNodeIds(
+      const SubmapId& /*submap_id*/) const override {
+    static const std::set<NodeId> kEmpty;
+    return kEmpty;
+  }
+
   std::vector<SubmapId> trimmed_submaps() { return trimmed_submaps_; }
 
  private:

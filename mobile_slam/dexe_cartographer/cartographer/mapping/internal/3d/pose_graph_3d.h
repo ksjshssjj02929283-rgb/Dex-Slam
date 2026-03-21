@@ -291,6 +291,24 @@ class PoseGraph3D : public PoseGraph {
     void SetTrajectoryState(int trajectory_id, TrajectoryState state) override
         EXCLUSIVE_LOCKS_REQUIRED(parent_->mutex_);
 
+    // Extended interface stubs (3D does not use node-level trimming).
+    void TrimNode(const NodeId& node_id) override {
+      LOG(FATAL) << "TrimNode not implemented for PoseGraph3D.";
+    }
+    void AddConstraint(const Constraint& constraint) override {
+      parent_->data_.constraints.push_back(constraint);
+    }
+    bool IsTrajectoryFrozen(int trajectory_id) const override {
+      return parent_->IsTrajectoryFrozen(trajectory_id);
+    }
+    const Submap2D* GetSubmap2D(const SubmapId& /*submap_id*/) const override {
+      return nullptr;  // 3D pose graph has no 2D submaps.
+    }
+    const std::set<NodeId>& GetSubmapNodeIds(
+        const SubmapId& submap_id) const override {
+      return parent_->data_.submap_data.at(submap_id).node_ids;
+    }
+
    private:
     PoseGraph3D* const parent_;
   };

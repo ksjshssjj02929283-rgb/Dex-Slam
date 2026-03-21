@@ -290,6 +290,19 @@ class PoseGraph2D : public PoseGraph {
     void SetTrajectoryState(int trajectory_id, TrajectoryState state) override
         EXCLUSIVE_LOCKS_REQUIRED(parent_->mutex_);
 
+    // Extended interface for node-level trimming and GLC support.
+    void TrimNode(const NodeId& node_id)
+        EXCLUSIVE_LOCKS_REQUIRED(parent_->mutex_) override;
+    void AddConstraint(const Constraint& constraint)
+        EXCLUSIVE_LOCKS_REQUIRED(parent_->mutex_) override;
+    bool IsTrajectoryFrozen(int trajectory_id) const override
+        EXCLUSIVE_LOCKS_REQUIRED(parent_->mutex_);
+    const Submap2D* GetSubmap2D(const SubmapId& submap_id) const override
+        EXCLUSIVE_LOCKS_REQUIRED(parent_->mutex_);
+    const std::set<NodeId>& GetSubmapNodeIds(
+        const SubmapId& submap_id) const override
+        EXCLUSIVE_LOCKS_REQUIRED(parent_->mutex_);
+
    private:
     PoseGraph2D* const parent_;
   };

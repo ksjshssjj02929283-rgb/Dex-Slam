@@ -65,4 +65,26 @@ message PoseGraphOptions {
   // Instantiates the 'OverlappingSubmapsTrimmer2d' which trims submaps from the
   // pose graph based on the area of overlap.
   OverlappingSubmapsTrimmerOptions2D overlapping_submaps_trimmer_2d = 11;
+
+  message GLCTrimmer2DOptions {
+    // Overlap ratio above this threshold means the node is redundant -> delete.
+    double overlap_high_threshold = 1;
+    // Whether to enable GLC information compensation before deletion.
+    bool enable_glc = 2;
+    // Number of nearest neighbor nodes to examine for trimming candidates.
+    // n=1 means only check the single nearest node; n>1 checks n neighbors.
+    int32 neighbor_count = 3;
+    // Maximum distance (meters) for a neighbor node to be considered a
+    // trimming candidate. Nodes farther than this are skipped even if they
+    // are among the nearest neighbor_count nodes.
+    double max_neighbor_dist = 4;
+    // Maximum number of nodes to trim per cur_node iteration.
+    // Type-A (other-traj) nodes are trimmed first, then Type-B (same-traj).
+    // <=0 means unlimited.
+    int32 max_trim_per_check = 5;
+  }
+
+  // Instantiates the unified 'GLCTrimmer2D' which trims individual nodes
+  // based on point cloud overlap ratio and compensates with GLC constraints.
+  GLCTrimmer2DOptions glc_trimmer_2d = 13;
 }

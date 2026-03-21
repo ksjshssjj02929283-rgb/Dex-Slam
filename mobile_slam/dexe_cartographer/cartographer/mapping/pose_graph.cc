@@ -85,6 +85,26 @@ void PopulateOverlappingSubmapsTrimmerOptions2D(
       options_dictionary->GetInt("min_added_submaps_count"));
 }
 
+void PopulateGLCTrimmer2DOptions(
+    proto::PoseGraphOptions* const pose_graph_options,
+    common::LuaParameterDictionary* const parameter_dictionary) {
+  constexpr char kDictionaryKey[] = "glc_trimmer_2d";
+  if (!parameter_dictionary->HasKey(kDictionaryKey)) return;
+
+  auto options_dictionary = parameter_dictionary->GetDictionary(kDictionaryKey);
+  auto* options = pose_graph_options->mutable_glc_trimmer_2d();
+  options->set_overlap_high_threshold(
+      options_dictionary->GetDouble("overlap_high_threshold"));
+  options->set_enable_glc(
+      options_dictionary->GetBool("enable_glc"));
+  options->set_neighbor_count(
+      options_dictionary->GetInt("neighbor_count"));
+  options->set_max_neighbor_dist(
+      options_dictionary->GetDouble("max_neighbor_dist"));
+  options->set_max_trim_per_check(
+      options_dictionary->GetInt("max_trim_per_check"));
+}
+
 proto::PoseGraphOptions CreatePoseGraphOptions(
     common::LuaParameterDictionary* const parameter_dictionary) {
   proto::PoseGraphOptions options;
@@ -111,6 +131,7 @@ proto::PoseGraphOptions CreatePoseGraphOptions(
       parameter_dictionary->GetDouble(
           "global_constraint_search_after_n_seconds"));
   PopulateOverlappingSubmapsTrimmerOptions2D(&options, parameter_dictionary);
+  PopulateGLCTrimmer2DOptions(&options, parameter_dictionary);
   return options;
 }
 
