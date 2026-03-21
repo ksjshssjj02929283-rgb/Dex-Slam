@@ -32,6 +32,7 @@
 #include "absl/memory/memory.h"
 #include "cartographer/common/math.h"
 #include "cartographer/mapping/internal/2d/overlapping_submaps_trimmer_2d.h"
+#include "cartographer/mapping/internal/2d/glc_trimmer_2d.h"
 #include "cartographer/mapping/proto/pose_graph/constraint_builder_options.pb.h"
 #include "cartographer/sensor/compressed_point_cloud.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -63,6 +64,17 @@ PoseGraph2D::PoseGraph2D(
         trimmer_options.fresh_submaps_count(),
         trimmer_options.min_covered_area(),
         trimmer_options.min_added_submaps_count()));
+  }
+  if (options.has_glc_trimmer_2d()) {
+    const auto& t = options.glc_trimmer_2d();
+    GLCTrimmer2D::Options glc_options;
+    glc_options.overlap_high_threshold = t.overlap_high_threshold();
+    glc_options.enable_glc = t.enable_glc();
+    glc_options.neighbor_count = t.neighbor_count() > 0 ? t.neighbor_count() : 3;
+    glc_options.max_neighbor_dist =
+        t.max_neighbor_dist() > 0.0 ? t.max_neighbor_dist() : 2.0;
+    glc_options.max_trim_per_check = t.max_trim_per_check();
+    AddTrimmer(absl::make_unique<GLCTrimmer2D>(glc_options));
   }
 }
 
@@ -1474,6 +1486,68 @@ void PoseGraph2D::TrimmingHandle::TrimSubmap(const SubmapId& submap_id) {
     parent_->data_.trajectory_nodes.Trim(node_id);
     parent_->optimization_problem_->TrimTrajectoryNode(node_id);
   }
+}
+
+// ===== Extended Trimmable interface implementations =====
+
+void PoseGraph2D::TrimmingHandle::TrimNode(const NodeId& node_id) {
+  // Step 1: Remove node from all submaps' node_ids.
+  for (const auto& submap_id_data : parent_->data_.submap_data) {
+    parent_->data_.submap_data.at(submap_id_data.id).node_ids.erase(node_id);
+  }
+
+  // Step 2: Remove all constraints related to this node.
+  std::set<SubmapId> submaps_losing_constraints;
+  {
+    std::vector<Constraint> remaining;
+    for (const Constraint& c : parent_->data_.constraints) {
+      if (c.node_id != node_id) {
+        remaining.push_back(c);
+      } else {
+        submaps_losing_constraints.insert(c.submap_id);
+      }
+    }
+    parent_->data_.constraints = std::move(remaining);
+  }
+
+  // Step 3: Check which submaps lost all inter-submap constraints; clean up
+  // their scan matchers.
+  for (const Constraint& c : parent_->data_.constraints) {
+    if (c.tag == Constraint::Tag::INTER_SUBMAP) {
+      submaps_losing_constraints.erase(c.submap_id);
+    }
+  }
+  for (const SubmapId& sid : submaps_losing_constraints) {
+    parent_->constraint_builder_.DeleteScanMatcher(sid);
+  }
+
+  // Step 4: Remove from trajectory_nodes and optimization_problem.
+  parent_->data_.trajectory_nodes.Trim(node_id);
+  parent_->optimization_problem_->TrimTrajectoryNode(node_id);
+}
+
+void PoseGraph2D::TrimmingHandle::AddConstraint(
+    const Constraint& constraint) {
+  parent_->data_.constraints.push_back(constraint);
+}
+
+bool PoseGraph2D::TrimmingHandle::IsTrajectoryFrozen(
+    const int trajectory_id) const {
+  return parent_->IsTrajectoryFrozen(trajectory_id);
+}
+
+const Submap2D* PoseGraph2D::TrimmingHandle::GetSubmap2D(
+    const SubmapId& submap_id) const {
+  if (!parent_->data_.submap_data.Contains(submap_id)) {
+    return nullptr;
+  }
+  return static_cast<const Submap2D*>(
+      parent_->data_.submap_data.at(submap_id).submap.get());
+}
+
+const std::set<NodeId>& PoseGraph2D::TrimmingHandle::GetSubmapNodeIds(
+    const SubmapId& submap_id) const {
+  return parent_->data_.submap_data.at(submap_id).node_ids;
 }
 
 MapById<SubmapId, PoseGraphInterface::SubmapData>
