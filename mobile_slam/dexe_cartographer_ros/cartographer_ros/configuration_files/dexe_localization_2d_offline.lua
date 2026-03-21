@@ -110,5 +110,11 @@ POSE_GRAPH.constraint_builder.min_score = 0.55
 POSE_GRAPH.constraint_builder.max_constraint_distance = 10.
 POSE_GRAPH.optimize_every_n_nodes = 0
 
+-- [[节点裁剪参数]]
+-- 注意：定位模式不建议启用节点裁剪
+-- POSE_GRAPH.glc_trimmer_2d = {
+--   overlap_high_threshold = 0.8,
+--   enable_glc = true,
+-- }
 
 return options

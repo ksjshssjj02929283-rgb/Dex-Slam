@@ -17,11 +17,15 @@
 #ifndef CARTOGRAPHER_MAPPING_POSE_GRAPH_TRIMMER_H_
 #define CARTOGRAPHER_MAPPING_POSE_GRAPH_TRIMMER_H_
 
+#include <set>
+
 #include "cartographer/mapping/id.h"
 #include "cartographer/mapping/pose_graph_interface.h"
 
 namespace cartographer {
 namespace mapping {
+
+class Submap2D;  // Forward declaration for GetSubmap2D.
 
 // Implemented by the pose graph to provide thread-safe access to functions for
 // trimming the graph.
@@ -50,6 +54,27 @@ class Trimmable {
   // Sets the state for a specific trajectory.
   virtual void SetTrajectoryState(
       int trajectory_id, PoseGraphInterface::TrajectoryState state) = 0;
+
+  // ===== Extended interface for node-level trimming and GLC support =====
+
+  // Trim a single node: remove from all submaps, delete constraints, remove
+  // from trajectory_nodes and optimization_problem.
+  virtual void TrimNode(const NodeId& node_id) = 0;
+
+  // Add a constraint (used by GLC to insert compensation constraints).
+  virtual void AddConstraint(
+      const PoseGraphInterface::Constraint& constraint) = 0;
+
+  // Check if a trajectory is frozen.
+  virtual bool IsTrajectoryFrozen(int trajectory_id) const = 0;
+
+  // Get the Submap2D pointer (for overlap calculation with ProbabilityGrid).
+  // Returns nullptr if submap does not exist or is not a 2D submap.
+  virtual const Submap2D* GetSubmap2D(const SubmapId& submap_id) const = 0;
+
+  // Get the set of node IDs belonging to a submap.
+  virtual const std::set<NodeId>& GetSubmapNodeIds(
+      const SubmapId& submap_id) const = 0;
 };
 
 // An interface to implement algorithms that choose how to trim the pose graph.
