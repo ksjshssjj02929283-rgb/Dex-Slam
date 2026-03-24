@@ -103,6 +103,14 @@ void ConstraintBuilder2D::MaybeAddConstraint(
   }
     LOG(WARNING) << "node_id: " << node_id << " submap_id: " << submap_id;
 
+  // 从 proto 加载的 submap 没有 ikd-tree，无法构建匹配器，跳过
+  if (submap->cloud_ikdtree() == nullptr) {
+    LOG(WARNING) << "[ConstraintBuilder2D] MaybeAddConstraint: submap "
+                 << submap_id
+                 << " has no cloud_ikdtree (loaded from proto), skipping.";
+    return;
+  }
+
   absl::MutexLock locker(&mutex_);
   if (when_done_) {
     LOG(WARNING)
@@ -137,6 +145,15 @@ void ConstraintBuilder2D::MaybeAddConstraint(
 void ConstraintBuilder2D::MaybeAddGlobalConstraint(
     const SubmapId& submap_id, const Submap2D* const submap,
     const NodeId& node_id, const TrajectoryNode::Data* const constant_data) {
+  // 从 proto 加载的 submap 没有 ikd-tree（定位时加载的历史地图），
+  // 只有经过 local_map_updater 重建 ikd-tree 后才能用于全局匹配
+  if (submap->cloud_ikdtree() == nullptr) {
+    LOG(WARNING) << "[ConstraintBuilder2D] MaybeAddGlobalConstraint: submap "
+                 << submap_id
+                 << " has no cloud_ikdtree (loaded from proto), skipping.";
+    return;
+  }
+
   absl::MutexLock locker(&mutex_);
   if (when_done_) {
     LOG(WARNING)

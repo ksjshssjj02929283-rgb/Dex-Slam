@@ -52,9 +52,9 @@ options = {
   save_debug_map = false,
 }
 
-TRAJECTORY_BUILDER.pure_localization_trimmer = {
-  max_submaps_to_keep = 2,
-}
+-- TRAJECTORY_BUILDER.pure_localization_trimmer = {
+--   max_submaps_to_keep = 2,
+-- }
 
 POSE_INITIALIZER_2D.use_global_matching = false
 
@@ -102,19 +102,27 @@ POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_angle_radians = math.rad(90.)
 -- 需要测试num_range_data对定位的影响
 POSE_ESTIMATOR_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.hit_probability = 0.61
 POSE_ESTIMATOR_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.miss_probability = 0.48
-POSE_ESTIMATOR_2D.submaps.num_range_data = 20
+POSE_ESTIMATOR_2D.submaps.num_range_data = 50
 POSE_ESTIMATOR_2D.submaps.grid_options_2d.resolution = 0.04
 
 -- [[回环检测参数]]
 POSE_GRAPH.constraint_builder.min_score = 0.55
 POSE_GRAPH.constraint_builder.max_constraint_distance = 10.
-POSE_GRAPH.optimize_every_n_nodes = 0
+POSE_GRAPH.optimize_every_n_nodes = 50
+POSE_GRAPH.optimization_problem.local_slam_pose_translation_weight = 1e5
+POSE_GRAPH.optimization_problem.local_slam_pose_rotation_weight = 1e5
+POSE_GRAPH.optimization_problem.odometry_translation_weight = 1e4
+POSE_GRAPH.optimization_problem.odometry_rotation_weight = 1e2
 
 -- [[节点裁剪参数]]
--- 注意：定位模式不建议启用节点裁剪
--- POSE_GRAPH.glc_trimmer_2d = {
---   overlap_high_threshold = 0.8,
---   enable_glc = true,
--- }
+-- glc_trimmer_2d: 基于点云重叠率裁剪冗余节点，GLC 信息补偿
+-- 默认注释掉，取消注释即可启用
+POSE_GRAPH.glc_trimmer_2d = {
+  overlap_high_threshold = 0.8,  -- 同轨迹节点冗余判定阈值（0.6~0.8）
+  enable_glc = true,
+  neighbor_count = 3,             -- 搜索最近的 N 个候选节点（1 = 只检查最近的一个）
+  max_neighbor_dist = 5.0,        -- 邻域搜索的最大距离（米）
+  max_trim_per_check = 1,        -- 每个 cur_node 最多删除的节点数（≤0 = 不限制）
+}
 
 return options

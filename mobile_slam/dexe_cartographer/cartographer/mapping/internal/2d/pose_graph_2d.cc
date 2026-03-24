@@ -372,6 +372,15 @@ void PoseGraph2D::ComputeConstraint(const NodeId& node_id,
     constant_data = data_.trajectory_nodes.at(node_id).constant_data.get();
     submap = static_cast<const Submap2D*>(
         data_.submap_data.at(submap_id).submap.get());
+
+    // 若 submap 的 ikd-tree 未初始化（从 proto 加载的历史地图），在约束计算前重建。
+    // 使用非 const 指针调用 RebuildIkdTrees()，重建完成后 cloud_ikdtree() 不再为 nullptr。
+    if (submap->cloud_ikdtree() == nullptr) {
+      auto* mutable_submap = const_cast<Submap2D*>(submap);
+      LOG(INFO) << "[PoseGraph2D] Rebuilding ikd-tree for submap " << submap_id
+                << " before constraint computation.";
+      mutable_submap->RebuildIkdTrees();
+    }
   }
 
   // 建图时只会执行这块, 通过局部搜索进行回环检测
@@ -1292,7 +1301,22 @@ transform::Rigid3d PoseGraph2D::ComputeLocalToGlobalTransform(
   }
   // 3. 如果不是第一个位姿，计算当前位姿
   // 3.1 获取最后一个优化过的submap的id
-  const SubmapId last_optimized_submap_id = std::prev(end_it)->id;
+  // 注意：Trim 可能已从 data_.submap_data 中删除了部分 submap，
+  // 而 optimization_problem_->submap_data() 尚未同步，因此需要
+  // 向前遍历直到找到 data_.submap_data 中仍然存在的 submap。
+  auto it = std::prev(end_it);
+  while (it != begin_it &&
+         data_.submap_data.find(it->id) == data_.submap_data.end()) {
+    --it;
+  }
+  if (data_.submap_data.find(it->id) == data_.submap_data.end()) {
+    // 整个 trajectory 的所有优化 submap 都已被 trim，退化为 Identity
+    LOG(WARNING) << "[PoseGraph2D] ComputeLocalToGlobalTransform: all "
+                    "optimized submaps for trajectory "
+                 << trajectory_id << " have been trimmed, returning Identity.";
+    return transform::Rigid3d::Identity();
+  }
+  const SubmapId last_optimized_submap_id = it->id;
   // Accessing 'local_pose' in Submap is okay, since the member is const.
   // 3.2 计算当前全局位姿 T_global_local = T_global_submap * T_local_submap.inverse()
   return transform::Embed3D(
