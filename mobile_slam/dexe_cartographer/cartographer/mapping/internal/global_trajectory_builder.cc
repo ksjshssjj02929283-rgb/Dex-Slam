@@ -110,18 +110,15 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
     if (matching_result->insertion_result != nullptr) {
       kLocalSlamInsertionResults->Increment();  // 增加计数
       // 2. 将匹配结果加入到 pose_graph_ 中
-      // 如果是地图扩建，则需要使用pose estimator
-      NodeId node_id;
-      if (!is_pose_estimator_) {
-        node_id = pose_graph_->AddNode(
-            matching_result->insertion_result->constant_data, trajectory_id_,
-            matching_result->insertion_result->insertion_submaps);
-
-        CHECK_EQ(node_id.trajectory_id, trajectory_id_);
-      } else {
-        static int index = 0;
-        node_id = NodeId(1, index++);
-      }
+      // 建图模式（LocalTrajectoryBuilder2D）和定位模式（PoseEstimator2D）均调用
+      // pose_graph_->AddNode()，使定位轨迹节点参与：
+      //   - 跨轨迹节点替换（FindOverlappedOldNodes 搜索所有轨迹）
+      //   - GLCTrimmer 管理 submap 容量
+      //   - 后端约束构建（constraint_builder 搜索回环约束）
+      NodeId node_id = pose_graph_->AddNode(
+          matching_result->insertion_result->constant_data, trajectory_id_,
+          matching_result->insertion_result->insertion_submaps);
+      CHECK_EQ(node_id.trajectory_id, trajectory_id_);
 
       // 3. 匹配结果保存
       insertion_result = absl::make_unique<InsertionResult>(InsertionResult{
@@ -158,10 +155,8 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
     if (local_trajectory_builder_) {
       local_trajectory_builder_->AddImuData(imu_data);
     }
-    // 2. 将 IMU 数据传入到 pose_graph_ 中
-    if (!is_pose_estimator_) {
-      pose_graph_->AddImuData(trajectory_id_, imu_data);
-    }
+    // 2. 将 IMU 数据传入到 pose_graph_ 中（建图和定位均需要）
+    pose_graph_->AddImuData(trajectory_id_, imu_data);
   }
 
   /**
@@ -186,10 +181,8 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
             odometry_data.time, odometry_data.pose)) {
       return;
     }
-    // 3. 将 odom 数据传入到 pose_graph_ 中
-    if (!is_pose_estimator_) {
-      pose_graph_->AddOdometryData(trajectory_id_, odometry_data);
-    }
+    // 3. 将 odom 数据传入到 pose_graph_ 中（建图和定位均需要）
+    pose_graph_->AddOdometryData(trajectory_id_, odometry_data);
   }
 
   /**
