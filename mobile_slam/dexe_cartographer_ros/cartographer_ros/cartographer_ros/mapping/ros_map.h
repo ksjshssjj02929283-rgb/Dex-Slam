@@ -44,6 +44,18 @@ void WritePng(const ::cartographer::io::Image& image,
               const std::string file_name,
               double occ_thresh, double free_thresh);
 
+// Generate a thresholded grayscale cv::Mat from an Image without writing to disk.
+cv::Mat GeneratePngMat(const ::cartographer::io::Image& image,
+                       double occ_thresh, double free_thresh);
+
+// Run navigation-map noise removal on an in-memory mat and write the result.
+void WriteNavigationMap(const cv::Mat& input_mat,
+                       const std::string output_file_name,
+                       const std::string& filter_mode,
+                       bool save_debug_map,
+                       const std::string& map_dir);
+
+// Convenience overload that reads the input PNG from disk (legacy).
 void WriteNavigationMap(const std::string pgm_file_name,
                        const std::string output_file_name,
                        const std::string& filter_mode,

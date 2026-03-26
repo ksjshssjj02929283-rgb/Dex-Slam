@@ -53,9 +53,10 @@ struct LocalizationNodeOptions {
   float mapping_free_thresh = 0.196;
 
   // Navigation map options
-  bool save_navigation_map = false;
+  bool save_origin_map = false;           // save original (pre-filter) map as *_origin.png
   std::string navigation_map_filter_mode = "normal";  // "normal", "high", "super"
   bool save_debug_map = false;
+  bool save_map_pcd = false;              // save map point cloud as *.pcd
 };
 
 LocalizationNodeOptions CreateLocalizationNodeOptions(
