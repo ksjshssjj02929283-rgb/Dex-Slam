@@ -122,7 +122,7 @@ POSE_GRAPH.glc_trimmer_2d = {
   enable_glc = true,
   neighbor_count = 3,             -- 搜索最近的 N 个候选节点（1 = 只检查最近的一个）
   max_neighbor_dist = 5.0,        -- 邻域搜索的最大距离（米）
-  max_trim_per_check = 1,        -- 每个 cur_node 最多删除的节点数（≤0 = 不限制）
+  max_trim_per_check = 2,        -- 每个 cur_node 最多删除的节点数（≤0 = 不限制）
 }
 
 return options

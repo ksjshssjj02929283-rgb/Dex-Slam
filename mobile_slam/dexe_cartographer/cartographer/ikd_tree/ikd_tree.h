@@ -288,14 +288,16 @@ public:
     };
 
 private:
+    // Finished flag: once set, tree becomes read-only and rebuild resources are released
+    bool finished_flag = false;
     // Multi-thread Tree Rebuild
     bool termination_flag = false;
     bool rebuild_flag = false;
     pthread_t rebuild_thread;
     pthread_mutex_t termination_flag_mutex_lock, rebuild_ptr_mutex_lock, working_flag_mutex, search_flag_mutex;
     pthread_mutex_t rebuild_logger_mutex_lock, points_deleted_rebuild_mutex_lock;
-    // queue<Operation_Logger_Type> Rebuild_Logger;
-    MANUAL_Q Rebuild_Logger;
+    // Heap-allocated to allow freeing the 64MB queue after Finish()
+    MANUAL_Q *Rebuild_Logger_ptr = nullptr;
     PointVector Rebuild_PCL_Storage;
     KD_TREE_NODE **Rebuild_Ptr = nullptr;
     int search_mutex_counter = 0;
@@ -330,6 +332,7 @@ private:
     void Push_Down(KD_TREE_NODE *root);
     void Update(KD_TREE_NODE *root);
     void delete_tree_nodes(KD_TREE_NODE **root);
+    void release_node_mutexes(KD_TREE_NODE *root);  // called by Finish() to free per-node mutexes
     void downsample(KD_TREE_NODE **root);
     bool same_point(PointType a, PointType b);
     float calc_dist(PointType a, PointType b);
@@ -354,6 +357,9 @@ public:
         downsample_size = downsample_param;
     }
     void InitializeKDTree(float delete_param = 0.5, float balance_param = 0.7, float box_length = 0.2);
+    // Mark the tree as finished: becomes read-only, rebuild thread and resources are released
+    void Finish();
+    bool IsFinished() const { return finished_flag; }
     int size();
     int validnum();
     void root_alpha(float &alpha_bal, float &alpha_del);

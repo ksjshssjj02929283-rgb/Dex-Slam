@@ -1,6 +1,8 @@
 #ifndef CARTOGRAPHER_LOCALIZATION_2D_LOCAL_MAP_UPDATER_2D_H_
 #define CARTOGRAPHER_LOCALIZATION_2D_LOCAL_MAP_UPDATER_2D_H_
 
+#include <atomic>
+#include <future>
 #include <memory>
 #include <mutex>
 
@@ -21,10 +23,11 @@ class LocalMapUpdater2D
 public:
   LocalMapUpdater2D(const proto::LocalMapUpdaterOptions2D& options,
                     const mapping::proto::SubmapsOptions2D& submap_options);
-  ~LocalMapUpdater2D() = default;
+  ~LocalMapUpdater2D();
 
   void SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
+  // 更新机器人位姿；若接近局部地图边界则异步触发重建，完成后替换 local_submap_
   void UpdateRobotPose(const transform::Rigid2d& robot_pose);
   
   // 更新 global_dynamic_submap_
@@ -35,11 +38,11 @@ public:
 
   bool IsLocalMapUpdated() const { return is_local_map_updated_; }
 
+  // 始终返回有效的局部地图（SetGlobalSubmap 后保证非空）
   std::shared_ptr<mapping::Submap2D> local_submap();
 
-  // 根据策略获取 global submap
-  // - NONE: 返回 global_static_submap_
-  // - SHORT/LONG/PERSISTENT: 返回 global_dynamic_submap_
+  // 获取用于匹配计算的 global submap（统一返回 global_dynamic_submap_）
+  // global_static_submap_ 仅作为底图数据源，不参与匹配计算
   std::shared_ptr<mapping::Submap2D> GetGlobalSubmap() const;
   
   // 获取动态地图策略
@@ -51,9 +54,16 @@ public:
   std::shared_ptr<transform::Rigid2d> robot_pose();
 
 private:
-  bool NeedUpdateLocalMap();
+  // 判断是否需要触发局部地图重建（机器人接近当前 local map 边界）
+  bool NeedRebuildLocalMap() const;
 
-  void UpdateLocalMap();
+  // 纯计算函数：根据快照构建 local submap，可在后台线程安全调用
+  std::shared_ptr<mapping::Submap2D> BuildLocalSubmap(
+      std::shared_ptr<mapping::Submap2D> source_snapshot,
+      transform::Rigid2d origin_snapshot);
+
+  // 异步启动 BuildLocalSubmap，完成后替换 local_submap_
+  void TriggerAsyncRebuild();
 
 private:
   const proto::LocalMapUpdaterOptions2D options_;
@@ -61,24 +71,25 @@ private:
 
   std::shared_ptr<mapping::Submap2D> global_static_submap_;
   std::shared_ptr<mapping::Submap2D> global_dynamic_submap_;
-
-  std::shared_ptr<mapping::Submap2D> local_submap_;
+  std::shared_ptr<mapping::Submap2D> local_submap_;   // 始终有效（SetGlobalSubmap 后）
 
   std::shared_ptr<transform::Rigid2d> robot_pose_;
-  std::shared_ptr<transform::Rigid2d> origin_pose_;
+  std::shared_ptr<transform::Rigid2d> local_map_origin_;  // 当前 local_submap_ 的中心位姿
 
   sensor::CropBox::Box box_;
-  std::unique_ptr<sensor::BoxFilter> box_filter_;
 
-  bool is_local_map_updated_ = false;;
+  bool is_local_map_updated_ = false;
 
   // ValueConversionTables用于ProbabilityGrid
   mapping::ValueConversionTables conversion_tables_;
-  
+
   // RangeDataInserter用于插入range data到global_dynamic_submap_
   std::unique_ptr<mapping::RangeDataInserterInterface> range_data_inserter_;
 
   mutable std::mutex data_mutex_;
+
+  std::future<std::shared_ptr<mapping::Submap2D>> build_future_;
+  std::atomic<bool> is_building_{false};
 };
 
 }  // namespace localization

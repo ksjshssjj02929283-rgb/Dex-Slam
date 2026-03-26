@@ -300,6 +300,14 @@ std::string LocalizationUpdater::SubmapToProto(
            " but it does not exist: maybe it has been trimmed.";
   }
   submap_data.submap->ToResponseProto(submap_data.pose, response);
+  // 诊断：若 textures 为空，说明 grid 数据缺失，记录警告以便排查
+  if (response->textures_size() == 0) {
+    LOG(WARNING) << "SubmapToProto: submap " << submap_id.trajectory_id
+                 << "/" << submap_id.submap_index
+                 << " exists but has no grid (textures empty). "
+                 << "RViz cannot render this submap. "
+                 << "Check whether the pbstream was saved with include_grid_data=true.";
+  }
   return "";
 }
 
@@ -609,7 +617,7 @@ std::shared_ptr<mapping::Submap2D> LocalizationUpdater::GenerateGlobalStaticSubm
   global_submap->Finish();
   
   // 9. 重建 ikd-tree
-  global_submap->RebuildIkdTrees();
+  // global_submap->RebuildIkdTrees();
   
   LOG(INFO) << "=== Fallback Global Static Submap Generation Statistics ===";
   LOG(INFO) << "Trajectory nodes processed: " << nodes.size();
@@ -821,7 +829,7 @@ std::map<int, int> LocalizationUpdater::LoadState(
         }
         
         // 重建ikd-tree（使用Submap2D的方法）
-        global_static_submap_->RebuildIkdTrees();
+        // global_static_submap_->RebuildIkdTrees();
         LOG(INFO) << "Global static submap loaded and configured successfully";
         
         break;
@@ -842,6 +850,33 @@ std::map<int, int> LocalizationUpdater::LoadState(
   pose_graph_->AddSerializedConstraints(
       mapping::FromProto(pose_graph_proto.constraint()));
   CHECK(reader->eof());
+
+  // 诊断日志：统计加载后各轨迹的 submap 情况，帮助排查 RViz 中 submap 不显示问题
+  {
+    const auto all_submap_data = pose_graph_->GetAllSubmapData();
+    std::map<int, int> traj_submap_count;
+    std::map<int, int> traj_grid_count;
+    for (const auto& entry : all_submap_data) {
+      int traj_id = entry.id.trajectory_id;
+      traj_submap_count[traj_id]++;
+      if (entry.data.submap) {
+        const auto* submap_2d = dynamic_cast<const mapping::Submap2D*>(entry.data.submap.get());
+        if (submap_2d && submap_2d->grid() != nullptr) {
+          traj_grid_count[traj_id]++;
+        }
+      }
+    }
+    LOG(INFO) << "=== Submap Load Statistics (per trajectory) ===";
+    for (const auto& kv : traj_submap_count) {
+      int traj_id = kv.first;
+      int total = kv.second;
+      int with_grid = traj_grid_count.count(traj_id) ? traj_grid_count[traj_id] : 0;
+      LOG(INFO) << "  Trajectory " << traj_id << ": "
+                << total << " submaps, " << with_grid << " with grid data"
+                << (with_grid < total ? " [WARNING: " + std::to_string(total - with_grid) + " submaps have no grid!]" : " [OK]");
+    }
+    LOG(INFO) << "Total submaps: " << all_submap_data.size();
+  }
   
   // 验证global static submap是否加载成功
   if (!global_static_submap_) {
