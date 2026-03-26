@@ -16,7 +16,8 @@
 
 #include "cartographer_ros/localization/localization_updater_bridge.h"
 #include <fstream>
-#include <filesystem>
+
+#include <opencv2/highgui.hpp>
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
@@ -275,6 +276,52 @@ bool LocalizationUpdaterBridge::SaveMap(const std::string& map_filename,
 }
 
 // ---------------------------------------------------------------------------
+// Helper: save submap cloud data to PCD files
+// ---------------------------------------------------------------------------
+static void SaveSubmapCloudToPcd(
+    const std::string& map_filename,
+    const std::shared_ptr<cartographer::mapping::Submap2D>& submap,
+    const double resolution) {
+  const auto& cloud_ptr = submap->cloud();
+  if (cloud_ptr && !cloud_ptr->empty()) {
+    const cartographer::sensor::PointCloud filtered_cloud =
+        cartographer::sensor::VoxelFilter(*cloud_ptr, resolution);
+    const auto& pts = filtered_cloud.points();
+    pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
+    pcl_cloud.resize(pts.size());
+    for (size_t i = 0; i < pts.size(); ++i) {
+      pcl_cloud.points[i].x = pts[i].position.x();
+      pcl_cloud.points[i].y = pts[i].position.y();
+      pcl_cloud.points[i].z = pts[i].position.z();
+    }
+    const std::string pcd_file = map_filename + ".pcd";
+    pcl::io::savePCDFileBinary(pcd_file, pcl_cloud);
+    LOG(INFO) << "SaveSubmapCloudToPcd: cloud saved to " << pcd_file
+              << " (" << pts.size() << " points)";
+  } else {
+    LOG(WARNING) << "SaveSubmapCloudToPcd: cloud map is empty, skipping PCD save";
+  }
+
+  const auto& highlight_ptr = submap->highlight_cloud();
+  if (highlight_ptr && !highlight_ptr->empty()) {
+    const cartographer::sensor::PointCloud filtered_highlight =
+        cartographer::sensor::VoxelFilter(*highlight_ptr, resolution);
+    const auto& hpts = filtered_highlight.points();
+    pcl::PointCloud<pcl::PointXYZ> pcl_highlight;
+    pcl_highlight.resize(hpts.size());
+    for (size_t i = 0; i < hpts.size(); ++i) {
+      pcl_highlight.points[i].x = hpts[i].position.x();
+      pcl_highlight.points[i].y = hpts[i].position.y();
+      pcl_highlight.points[i].z = hpts[i].position.z();
+    }
+    const std::string highlight_pcd_file = map_filename + "_highlight.pcd";
+    pcl::io::savePCDFileBinary(highlight_pcd_file, pcl_highlight);
+    LOG(INFO) << "SaveSubmapCloudToPcd: highlight cloud saved to " << highlight_pcd_file
+              << " (" << hpts.size() << " points)";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helper: render a Submap2D (with cropped limits) into PNG + YAML
 // ---------------------------------------------------------------------------
 static bool RenderSubmapToFiles(
@@ -282,9 +329,10 @@ static bool RenderSubmapToFiles(
     const std::shared_ptr<cartographer::mapping::Submap2D>& submap,
     const float occ_thresh,
     const float free_thresh,
-    const bool save_navigation_map,
+    const bool save_origin_map,
     const std::string& navigation_map_filter_mode,
-    const bool save_debug_map) {
+    const bool save_debug_map,
+    const bool save_map_pcd) {
   const cartographer::mapping::Grid2D* grid = submap->grid();
   if (!grid) {
     LOG(ERROR) << "RenderSubmapToFiles: Grid is null";
@@ -354,29 +402,43 @@ static bool RenderSubmapToFiles(
   auto result = ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
   ::cartographer::io::Image image(std::move(result.surface));
 
-  WritePng(image, map_filename + ".png", occ_thresh, free_thresh);
-
   const Eigen::Vector2d map_origin(
       -result.origin.x() * resolution,
       (result.origin.y() - image.height()) * resolution);
+
+  // 提取地图目录路径
+  std::string map_dir;
+  const size_t last_slash = map_filename.find_last_of("/");
+  map_dir = (last_slash != std::string::npos) ?
+      map_filename.substr(0, last_slash + 1) : "./";
+
+  // 1. 内存生成原始地图的 cv::Mat（不写入磁盘）
+  cv::Mat origin_mat = ::cartographer_ros::GeneratePngMat(image, occ_thresh, free_thresh);
+
+  // 2. 生成 navigation map 作为默认输出 map.png
+  WriteNavigationMap(origin_mat,
+                     map_filename + ".png",
+                     navigation_map_filter_mode,
+                     save_debug_map,
+                     map_dir);
+
+  // 3. 写入 map.yaml（引用 navigation map = map.png）
   cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
   WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh, free_thresh);
 
-  LOG(INFO) << "RenderSubmapToFiles: saved " << map_filename << ".png/.yaml"
+  LOG(INFO) << "RenderSubmapToFiles: saved " << map_filename << ".png/.yaml (navigation map)"
             << " (" << image.width() << "x" << image.height() << " pixels)";
 
-  if (save_navigation_map) {
-    std::string map_dir;
-    const size_t last_slash = map_filename.find_last_of("/");
-    map_dir = (last_slash != std::string::npos) ?
-        map_filename.substr(0, last_slash + 1) : "./";
-    WriteNavigationMap(map_filename + ".png",
-                       map_filename + "_navigation.png",
-                       navigation_map_filter_mode,
-                       save_debug_map,
-                       map_dir);
-    LOG(INFO) << "RenderSubmapToFiles: navigation map saved to "
-              << map_filename << "_navigation.png";
+  // 4. 只有需要保存原始地图时，才将 origin_mat 写入磁盘
+  if (save_origin_map) {
+    const std::string origin_png = map_filename + "_origin.png";
+    cv::imwrite(origin_png, origin_mat);
+    LOG(INFO) << "RenderSubmapToFiles: origin map saved to " << origin_png;
+  }
+
+  // 5. 若需要保存点云，将 submap 的点云数据写入 PCD 文件
+  if (save_map_pcd) {
+    SaveSubmapCloudToPcd(map_filename, submap, resolution);
   }
 
   return true;
@@ -409,9 +471,10 @@ bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
   }
 
   return RenderSubmapToFiles(map_filename, submap, occ_thresh, free_thresh,
-                             node_options_.save_navigation_map,
+                             node_options_.save_origin_map,
                              node_options_.navigation_map_filter_mode,
-                             node_options_.save_debug_map);
+                             node_options_.save_debug_map,
+                             node_options_.save_map_pcd);
 }
 
 // ---------------------------------------------------------------------------
@@ -547,9 +610,10 @@ bool LocalizationUpdaterBridge::SaveMapFromPoseGraph(
             << final_submap->line_map_2d_list()->size() << " line features";
 
   return RenderSubmapToFiles(map_filename, final_submap, occ_thresh, free_thresh,
-                             node_options_.save_navigation_map,
+                             node_options_.save_origin_map,
                              node_options_.navigation_map_filter_mode,
-                             node_options_.save_debug_map);
+                             node_options_.save_debug_map,
+                             node_options_.save_map_pcd);
 }
 
 /**
