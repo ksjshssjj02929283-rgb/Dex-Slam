@@ -79,6 +79,12 @@ void WritePng(const ::cartographer::io::Image& image,
               const std::string file_name,
               double occ_thresh, double free_thresh)
 {
+  cv::imwrite(file_name, GeneratePngMat(image, occ_thresh, free_thresh));
+}
+
+cv::Mat GeneratePngMat(const ::cartographer::io::Image& image,
+                       double occ_thresh, double free_thresh)
+{
   cv::Mat map_mat(image.height(), image.width(), CV_8UC1);
   uchar occ_thresh_val = 255 * occ_thresh;
   uchar free_thresh_val = 255 * free_thresh;
@@ -93,8 +99,7 @@ void WritePng(const ::cartographer::io::Image& image,
       map_mat.at<uchar>(y, x) = value;
     }
   }
-
-  cv::imwrite(file_name, map_mat);
+  return map_mat;
 }
 
 void WriteNavigationMap(const std::string pgm_file_name,
@@ -103,17 +108,23 @@ void WriteNavigationMap(const std::string pgm_file_name,
                        bool save_debug_map,
                        const std::string& map_dir)
 {
-  LOG(INFO) << "Starting WriteNavigationMap with noise removal for " << output_file_name;
-  
-  // 步骤1: 直接读取已保存的PNG文件
   cv::Mat original = cv::imread(pgm_file_name, cv::IMREAD_GRAYSCALE);
   if (original.empty()) {
     LOG(ERROR) << "Failed to read PNG file: " << pgm_file_name;
     return;
   }
-  
-  LOG(INFO) << "Loaded PNG file, dimensions: " << original.cols << "x" << original.rows;
-  
+  WriteNavigationMap(original, output_file_name, filter_mode, save_debug_map, map_dir);
+}
+
+void WriteNavigationMap(const cv::Mat& original,
+                       const std::string output_file_name,
+                       const std::string& filter_mode,
+                       bool save_debug_map,
+                       const std::string& map_dir)
+{
+  LOG(INFO) << "Starting WriteNavigationMap with noise removal for " << output_file_name;
+  LOG(INFO) << "Input mat dimensions: " << original.cols << "x" << original.rows;
+
   // 创建debug_map目录（在地图目录下）
   std::string debug_dir = map_dir + "/debug_map";
   if (save_debug_map) {

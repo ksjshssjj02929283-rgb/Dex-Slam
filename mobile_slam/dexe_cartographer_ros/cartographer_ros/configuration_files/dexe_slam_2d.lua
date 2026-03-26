@@ -46,9 +46,10 @@ options = {
   mapping_occ_thresh = 0.6,
   mapping_free_thresh = 0.2,
   -- [导航地图配置]
-  save_navigation_map = true,  -- 是否保存导航地图（噪声剔除后）
+  save_origin_map = false,  -- 是否保存原始地图（噪声剔除前）
   navigation_map_filter_mode = "normal",  -- 滤波强度: "normal", "high", "super"
   save_debug_map = false,  -- 是否保存调试图片（mask、连通域等中间结果）
+  save_map_pcd = false,  -- 是否保存地图点云（.pcd）
 
   publish_tracked_pose = true,
   save_tracked_pose = false,

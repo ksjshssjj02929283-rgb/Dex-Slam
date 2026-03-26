@@ -73,14 +73,17 @@ MappingNodeOptions CreateMappingNodeOptions(
   }
 
   // Navigation map options
-  if (lua_parameter_dictionary->HasKey("save_navigation_map")) {
-    options.save_navigation_map = lua_parameter_dictionary->GetBool("save_navigation_map");
+  if (lua_parameter_dictionary->HasKey("save_origin_map")) {
+    options.save_origin_map = lua_parameter_dictionary->GetBool("save_origin_map");
   }
   if (lua_parameter_dictionary->HasKey("navigation_map_filter_mode")) {
     options.navigation_map_filter_mode = lua_parameter_dictionary->GetString("navigation_map_filter_mode");
   }
   if (lua_parameter_dictionary->HasKey("save_debug_map")) {
     options.save_debug_map = lua_parameter_dictionary->GetBool("save_debug_map");
+  }
+  if (lua_parameter_dictionary->HasKey("save_map_pcd")) {
+    options.save_map_pcd = lua_parameter_dictionary->GetBool("save_map_pcd");
   }
 
   return options;
