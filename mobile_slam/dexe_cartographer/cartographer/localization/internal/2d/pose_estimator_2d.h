@@ -97,7 +97,7 @@ class PoseEstimator2D {
 
   void InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
-  std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const { return global_static_submap_; }
+  std::shared_ptr<mapping::Submap2D> GetGlobalSubmap() const { return global_dynamic_map_; }
   
   // 获取 LocalMapUpdater2D (用于访问动态地图策略和动态 submap)
   LocalMapUpdater2D* GetLocalMapUpdater() const { return local_map_updater_.get(); }
@@ -179,7 +179,7 @@ private:
   mapping::ActiveSubmaps2D active_submaps_;
 
   // 全局静态地图submap，包含所有全局地图数据(包括cloud和highlight_cloud的ikd-tree)
-  std::shared_ptr<mapping::Submap2D> global_static_submap_ = nullptr;
+  std::shared_ptr<mapping::Submap2D> global_dynamic_map_ = nullptr;
   
   // MotionFilter motion_filter_;
   mapping::MotionFilter keyframe_motion_filter_;

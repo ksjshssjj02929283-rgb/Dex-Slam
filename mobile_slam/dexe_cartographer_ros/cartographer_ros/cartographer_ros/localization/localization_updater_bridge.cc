@@ -401,7 +401,7 @@ bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
     submap = local_map_updater->GetGlobalSubmap();
   }
   if (!submap) {
-    submap = pose_estimator->GetGlobalStaticSubmap();
+    submap = pose_estimator->GetGlobalSubmap();
     if (!submap) {
       LOG(ERROR) << "SaveMapFromGlobalSubmap: Global submap is null";
       return false;

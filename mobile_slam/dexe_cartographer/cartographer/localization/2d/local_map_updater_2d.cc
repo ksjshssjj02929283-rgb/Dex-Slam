@@ -76,23 +76,13 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
   std::lock_guard<std::mutex> lock(data_mutex_);
   global_static_submap_ = global_submap;
   
-  // 根据动态地图策略初始化 global_dynamic_submap_
   if (!global_static_submap_) {
     return;
   }
   
-  // 策略1: NONE - 不使用dynamic，也不更新dynamic map
-  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
-    LOG(INFO) << "DynamicMapPolicy is NONE, not initializing dynamic submap";
-    global_dynamic_submap_ = nullptr;
-    return;
-  }
-  
-  // 策略2: SHORT - 暂未实现
-  // 策略3: LONG - 使用dynamic，但不保存到static map
-  // 策略4: PERSISTENT - 使用dynamic，并保存到static map
-  // 对于策略2/3/4，都需要从static map初始化dynamic map
-  
+  // 不论什么策略，都从 static map 创建 dynamic map 的深拷贝，并重建 ikdtree。
+  // global_static_submap_ 仅作为底图数据源（无 ikdtree），不参与实际匹配计算。
+  // 所有匹配计算统一使用 global_dynamic_submap_，减少维护开支。
   LOG(INFO) << "Initializing global_dynamic_submap from global_static_submap, policy: " 
             << static_cast<int>(options_.dynamic_map_policy());
   
@@ -154,7 +144,7 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
 
   // 同步构建初始 local_submap_（以全局地图原点为中心），保证之后 local_submap() 永不返回空
   transform::Rigid2d init_origin(origin.cast<double>(), Eigen::Rotation2Dd(0.0));
-  local_submap_     = BuildLocalSubmap(global_dynamic_submap_, init_origin);
+  local_submap_    = BuildLocalSubmap(global_dynamic_submap_, init_origin);
   local_map_origin_ = std::make_shared<transform::Rigid2d>(init_origin);
   LOG(INFO) << "Initial local_submap_ built synchronously at origin ("
             << origin.x() << ", " << origin.y() << ")";
@@ -301,13 +291,13 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
   auto new_submap = std::make_shared<mapping::Submap2D>(
       Eigen::Vector2f(static_cast<float>(ox), static_cast<float>(oy)),
       std::move(local_grid),
-      nullptr,  // local_submap 只用于匹配，不需要 conversion_tables
+      nullptr,  // local_submap只用于匹配，不需要conversion_tables
       std::move(local_cloud), std::make_unique<sensor::PointCloud>(),
       latest_line_id, active_line_data);
   new_submap->RebuildIkdTrees();
   new_submap->Finish();
 
-  // 调试：如果启用，将 submap 的 grid map 保存为图片和点云文件
+  // 调试：如果启用，将submap的grid map保存为图片和点云文件
   if (options_.save_debug_data()) {
     const std::string dir =
         std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/.dexe/data/";
@@ -325,7 +315,7 @@ void LocalMapUpdater2D::UpdateDynamicMap(
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
   
-  // 策略1: NONE - 不更新dynamic map
+  // 策略 NONE: 不更新 dynamic map（保持与 static map 一致的只读副本）
   if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
     return;
   }
