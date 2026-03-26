@@ -29,6 +29,7 @@
 #include "Eigen/Geometry"
 #include "absl/container/flat_hash_map.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/types/optional.h"
 #include "cartographer/common/fixed_ratio_sampler.h"
 #include "cartographer/common/thread_pool.h"
 #include "cartographer/common/time.h"
@@ -196,6 +197,17 @@ class PoseGraph2D : public PoseGraph {
   void ComputeConstraint(const NodeId& node_id, const SubmapId& submap_id)
       LOCKS_EXCLUDED(mutex_);
 
+  // Updates the set of active finished submaps (nearest kMaxActiveSubmaps by
+  // distance to node_id). If newly_finished_submap_id is set, that submap is
+  // additionally inserted into the active set (does not consume a distance
+  // slot). Submaps entering the active set get their ikd-trees rebuilt and
+  // finished; submaps leaving the set have their ikd-trees destroyed.
+  // Must be called with mutex_ held.
+  void UpdateActiveSubmaps(
+      const NodeId& node_id,
+      const absl::optional<SubmapId>& newly_finished_submap_id = absl::nullopt)
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
   // Deletes trajectories waiting for deletion. Must not be called during
   // constraint search.
   void DeleteTrajectoriesIfNeeded() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
@@ -253,6 +265,11 @@ class PoseGraph2D : public PoseGraph {
 
   // Number of nodes added since last loop closure.
   int num_nodes_since_last_loop_closure_ GUARDED_BY(mutex_) = 0;
+
+  // The set of kFinished submaps whose ikd-trees are currently alive and
+  // eligible for constraint computation. Updated by UpdateActiveSubmaps().
+  static constexpr int kMaxActiveSubmaps = 5;
+  std::set<SubmapId> active_submap_ids_ GUARDED_BY(mutex_);
 
   // Current optimization problem.
   std::unique_ptr<optimization::OptimizationProblem2D> optimization_problem_;

@@ -98,7 +98,7 @@ PoseEstimator2D::~PoseEstimator2D() {
   active_submaps_.clear();
   
   // 3. 释放地图数据（shared_ptr 会处理引用计数）
-  global_static_submap_.reset();
+  global_dynamic_map_.reset();
   
   // 4. 释放其他资源
   local_map_updater_.reset();
@@ -113,16 +113,18 @@ void PoseEstimator2D::InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D
     LOG(ERROR) << "Cannot initialize global maps from null submap";
     return;
   }
-  global_static_submap_ = global_submap;
 
   // 初始化 local_map_updater_ 的全局地图引用
-  CHECK(global_static_submap_->grid());
-  CHECK(global_static_submap_->cloud());
-  CHECK(global_static_submap_->highlight_cloud());
-  CHECK(global_static_submap_->line_map_2d_list());
+  CHECK(global_submap->grid());
+  CHECK(global_submap->cloud());
+  CHECK(global_submap->highlight_cloud());
+  CHECK(global_submap->line_map_2d_list());
 
-  // 直接将 global_static_submap_ 传递给 local_map_updater_
-  local_map_updater_->SetGlobalSubmap(global_static_submap_);
+  // 将 global_submap（static）传给 local_map_updater_，
+  // SetGlobalSubmap 内部会创建 dynamic 深拷贝并重建 ikdtree
+  local_map_updater_->SetGlobalSubmap(global_submap);
+  // 从 local_map_updater_ 获取创建好的 global_dynamic_submap_
+  global_dynamic_map_ = local_map_updater_->GetGlobalSubmap();
 
   LOG(INFO) << "All global maps initialized successfully from global submap";
 
@@ -172,7 +174,7 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
 
 void PoseEstimator2D::TriggerGlobalRelocalization()
 {
-  if (!global_static_submap_ || !global_static_submap_->grid()) {
+  if (!global_dynamic_map_ || !global_dynamic_map_->grid()) {
     LOG(ERROR) << "Global static submap is not initialized, cannot trigger global relocalization.";
     return;
   }
@@ -183,8 +185,8 @@ void PoseEstimator2D::TriggerGlobalRelocalization()
                                   options_.pose_initializer_options());
   }
 
-  // 使用 global_static_submap_ 初始化 pose_initializer_
-  pose_initializer_->InitGlobalSubmap(global_static_submap_);
+  // 使用 global_dynamic_map_ 初始化 pose_initializer_
+  pose_initializer_->InitGlobalSubmap(global_dynamic_map_);
 
   // 触发全局重定位
   pose_initializer_->TriggerGlobalRelocalization();
@@ -300,7 +302,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     // TODO: 这里使用的线特征是否需要会使用local dynamic map中的线特征
     line_matcher_->TrackLineFromMap(initial_ceres_pose,
                                     line_data,
-                                    // *global_static_submap_->line_map_2d_list(),
+                                    // *global_dynamic_map_->line_map_2d_list(),
                                     *local_map_updater_->GetGlobalSubmap()->line_map_2d_list(),
                                     global_tracked_lane_data);
                                     
@@ -524,7 +526,7 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
         LOG(INFO) << "Local relocalization failed, trying global relocalization...";
         pose_initializer_->stop();
         
-        pose_initializer_->InitGlobalSubmap(global_static_submap_);
+        pose_initializer_->InitGlobalSubmap(global_dynamic_map_);
 
         pose_initializer_->TriggerGlobalRelocalization();
         pose_initializer_->start();
