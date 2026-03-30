@@ -106,6 +106,11 @@ ament_target_dependencies(lightning.core.lio
     "tf2_geometry_msgs"
 )
 
+# 链接 livox 消息生成目标：同时保证编译顺序并传播 INTERFACE_INCLUDE_DIRECTORIES（头文件路径）
+target_link_libraries(lightning.core.lio
+    livox_ros_driver2__rosidl_typesupport_cpp
+)
+
 # ----------------------------------------------------------------------------
 # 5. Loop Closing 模块 - 回环检测
 # ----------------------------------------------------------------------------
@@ -275,11 +280,11 @@ ament_target_dependencies(lightning.wrapper
 )
 
 add_dependencies(lightning.wrapper
-    livox_interfaces2__rosidl_typesupport_cpp
+    livox_ros_driver2__rosidl_typesupport_cpp
 )
 
 target_link_libraries(lightning.wrapper
-    livox_interfaces2__rosidl_typesupport_cpp
+    livox_ros_driver2__rosidl_typesupport_cpp
 )
 
 # ----------------------------------------------------------------------------
@@ -320,13 +325,13 @@ target_link_libraries(${PROJECT_NAME}.libs INTERFACE
     ${PCL_LIBRARIES}
     
     # ROS 接口
-    livox_interfaces2__rosidl_typesupport_cpp
+    livox_ros_driver2__rosidl_typesupport_cpp
     ${PROJECT_NAME}__rosidl_typesupport_cpp
 )
 
 # 依赖关系
 add_dependencies(${PROJECT_NAME}.libs
-    livox_interfaces2__rosidl_typesupport_cpp
+    livox_ros_driver2__rosidl_typesupport_cpp
     ${PROJECT_NAME}__rosidl_typesupport_cpp
 )
 
