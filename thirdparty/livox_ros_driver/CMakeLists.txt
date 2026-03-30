@@ -50,7 +50,8 @@ if (APR_FOUND)
 endif (APR_FOUND)
 
 # generate custom msg headers
-set(LIVOX_INTERFACES livox_interfaces2)
+# 使用 livox_ros_driver2 作为包名，与源码 #include "livox_ros_driver2/msg/..." 保持一致
+set(LIVOX_INTERFACES livox_ros_driver2)
 rosidl_generate_interfaces(${LIVOX_INTERFACES}
       "msg/CustomPoint.msg"
       "msg/CustomMsg.msg"

@@ -27,6 +27,7 @@
     <depend>pcl_ros</depend>
     <depend>message_filters</depend>
     <depend>visualization_msgs</depend>
+    <depend>livox_ros_driver2</depend>
     
     <member_of_group>rosidl_interface_packages</member_of_group>
 
