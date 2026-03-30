@@ -30,8 +30,21 @@ endif ()
 if (BUILD_WITH_MARCH_NATIVE)
     add_compile_options(-march=native)
 else ()
-    add_definitions(-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2")
+    # 根据目标架构选择 SIMD 优化标志
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        # ARM64 (aarch64): NEON 默认已启用，无需额外标志
+        message(STATUS "ARM64 architecture detected, skipping x86 SSE flags")
+    elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "armv7|arm")
+        # ARM 32-bit: 启用 NEON
+        add_compile_options(-mfpu=neon -mfloat-abi=hard)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon -mfloat-abi=hard")
+        message(STATUS "ARM32 architecture detected, enabling NEON")
+    else ()
+        # x86/x86_64: 使用 SSE 指令集
+        add_definitions(-msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse -msse2 -msse3 -msse4 -msse4.1 -msse4.2")
+        message(STATUS "x86 architecture detected, enabling SSE flags")
+    endif ()
 endif ()
 
 include_directories(

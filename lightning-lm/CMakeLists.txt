@@ -35,6 +35,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 # set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/libs)
 # set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/libs)
 
+# 设置 RPATH，确保在 Jetson 等平台运行时能找到 /usr/local/lib 下的 Pangolin 等第三方库
+set(CMAKE_INSTALL_RPATH "/usr/local/lib")
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(cmake/packages.cmake)
 
@@ -56,6 +61,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 include_directories(
         ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_cpp
+        # livox_ros_driver2 的消息头文件在其子目录的构建目录中生成
+        ${CMAKE_CURRENT_BINARY_DIR}/thirdparty/livox_ros_driver/rosidl_generator_cpp
 )
 
 install(DIRECTORY config
