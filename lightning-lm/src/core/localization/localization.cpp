@@ -252,9 +252,7 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
 
 void Localization::ProcessIMUMsg(IMUPtr imu) {
     UL lock(global_mutex_);
-    std::cout << "Process IMU msg: time " << std::setprecision(12) << imu->timestamp
-              << ", acc: " << imu->linear_acceleration.transpose()
-              << ", gyr: " << imu->angular_velocity.transpose() << std::endl;
+
     if (lidar_loc_ == nullptr || lio_ == nullptr || pgo_ == nullptr) {
         return;
     }
@@ -286,9 +284,9 @@ void Localization::ProcessIMUMsg(IMUPtr imu) {
 
     /// 如果没有odm, 用lio替代DR
 
-    LOG(INFO) << "dr state: " << std::setprecision(12) << dr_state.timestamp_ << " "
-              << dr_state.GetPose().translation().transpose()
-              << ", q=" << dr_state.GetPose().unit_quaternion().coeffs().transpose();
+    // LOG(INFO) << "dr state: " << std::setprecision(12) << dr_state.timestamp_ << " "
+    //           << dr_state.GetPose().translation().transpose()
+    //           << ", q=" << dr_state.GetPose().unit_quaternion().coeffs().transpose();
 
     lidar_loc_->ProcessDR(dr_state);
     pgo_->ProcessDR(dr_state);

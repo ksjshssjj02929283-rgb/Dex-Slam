@@ -40,6 +40,8 @@ fasterlio:
   use_ivox: true                   # 是否启用 IVox 约束（前段）
   ivox_grid_resolution: 0.5        # IVox 体素大小（米）
   ivox_nearby_type: 18             # 邻域类型: 0/6/18/26
+  ivox_range_delete: false           # 是否删除超出距离的 grid
+  ivox_max_range: 100.0              # 保留 grid 的最大距离（米）
 
   use_voxel_map: true              # 是否启用 VoxelMap 约束（后段）
 
@@ -123,6 +125,10 @@ lidar_loc:
   enable_dynamic_polygon: false
   enable_parking_static: true
   enable_icp_adjust: false
+  enable_ivox_adjust: false          # 是否使用 IVox+GN 精化 NDT 结果
+  ivox_adjust_res: 0.5               # IVox 精化下采样分辨率（米）
+  ivox_adjust_max_iter: 4            # IVox 精化最大迭代次数
+  ivox_adjust_max_dis: 0.5           # IVox 精化结果与 NDT 偏移超过此值则丢弃（米）
   filter_intensity_max: 100.0
   filter_intensity_min: 10.0
   filter_z_max: 30.0
