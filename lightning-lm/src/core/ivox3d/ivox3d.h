@@ -90,6 +90,80 @@ class IVox {
     /// get statistics of the points
     std::vector<float> StatGridPoints() const;
 
+    // -------------------------------------------------------------------------
+    //  Grid 操作接口
+    // -------------------------------------------------------------------------
+
+    /// 查询某世界坐标点所在 grid 是否存在
+    bool HasGrid(const PtType& pt) const {
+        KeyType key = Pos2Grid(math::ToEigen<float, dim>(pt));
+        return grids_map_.find(key) != grids_map_.end();
+    }
+
+    /// 按点删除对应 grid（若不存在则返回 false）
+    bool DeleteGrid(const PtType& pt) {
+        KeyType key = Pos2Grid(math::ToEigen<float, dim>(pt));
+        auto it = grids_map_.find(key);
+        if (it == grids_map_.end()) return false;
+        grids_cache_.erase(it->second);
+        grids_map_.erase(it);
+        return true;
+    }
+
+    /// 按 key 删除 grid（若不存在则返回 false）
+    bool DeleteGrid(const KeyType& key) {
+        auto it = grids_map_.find(key);
+        if (it == grids_map_.end()) return false;
+        grids_cache_.erase(it->second);
+        grids_map_.erase(it);
+        return true;
+    }
+
+    /**
+     * @brief 删除距 center 超过 max_distance 的所有 grid
+     * @param center     参考中心坐标（与点云同坐标系，float 3D）
+     * @param max_distance  最大保留距离（米）
+     * @return 删除的 grid 数量
+     */
+    size_t DeleteGridsFarFrom(const Eigen::Vector3f& center, float max_distance) {
+        const float max_dist_sq = max_distance * max_distance;
+        size_t removed = 0;
+        for (auto it = grids_cache_.begin(); it != grids_cache_.end(); ) {
+            // grid 中心坐标 = key * resolution
+            Eigen::Vector3f grid_center = it->first.template cast<float>() * options_.resolution_;
+            if ((grid_center - center).squaredNorm() > max_dist_sq) {
+                grids_map_.erase(it->first);
+                it = grids_cache_.erase(it);
+                ++removed;
+            } else {
+                ++it;
+            }
+        }
+        return removed;
+    }
+
+    /**
+     * @brief 删除 x/y 落在指定 2D AABB 内的所有 grid（z 不限，适用于 chunk 级卸载）
+     * @param min_xy  2D 包围盒最小角
+     * @param max_xy  2D 包围盒最大角
+     * @return 删除的 grid 数量
+     */
+    size_t DeleteGridsInAABB(const Eigen::Vector2f& min_xy, const Eigen::Vector2f& max_xy) {
+        size_t removed = 0;
+        for (auto it = grids_cache_.begin(); it != grids_cache_.end(); ) {
+            Eigen::Vector3f gc = it->first.template cast<float>() * options_.resolution_;
+            if (gc.x() >= min_xy.x() && gc.x() < max_xy.x() &&
+                gc.y() >= min_xy.y() && gc.y() < max_xy.y()) {
+                grids_map_.erase(it->first);
+                it = grids_cache_.erase(it);
+                ++removed;
+            } else {
+                ++it;
+            }
+        }
+        return removed;
+    }
+
    private:
     /// generate the nearby grids according to the given options
     void GenerateNearbyGrids();

@@ -51,6 +51,12 @@ struct IVoxConfig {
 
     /// 平面拟合阈值（与 fasterlio::ESTI_PLANE_THRESHOLD 保持一致，默认 0.1f）
     float esti_plane_threshold = 0.1f;
+
+    /// 是否启用按距离删除超出范围的 grid（默认关闭）
+    bool enable_range_delete = false;
+
+    /// 保留 grid 的最大距离（米），超出此距离的 grid 将被删除
+    float max_map_range = 100.0f;
 };
 
 // ============================================================================
@@ -115,7 +121,8 @@ class IVoxManager {
      */
     void UpdateMap(const PointVector& points_world,
                    const std::vector<PointVector>& nearest_points,
-                   bool flg_EKF_inited) {
+                   bool flg_EKF_inited,
+                   const Eigen::Vector3f& sensor_pos = Eigen::Vector3f::Zero()) {
         const size_t cur_pts = points_world.size();
         if (cur_pts == 0) return;
 
@@ -176,6 +183,11 @@ class IVoxManager {
 
         ivox_->AddPoints(pts_to_add_);
         ivox_->AddPoints(pts_no_dedup_);
+
+        // 删除超出范围的 grid
+        if (config_.enable_range_delete) {
+            ivox_->DeleteGridsFarFrom(sensor_pos, config_.max_map_range);
+        }
     }
 
     // -------------------------------------------------------------------------

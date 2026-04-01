@@ -9,6 +9,7 @@
 
 #include "common/nav_state.h"
 #include "common/timed_pose.h"
+#include "core/ivox3d/ivox_manager.hpp"
 #include "core/localization/localization_result.h"
 #include "core/maps/tiled_map.h"
 
@@ -48,6 +49,10 @@ class LidarLoc {
         bool init_with_fp_ = true;                     // 是否使用功能点进行初始化
         bool enable_parking_static_ = false;           // 是否在静止时输出固定位置
         bool enable_icp_adjust_ = false;               // 是否使用icp调整ndt匹配结果提高定位精度
+        bool enable_ivox_adjust_ = false;              // 是否使用 IVox+GN 点面配准精化 NDT 结果
+        float ivox_adjust_res_ = 0.5f;                 // IVox 精化时的下采样分辨率（米）
+        int ivox_adjust_max_iter_ = 4;                 // IVox 精化最大迭代次数
+        float ivox_adjust_max_dis_ = 0.5f;             // IVox 精化结果与 NDT 结果的最大偏移（米），超过则丢弃
 
         /// 点云过滤
         float filter_z_min_ = -1.0;
@@ -188,6 +193,9 @@ class LidarLoc {
 
     bool CheckLidarOdomValid(const SE3& current_pose_esti, double& delta_posi);
 
+    /// 基于 IVox 地图的点面 GN 迭代精化，返回是否接受编辑结果
+    bool IVoxAdjust(SE3& pose, CloudPtr input);
+
     // 成员变量  ==========================================================================
     Options options_;
 
@@ -199,6 +207,8 @@ class LidarLoc {
 
     using ICPType = pcl::IterativeClosestPoint<PointType, PointType>;
     ICPType::Ptr pcl_icp_ = nullptr;
+
+    std::shared_ptr<IVoxManager> ivox_loc_map_ = nullptr;  // 用于 Localize 精化的 IVox 地图
 
     CloudPtr current_scan_ = nullptr;                            // 当前扫描
     std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;           // ui
