@@ -71,6 +71,26 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
 )
 // clang-format on
 
+namespace robosense_ros {
+    struct Point {
+        PCL_ADD_POINT4D
+        PCL_ADD_INTENSITY;
+        uint16_t ring;
+        double timestamp;
+        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    } EIGEN_ALIGN16;
+}  // namespace robosense_ros
+
+// clang-format off
+POINT_CLOUD_REGISTER_POINT_STRUCT(
+    robosense_ros::Point,
+    (float, x, x)(float, y, y)(float, z, z)
+    (float, intensity, intensity)
+    (uint16_t, ring, ring)
+    (double, timestamp, timestamp)
+)
+// clang-format on
+
 namespace lightning {
 
 /// 各类点云的缩写

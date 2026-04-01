@@ -428,7 +428,7 @@ void PangolinWindowImpl::RenderClouds() {
     UpdateGlobalMap();
     UpdateDynamicMap();
     UpdateState();
-    // UpdateCurrentScan();
+    UpdateCurrentScan();
     UpdateLoopDebug();  // 更新回环调试信息
     UpdateVoxelPlanes(); // 更新 VoxelMap 平面
 

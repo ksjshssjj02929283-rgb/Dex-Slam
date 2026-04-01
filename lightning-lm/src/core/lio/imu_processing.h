@@ -31,6 +31,7 @@ class ImuProcess {
     void SetAccCov(const Vec3d &scaler);
     void SetGyrBiasCov(const Vec3d &b_g);
     void SetAccBiasCov(const Vec3d &b_a);
+    IMUPtr TransformImuToLidar(const IMUPtr &imu) const;
 
     void Process(const MeasureGroup &meas, ESKF &kf_state, CloudPtr &scan);
 
@@ -58,8 +59,10 @@ class ImuProcess {
     std::deque<lightning::IMUPtr> imu_queue_;
 
     std::vector<Pose6D> imu_pose_;
-    Mat3d R_lidar_imu_ = Mat3d ::Identity();
-    Vec3d t_lidar_imu_ = Vec3d ::Zero();
+    Mat3d R_imu_from_lidar_ = Mat3d::Identity();
+    Mat3d R_lidar_from_imu_ = Mat3d::Identity();
+    Vec3d t_lidar_in_imu_ = Vec3d::Zero();
+    Vec3d t_refined_imu_in_lidar_ = Vec3d::Zero();
     Vec3d mean_acc_ = Vec3d::Zero();
     Vec3d mean_gyr_ = Vec3d::Zero();
     Vec3d angvel_last_ = Vec3d ::Zero();

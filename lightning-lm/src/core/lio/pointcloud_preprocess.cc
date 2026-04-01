@@ -21,6 +21,10 @@ void PointCloudPreprocess::Process(const sensor_msgs::msg::PointCloud2 ::SharedP
             VelodyneHandler(msg);
             break;
 
+        case LidarType::AIRY:
+            RoboSenseAiryHandler(msg);
+            break;
+
         default:
             LOG(ERROR) << "Error LiDAR Type";
             break;
@@ -192,6 +196,67 @@ void PointCloudPreprocess::VelodyneHandler(const sensor_msgs::msg::PointCloud2::
     }
 
     cloud_out_.width = cloud_out_.size();
+    cloud_out_.height = 1;
+    cloud_out_.is_dense = false;
+}
+
+void PointCloudPreprocess::RoboSenseAiryHandler(const sensor_msgs::msg::PointCloud2::SharedPtr &msg) {
+    cloud_out_.clear();
+    cloud_full_.clear();
+
+    pcl::PointCloud<robosense_ros::Point> pl_orig;
+    pcl::fromROSMsg(*msg, pl_orig);
+
+    if (pl_orig.empty()) {
+        return;
+    }
+
+    // AIRY 输出有组织点云：width = rings（列/线数），height = 每线点数（行/时间方向）
+    // 与参考实现（robosense_fast_lio）保持一致，使用 at(col, row) 访问
+    int W = static_cast<int>(pl_orig.width);
+    int H = static_cast<int>(pl_orig.height);
+    cloud_out_.reserve(W * H);
+
+    double scan_start = 0.0;
+
+    for (int c = 0; c < W; c++) {
+        for (int r = 0; r < H; r++) {
+            const robosense_ros::Point &ori_point = pl_orig.at(c, r);
+
+            // 每列（ring）首点记录起始时间戳，用于该列点云去畸变的相对时间计算
+            if (r == 0) {
+                scan_start = ori_point.timestamp;
+            }
+
+            // 沿 height 方向（时间方向）按 point_filter_num 降采样
+            if (r % point_filter_num_ != 0) {
+                continue;
+            }
+
+            // 过滤 NaN / Inf（M1 无效返回点 xyz 为 NaN，NaN 无法被 range 比较过滤）
+            if (!std::isfinite(ori_point.x) || !std::isfinite(ori_point.y) || !std::isfinite(ori_point.z)) {
+                continue;
+            }
+
+            double range = std::sqrt(ori_point.x * ori_point.x + ori_point.y * ori_point.y +
+                                     ori_point.z * ori_point.z);
+            if (range >= 150.0 || range <= blind_) {
+                continue;
+            }
+
+            PointType added_pt;
+            added_pt.x = ori_point.x;
+            added_pt.y = ori_point.y;
+            added_pt.z = ori_point.z;
+            added_pt.intensity = ori_point.intensity;
+            // timestamp 为绝对秒，相对时间转换为 ms（与其他 handler 一致）
+            added_pt.time = static_cast<float>((ori_point.timestamp - scan_start) * 1000.0);
+
+            cloud_out_.points.push_back(added_pt);
+        }
+    }
+
+    cloud_out_.width = static_cast<uint32_t>(cloud_out_.size());
     cloud_out_.height = 1;
     cloud_out_.is_dense = false;
 }
