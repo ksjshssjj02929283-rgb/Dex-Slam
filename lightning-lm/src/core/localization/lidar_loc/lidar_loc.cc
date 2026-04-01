@@ -75,6 +75,12 @@ bool LidarLoc::Init(const std::string& config_path) {
     options_.with_height_ = yaml.GetValue<bool>("loop_closing", "with_height");
     options_.try_self_extrap_ = yaml.GetValue<bool>("lidar_loc", "try_self_extrap");
 
+    // IVox 精化参数（新增，用 try-catch 兼容旧配置）
+    try { options_.enable_ivox_adjust_ = yaml.GetValue<bool>("lidar_loc", "enable_ivox_adjust"); } catch (...) {}
+    try { options_.ivox_adjust_res_     = yaml.GetValue<float>("lidar_loc", "ivox_adjust_res"); } catch (...) {}
+    try { options_.ivox_adjust_max_iter_= yaml.GetValue<int>("lidar_loc", "ivox_adjust_max_iter"); } catch (...) {}
+    try { options_.ivox_adjust_max_dis_ = yaml.GetValue<float>("lidar_loc", "ivox_adjust_max_dis"); } catch (...) {}
+
     lidar_loc::grid_search_angle_step = yaml.GetValue<double>("lidar_loc", "grid_search_angle_step");
     lidar_loc::grid_search_angle_range = yaml.GetValue<double>("lidar_loc", "grid_search_angle_range");
 
@@ -94,8 +100,19 @@ bool LidarLoc::Init(const std::string& config_path) {
     options_.map_option_.save_dyn_when_quit_ = yaml.GetValue<bool>("maps", "save_dyn_when_quit");
     options_.map_option_.save_dyn_when_unload_ = yaml.GetValue<bool>("maps", "save_dyn_when_unload");
 
+    // 若启用 IVox 精化，开启 TiledMap 的 IVox 地图维护
+    if (options_.enable_ivox_adjust_) {
+        options_.map_option_.enable_ivox_locmap_     = true;
+        options_.map_option_.ivox_locmap_resolution_ = options_.ivox_adjust_res_;
+    }
+
     map_ = std::make_shared<TiledMap>(options_.map_option_);
     map_->LoadMapIndex();
+
+    // 关联 IVox 定位地图
+    if (options_.enable_ivox_adjust_) {
+        ivox_loc_map_ = map_->GetIVoxLocMap();
+    }
 
     auto fps = map_->GetAllFP();
     if (!fps.empty()) {
@@ -870,9 +887,95 @@ bool LidarLoc::Localize(SE3& pose, double& confidence, CloudPtr input, CloudPtr 
     q_3d.normalize();
     pose = SE3(q_3d, t_3d);
 
+    // IVox 点面 GN 精化（在 NDT/ICP 基础上进一步减小点面残差）
+    if (options_.enable_ivox_adjust_ && ivox_loc_map_ && loc_inited_ && !use_rough_res) {
+        IVoxAdjust(pose, input);
+    }
+
     LOG(INFO) << "confidence: " << confidence << ", t: " << t_3d.transpose() << ", succ: " << loc_success;
 
     return loc_success;
+}
+
+bool LidarLoc::IVoxAdjust(SE3& pose, CloudPtr input) {
+    if (!ivox_loc_map_ || ivox_loc_map_->NumValidGrids() == 0) return false;
+
+    // 下采样输入点云
+    CloudPtr input_down(new PointCloudType);
+    const float res = options_.ivox_adjust_res_;
+    pcl::VoxelGrid<PointType> vg;
+    vg.setLeafSize(res, res, res);
+    vg.setInputCloud(input);
+    vg.filter(*input_down);
+    if (input_down->empty()) return false;
+
+    auto ivox = ivox_loc_map_->GetIVox();
+    const int num_match  = ivox_loc_map_->GetConfig().num_match_points;
+    const int min_match  = ivox_loc_map_->GetConfig().min_num_match_points;
+    const float plane_th = ivox_loc_map_->GetConfig().esti_plane_threshold;
+    using PointVector = IVoxManager::PointVector;
+
+    const SE3 ndt_pose = pose;  // 保存 NDT 结果用于偏差检验
+
+    for (int iter = 0; iter < options_.ivox_adjust_max_iter_; ++iter) {
+        Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
+        Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
+        int eff = 0;
+
+        Eigen::Matrix3f R = pose.rotationMatrix().cast<float>();
+        Eigen::Vector3f t = pose.translation().cast<float>();
+
+        for (const auto& p : input_down->points) {
+            Vec3f p_body = p.getVector3fMap();
+            Vec3f p_world = R * p_body + t;
+            PointType pw;
+            pw.getVector3fMap() = p_world;
+
+            PointVector nns;
+            ivox->GetClosestPoint(pw, nns, num_match, 1.0);
+            if ((int)nns.size() < min_match) continue;
+
+            Vec4f coef;
+            if (!math::esti_plane(coef, nns, plane_th)) continue;
+
+            Vec4f pw4;
+            pw4.head<3>() = p_world;
+            pw4[3] = 1.0f;
+            float e = coef.dot(pw4);
+
+            // 马氏距离检验（与 FAST-LIO 保持一致）
+            if (p_body.squaredNorm() <= 81.0f * e * e) continue;
+
+            // 点面 Jacobian（左扰动）：J_t = n^T, J_r = (R*p_b × n)^T
+            Vec3f n  = coef.head<3>();
+            Vec3f Rp = R * p_body;
+            Eigen::Matrix<float, 1, 6> J;
+            J.head<3>() = n.transpose();
+            J.tail<3>() = Rp.cross(n).transpose();
+
+            H.noalias() += (J.transpose() * J).cast<double>();
+            b.noalias() += J.cast<double>().transpose() * static_cast<double>(e);
+            ++eff;
+        }
+
+        if (eff < 10) break;
+
+        Eigen::Matrix<double, 6, 1> dx = H.ldlt().solve(-b);
+        pose.translation() += dx.head<3>();
+        pose.so3() = SO3::exp(dx.tail<3>()) * pose.so3();
+
+        if (dx.norm() < 1e-4) break;
+    }
+
+    // 偏差过大则丢弃精化结果
+    float d = (pose.translation() - ndt_pose.translation()).cast<float>().norm();
+    float a = (float)(pose.so3().inverse() * ndt_pose.so3()).log().norm();
+    LOG(INFO) << "IVox adjust: d=" << d << ", a=" << a << ", ok=" << (d <= options_.ivox_adjust_max_dis_);
+    if (d > options_.ivox_adjust_max_dis_ || a > 0.1f) {
+        pose = ndt_pose;
+        return false;
+    }
+    return true;
 }
 
 bool LidarLoc::CheckStatic(double timestamp) {
