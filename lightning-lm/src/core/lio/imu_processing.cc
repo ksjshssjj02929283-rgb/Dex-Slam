@@ -2,6 +2,20 @@
 
 namespace lightning {
 
+namespace {
+Mat3d ProjectToSO3(const Mat3d& R) {
+    Eigen::JacobiSVD<Mat3d> svd(R, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    Mat3d U = svd.matrixU();
+    Mat3d V = svd.matrixV();
+    Mat3d R_ortho = U * V.transpose();
+    if (R_ortho.determinant() < 0.0) {
+        U.col(2) *= -1.0;
+        R_ortho = U * V.transpose();
+    }
+    return R_ortho;
+}
+}  // namespace
+
 ImuProcess::ImuProcess() : b_first_frame_(true), imu_need_init_(true) {
     init_iter_num_ = 1;
     Q_.setZero();
@@ -31,8 +45,11 @@ void ImuProcess::Reset() {
 }
 
 void ImuProcess::SetExtrinsic(const Vec3d &transl, const Mat3d &rot) {
-    t_lidar_imu_ = transl;
-    R_lidar_imu_ = rot;
+    R_imu_from_lidar_ = ProjectToSO3(rot);
+    R_lidar_from_imu_ = R_imu_from_lidar_.transpose();
+    t_lidar_in_imu_ = transl;
+    // 将 IMU 系中的平移外参转换到 LiDAR 系，后续状态在 LiDAR 旋转系下仅保留平移项
+    t_refined_imu_in_lidar_ = R_lidar_from_imu_ * t_lidar_in_imu_;
 }
 
 void ImuProcess::SetGyrCov(const Vec3d &scaler) { cov_gyr_scale_ = scaler; }
@@ -42,6 +59,13 @@ void ImuProcess::SetAccCov(const Vec3d &scaler) { cov_acc_scale_ = scaler; }
 void ImuProcess::SetGyrBiasCov(const Vec3d &b_g) { cov_bias_gyr_ = b_g; }
 
 void ImuProcess::SetAccBiasCov(const Vec3d &b_a) { cov_bias_acc_ = b_a; }
+
+IMUPtr ImuProcess::TransformImuToLidar(const IMUPtr &imu) const {
+    auto imu_lidar = std::make_shared<IMU>(*imu);
+    imu_lidar->angular_velocity = R_lidar_from_imu_ * imu->angular_velocity;
+    imu_lidar->linear_acceleration = R_lidar_from_imu_ * imu->linear_acceleration;
+    return imu_lidar;
+}
 
 Mat3d ImuProcess::AlignGravity(const Vec3d &gravity_vector, Vec3d &aligned_gravity) {
     // 归一化重力向量
@@ -61,7 +85,7 @@ Mat3d ImuProcess::AlignGravity(const Vec3d &gravity_vector, Vec3d &aligned_gravi
     if (rnorm > 1e-6) {  // 避免除零
         rotvec = rotvec / rnorm;
         Eigen::AngleAxisd angaxis(std::asin(rnorm), rotvec);
-        rot = angaxis.matrix();
+        rot = ProjectToSO3(angaxis.matrix());
         
         std::cout << "Gravity alignment: rotation angle = " << std::asin(rnorm) * 180.0 / M_PI 
                   << " deg, axis = " << rotvec.transpose() << std::endl;
@@ -148,11 +172,11 @@ void ImuProcess::IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N) {
     
     // 设置对齐后的重力向量和初始旋转
     init_state.grav_ = S2(aligned_gravity);
-    init_state.rot_ = SO3(R_align);
+    init_state.rot_ = SO3(ProjectToSO3(R_align));
     init_state.bg_ = mean_gyr_;
     
-    init_state.offset_t_lidar_ = t_lidar_imu_;
-    init_state.offset_R_lidar_ = R_lidar_imu_;
+    init_state.offset_t_lidar_ = t_refined_imu_in_lidar_;
+    init_state.offset_R_lidar_ = SO3();
     
     kf_state.ChangeX(init_state);
     std::cout << "init_state.grav_: " << init_state.grav_.vec_.transpose() << std::endl;

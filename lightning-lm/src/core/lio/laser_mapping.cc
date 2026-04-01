@@ -151,6 +151,9 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
     } else if (lidar_type == 3) {
         preprocess_->SetLidarType(LidarType::OUST64);
         LOG(INFO) << "Using OUST 64 Lidar";
+    } else if (lidar_type == 4) {
+        preprocess_->SetLidarType(LidarType::AIRY);
+        LOG(INFO) << "Using RoboSense M1 (AIRY) Lidar";
     } else {
         LOG(WARNING) << "unknown lidar_type";
         return false;
@@ -180,7 +183,9 @@ LaserMapping::LaserMapping(Options options) : options_(options) {
 void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
     publish_count_++;
 
-    double timestamp = imu->timestamp;
+    auto imu_refined = p_imu_->TransformImuToLidar(imu);
+
+    double timestamp = imu_refined->timestamp;
 
     UL lock(mtx_buffer_);
     if (timestamp < last_timestamp_imu_) {
@@ -188,13 +193,14 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
         imu_buffer_.clear();
     }
     // livox的重力加速度的单位为G
-    if (lidar_type_ == 1) {
-        imu->linear_acceleration *= G_m_s2;
+    if (lidar_type_ == 1 || lidar_type_ == 4) {
+        imu_refined->linear_acceleration *= G_m_s2;
     }
 
     if (p_imu_->IsIMUInited()) {
         /// 更新最新imu状态
-        kf_imu_.Predict(timestamp - last_timestamp_imu_, p_imu_->Q_, imu->angular_velocity, imu->linear_acceleration);
+        kf_imu_.Predict(timestamp - last_timestamp_imu_, p_imu_->Q_, imu_refined->angular_velocity,
+                        imu_refined->linear_acceleration);
 
         // LOG(INFO) << "newest wrt lidar: " << timestamp - kf_.GetX().timestamp_;
 
@@ -206,7 +212,7 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
 
     last_timestamp_imu_ = timestamp;
 
-    imu_buffer_.emplace_back(imu);
+    imu_buffer_.emplace_back(imu_refined);
 }
 
 bool LaserMapping::Run() {
