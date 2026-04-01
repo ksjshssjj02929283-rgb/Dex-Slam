@@ -297,6 +297,11 @@ void TiledMap::LoadOnPose(const SE3& pose) {
                 }
 
                 loaded_chunks_.emplace(cp.first);
+
+                /// 同步到 IVox 定位地图
+                if (ivox_locmap_ && cp.second->cloud_ && !cp.second->cloud_->empty()) {
+                    ivox_locmap_->GetIVox()->AddPoints(cp.second->cloud_->points);
+                }
             }
 
             auto dyn_iter = dynamic_chunks_.find(cp.first);
@@ -326,6 +331,18 @@ void TiledMap::LoadOnPose(const SE3& pose) {
         if (n > options_.unload_map_size_) {
             /// 卸载静态地图
             map_updated_ = true;
+
+            /// 从 IVox 定位地图中删除该 chunk 范围内的 grid
+            if (ivox_locmap_) {
+                const float hs = options_.chunk_size_ * 0.5f;
+                Eigen::Vector2f min_xy((g[0] - 0.5f) * options_.chunk_size_,
+                                       (g[1] - 0.5f) * options_.chunk_size_);
+                Eigen::Vector2f max_xy((g[0] + 0.5f) * options_.chunk_size_,
+                                       (g[1] + 0.5f) * options_.chunk_size_);
+                (void)hs;
+                ivox_locmap_->GetIVox()->DeleteGridsInAABB(min_xy, max_xy);
+            }
+
             // static_chunks_[g]->Unload();
             iter = loaded_chunks_.erase(iter);
 
@@ -537,6 +554,11 @@ void TiledMap::UpdateDynamicCloud(CloudPtr cloud_world, bool remove_old) {
             dynamic_chunks_[g]->cloud_->width = full_size - size_t(0.7 * full_size);
             dynamic_chunks_[g]->cloud_->points.shrink_to_fit();
         }
+    }
+
+    /// 将本次输入的动态点同步到 IVox 定位地图
+    if (ivox_locmap_ && !cloud_world->empty()) {
+        ivox_locmap_->GetIVox()->AddPoints(cloud_world->points);
     }
 }
 

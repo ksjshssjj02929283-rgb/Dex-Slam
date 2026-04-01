@@ -122,6 +122,12 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
         if (yaml["fasterlio"]["voxel_map"] && yaml["fasterlio"]["voxel_map"]["pub_voxel_map"])
             pub_voxel_map_ = yaml["fasterlio"]["voxel_map"]["pub_voxel_map"].as<bool>();
 
+        // IVox 范围删除参数
+        if (yaml["fasterlio"]["ivox_range_delete"])
+            ivox_config_.enable_range_delete = yaml["fasterlio"]["ivox_range_delete"].as<bool>();
+        if (yaml["fasterlio"]["ivox_max_range"])
+            ivox_config_.max_map_range = yaml["fasterlio"]["ivox_max_range"].as<float>();
+
         use_aa_ = yaml["fasterlio"]["use_aa"].as<bool>();
 
         skip_lidar_num_ = yaml["fasterlio"]["skip_lidar_num"].as<int>();
@@ -580,7 +586,8 @@ void LaserMapping::MapIncremental() {
     if (use_ivox_) {
         Timer::Evaluate(
             [&, this]() {
-                ivox_manager_->UpdateMap(scan_down_world_->points, nearest_points_, flg_EKF_inited_);
+                ivox_manager_->UpdateMap(scan_down_world_->points, nearest_points_, flg_EKF_inited_,
+                                         pos_lidar_.cast<float>());
             },
             "    IVox Add Points");
     }

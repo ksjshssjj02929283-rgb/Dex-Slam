@@ -15,6 +15,7 @@
 #include "common/std_types.h"
 #include "core/lightning_math.hpp"
 #include "core/maps/tiled_map_chunk.h"
+#include "core/ivox3d/ivox_manager.hpp"
 
 namespace lightning {
 
@@ -63,6 +64,10 @@ class TiledMap {
         bool load_dyn_cloud_ = true;        // 初始化时是否加载动态点云
         bool save_dyn_when_quit_ = true;    // 退出时是否保存动态点云
         bool save_dyn_when_unload_ = true;  // 卸载时是否保存动态点云
+
+        /// IVox 定位辅助地图选项
+        bool enable_ivox_locmap_ = false;      // 是否维护 IVox 定位地图
+        float ivox_locmap_resolution_ = 0.5f;  // IVox 定位地图体素分辨率（米）
     };
 
     /// 动态区域的多边形
@@ -124,7 +129,15 @@ class TiledMap {
     using GridHashMap = std::unordered_map<KeyType, VoxelData, math::hash_vec<3>>;
     using ChunkHashMap = std::unordered_map<Vec2i, std::shared_ptr<MapChunk>, math::hash_vec<2>>;
 
-    TiledMap(Options options = Options()) : options_(options) {}
+    TiledMap(Options options = Options()) : options_(options) {
+        if (options_.enable_ivox_locmap_) {
+            IVoxConfig cfg;
+            cfg.resolution  = options_.ivox_locmap_resolution_;
+            cfg.nearby_type = IVoxManager::IVoxType::NearbyType::NEARBY18;
+            cfg.capacity    = 1000000;
+            ivox_locmap_ = std::make_shared<IVoxManager>(cfg);
+        }
+    }
 
     /**
      * 从单个PCD进行转换
@@ -241,6 +254,9 @@ class TiledMap {
     /// 清理地图
     void ClearMap();
 
+    /// 获取 IVox 定位地图（可能为 nullptr，需先在 Options 中启用）
+    std::shared_ptr<IVoxManager> GetIVoxLocMap() const { return ivox_locmap_; }
+
    private:
     /**
      * 测试某个点是否落在动态区域
@@ -286,6 +302,8 @@ class TiledMap {
 
     bool flag_first_dynamic_scan_ = true;  // 首帧动态点云特殊处理
     bool flag_first_static_scan_ = true;   // 首帧静态点云特殊处理
+
+    std::shared_ptr<IVoxManager> ivox_locmap_ = nullptr;  // 定位辅助 IVox 地图
 };
 
 }  // namespace lightning
