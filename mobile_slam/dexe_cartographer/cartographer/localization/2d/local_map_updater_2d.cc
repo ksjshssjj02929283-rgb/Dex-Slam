@@ -47,8 +47,7 @@ LocalMapUpdater2D::LocalMapUpdater2D(
 {
   box_ = {options_.min_x(), options_.min_y(), options_.min_z(),
           options_.max_x(), options_.max_y(), options_.max_z()};
-  box_filter_ = std::make_unique<sensor::BoxFilter>(box_);
-  
+
   // 根据submap_options创建range_data_inserter
   const auto& inserter_options = submap_options_.range_data_inserter_options();
   switch (inserter_options.range_data_inserter_type()) {
@@ -66,6 +65,10 @@ LocalMapUpdater2D::LocalMapUpdater2D(
       LOG(FATAL) << "Unknown RangeDataInserterType for LocalMapUpdater2D.";
   }
   LOG(INFO) << "Created LocalMapUpdater2D with range_data_inserter";
+}
+
+LocalMapUpdater2D::~LocalMapUpdater2D() {
+  if (build_future_.valid()) build_future_.wait();
 }
 
 void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> global_submap)
@@ -142,6 +145,19 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
       
   // 重建ikd-trees
   global_dynamic_submap_->RebuildIkdTrees();
+  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
+    global_dynamic_submap_->Finish();
+    LOG(INFO) << "Dynamic map policy is NONE, global_dynamic_submap_ is a read-only copy of global_static_submap_";
+  } else {
+    LOG(INFO) << "Dynamic map initialized from static map, ready for updates";
+  }
+
+  // 同步构建初始 local_submap_（以全局地图原点为中心），保证之后 local_submap() 永不返回空
+  transform::Rigid2d init_origin(origin.cast<double>(), Eigen::Rotation2Dd(0.0));
+  local_submap_     = BuildLocalSubmap(global_dynamic_submap_, init_origin);
+  local_map_origin_ = std::make_shared<transform::Rigid2d>(init_origin);
+  LOG(INFO) << "Initial local_submap_ built synchronously at origin ("
+            << origin.x() << ", " << origin.y() << ")";
 }
 
 void LocalMapUpdater2D::UpdateRobotPose(const transform::Rigid2d& robot_pose)
@@ -151,167 +167,154 @@ void LocalMapUpdater2D::UpdateRobotPose(const transform::Rigid2d& robot_pose)
     robot_pose_ = std::make_shared<transform::Rigid2d>(robot_pose);
   }
 
-  if (NeedUpdateLocalMap()) {
-    common::TicToc tic_toc;
-    UpdateLocalMap();
-    LOG(INFO) << "Update local map cost: " << tic_toc.toc() << " ms";
-    is_local_map_updated_ = true;
-  } else {
-    is_local_map_updated_ = false;
+  is_local_map_updated_ = false;
+
+  // 后台任务完成 → 替换 local_submap_
+  if (build_future_.valid() &&
+      build_future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    if (auto new_submap = build_future_.get()) {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      local_submap_         = std::move(new_submap);
+      is_local_map_updated_ = true;
+      LOG(INFO) << "local_submap_ replaced at ("
+                << robot_pose.translation().transpose() << ")";
+    }
+    is_building_ = false;
+  }
+
+  if (NeedRebuildLocalMap()) {
+    TriggerAsyncRebuild();
   }
 }
 
-bool LocalMapUpdater2D::NeedUpdateLocalMap()
+// ============================================================
+// NeedRebuildLocalMap：机器人接近当前 local map 边界时返回 true
+// ============================================================
+
+bool LocalMapUpdater2D::NeedRebuildLocalMap() const
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  CHECK(robot_pose_ != nullptr);
+  if (!robot_pose_ || !local_map_origin_) return false;
 
-  // 第一次更新
-  if (origin_pose_ == nullptr) {
-    return true;
-  }
+  const double dx = robot_pose_->translation().x() - local_map_origin_->translation().x();
+  const double dy = robot_pose_->translation().y() - local_map_origin_->translation().y();
+  const double half_x = (box_.max_x - box_.min_x) * 0.5;
+  const double half_y = (box_.max_y - box_.min_y) * 0.5;
+  const double thresh  = options_.update_threshold();
 
-  std::vector<float> edge = box_filter_->GetEdge();
+  return (std::abs(dx) > half_x - thresh || std::abs(dy) > half_y - thresh);
+}
 
-  if (fabs(robot_pose_->translation().x() - edge.at(0)) < options_.update_threshold() ||
-      fabs(robot_pose_->translation().x() - edge.at(1)) < options_.update_threshold() ||
-      fabs(robot_pose_->translation().y() - edge.at(2)) < options_.update_threshold() ||
-      fabs(robot_pose_->translation().y() - edge.at(3)) < options_.update_threshold())
+// ============================================================
+// TriggerAsyncRebuild：启动后台线程，完成后在下次 UpdateRobotPose 中替换
+// ============================================================
+
+void LocalMapUpdater2D::TriggerAsyncRebuild()
+{
+  if (is_building_.exchange(true)) return;  // 已有后台任务，跳过
+
+  std::shared_ptr<mapping::Submap2D> source_snapshot;
+  transform::Rigid2d origin_snapshot;
   {
-    return true;
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    if (!global_dynamic_submap_ || !robot_pose_) {
+      is_building_ = false;
+      return;
+    }
+    source_snapshot   = global_dynamic_submap_;
+    origin_snapshot   = *robot_pose_;
+    local_map_origin_ = robot_pose_;  // 预更新原点，防止在后台完成前重复触发
   }
 
-  return false;
+  build_future_ = std::async(
+      std::launch::async,
+      [this, source_snapshot, origin_snapshot]() {
+        common::TicToc t;
+        auto result = BuildLocalSubmap(source_snapshot, origin_snapshot);
+        LOG(INFO) << "Async BuildLocalSubmap done in " << t.toc() << " ms";
+        return result;
+      });
 }
 
-void LocalMapUpdater2D::UpdateLocalMap()
+// ============================================================
+// BuildLocalSubmap：纯计算，无锁，可在后台线程安全调用
+// ============================================================
+
+std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
+    std::shared_ptr<mapping::Submap2D> source_submap,
+    transform::Rigid2d origin)
 {
-  std::chrono::system_clock::time_point start_time = std::chrono::system_clock::now();
-
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  // 根据策略选择使用哪个submap作为源
-  std::shared_ptr<mapping::Submap2D> source_submap;
-  
-  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
-    // 策略1: 不使用dynamic，直接使用static map
-    source_submap = global_static_submap_;
-  } else {
-    // 策略2 SHORT: 暂未实现
-    // 策略3 LONG 或 策略4 PERSISTENT: 使用持续更新的dynamic map
-    source_submap = global_dynamic_submap_;
+  const auto* prob_grid = dynamic_cast<const mapping::ProbabilityGrid*>(
+      source_submap->grid());
+  if (!prob_grid) {
+    LOG(ERROR) << "BuildLocalSubmap: source grid is not ProbabilityGrid.";
+    return nullptr;
   }
-  
-  if (!source_submap) {
-    LOG(ERROR) << "Source submap is not initialized, please set global submap first.";
-    return;
+  auto global_cloud = source_submap->cloud();
+  if (!global_cloud) {
+    LOG(ERROR) << "BuildLocalSubmap: source cloud is null.";
+    return nullptr;
   }
 
-  if (robot_pose_ == nullptr) {
-    LOG(ERROR) << "Robot pose is not set, please set robot pose first.";
-    return;
-  }
-  origin_pose_ = robot_pose_;
+  const double ox  = origin.translation().x();
+  const double oy  = origin.translation().y();
+  const double res = prob_grid->limits().resolution();
+  const int    nx  = static_cast<int>((box_.max_x - box_.min_x) / res);
+  const int    ny  = static_cast<int>((box_.max_y - box_.min_y) / res);
 
-  // ============ 1. 更新 Local Grid Map ============
-  auto global_grid = source_submap->grid();
-  CHECK(global_grid != nullptr);
-  const auto* global_probability_grid = dynamic_cast<const mapping::ProbabilityGrid*>(global_grid);
-  CHECK(global_probability_grid != nullptr);
-  
-  // 构建MapLimits
-  double origin_x = origin_pose_->translation().x();
-  double origin_y = origin_pose_->translation().y();
-  double resolution = global_probability_grid->limits().resolution();
-  int num_x_cells = (box_.max_x - box_.min_x) / resolution;
-  int num_y_cells = (box_.max_y - box_.min_y) / resolution;
-  
-  // 以机器人位置为中心构建局部地图边界
-  Eigen::Vector2d max = Eigen::Vector2d(origin_x + 0.5 * num_x_cells * resolution,
-                                        origin_y + 0.5 * num_y_cells * resolution);
-
-  mapping::CellLimits cell_limits(num_x_cells, num_y_cells);
-  mapping::MapLimits map_limits(resolution, max, cell_limits);
-
-  // 创建local probability grid
-  std::unique_ptr<mapping::ProbabilityGrid> local_grid = 
-      std::make_unique<mapping::ProbabilityGrid>(map_limits, &conversion_tables_);
-
-  const mapping::MapLimits& global_map_limits = global_probability_grid->limits();
-
-  // 给local grid赋值
-  for (int row = 0; row < num_y_cells; ++row) {
-    for (int col = 0; col < num_x_cells; ++col) {
-      Eigen::Array2i local_cell_index(row, col);
-      Eigen::Vector2f sub_cell_center = map_limits.GetCellCenter(local_cell_index);
-      Eigen::Array2i global_cell_index = global_map_limits.GetCellIndex(sub_cell_center);
-      if (global_map_limits.Contains(global_cell_index)) {
-        if (!global_probability_grid->IsKnown(global_cell_index)) {
-          continue;
-        }
-        float prob = global_probability_grid->GetProbability(global_cell_index);
-        local_grid->SetProbability(local_cell_index, prob);
-      } else {
-        local_grid->SetProbability(local_cell_index, mapping::kMinProbability);
+  // ============ 1. 裁剪栅格 ============
+  mapping::MapLimits map_limits(
+      res,
+      Eigen::Vector2d(ox + 0.5 * nx * res, oy + 0.5 * ny * res),
+      mapping::CellLimits(nx, ny));
+  auto local_grid = std::make_unique<mapping::ProbabilityGrid>(
+      map_limits, &conversion_tables_);
+  const auto& gl = prob_grid->limits();
+  for (int row = 0; row < ny; ++row) {
+    for (int col = 0; col < nx; ++col) {
+      Eigen::Array2i li(row, col);
+      Eigen::Array2i gi = gl.GetCellIndex(map_limits.GetCellCenter(li));
+      if (!gl.Contains(gi)) {
+        local_grid->SetProbability(li, mapping::kMinProbability);
+      } else if (prob_grid->IsKnown(gi)) {
+        local_grid->SetProbability(li, prob_grid->GetProbability(gi));
       }
     }
   }
 
-  // ============ 2. 更新 Local Cloud Map ============
-  auto global_cloud = source_submap->cloud();
-  CHECK(global_cloud != nullptr);
+  // ============ 2. 裁剪点云（临时 BoxFilter，线程安全）============
+  sensor::BoxFilter tmp_filter(box_);
+  tmp_filter.SetOrigin(Eigen::Vector3f(static_cast<float>(ox),
+                                       static_cast<float>(oy), 0.0f));
+  auto local_cloud = std::make_unique<sensor::PointCloud>();
+  tmp_filter.Filter(*global_cloud, *local_cloud);
 
-  box_filter_->SetOrigin(Eigen::Vector3f(origin_pose_->translation().x(),
-                                         origin_pose_->translation().y(),
-                                         0.0));
-  std::unique_ptr<sensor::PointCloud> local_cloud(new sensor::PointCloud());
-  box_filter_->Filter(*global_cloud, *local_cloud);
-
-  // ============ 3. 更新 Local Line Map ============
-  auto global_line_map = source_submap->line_map_2d_list();
+  // ============ 3. 线地图 ============
   int latest_line_id = 0;
   std::map<int, mapping::MapLine2D> active_line_data;
-  if (global_line_map) {
-    latest_line_id = global_line_map->latest_local_id();
-    active_line_data = global_line_map->GetLineMapData2DList();
+  if (auto* lm = source_submap->line_map_2d_list()) {
+    latest_line_id   = lm->latest_local_id();
+    active_line_data = lm->GetLineMapData2DList();
   }
 
-  // ============ 4. 创建 Local Submap ============
-  // 创建空的 highlight_cloud
-  std::unique_ptr<sensor::PointCloud> local_highlight_cloud = 
-      std::make_unique<sensor::PointCloud>();
-
-  local_submap_ = std::make_shared<mapping::Submap2D>(
-      Eigen::Vector2f(static_cast<float>(origin_x), static_cast<float>(origin_y)),
+  // ============ 4. 组装并构建 ikd-tree ============
+  auto new_submap = std::make_shared<mapping::Submap2D>(
+      Eigen::Vector2f(static_cast<float>(ox), static_cast<float>(oy)),
       std::move(local_grid),
-      nullptr,  // local_submap只用于匹配，不需要conversion_tables
-      std::move(local_cloud),
-      std::move(local_highlight_cloud),
-      latest_line_id,
-      active_line_data);
-      
-  // 重建ikd-trees
-  local_submap_->RebuildIkdTrees();
+      nullptr,  // local_submap 只用于匹配，不需要 conversion_tables
+      std::move(local_cloud), std::make_unique<sensor::PointCloud>(),
+      latest_line_id, active_line_data);
+  new_submap->RebuildIkdTrees();
+  new_submap->Finish();
 
-  // 调试：如果启用，将submap的grid map保存为图片和点云文件
+  // 调试：如果启用，将 submap 的 grid map 保存为图片和点云文件
   if (options_.save_debug_data()) {
-    std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
-    std::string data_dir = home_dir + "/.dexe/data/";
-    if (global_static_submap_) {
-      global_static_submap_->grid()->DrawAsImage(data_dir, "global_static_map.png");
-    }
-    if (global_dynamic_submap_ && options_.dynamic_map_policy() != proto::DynamicMapPolicy::NONE) {
-      global_dynamic_submap_->grid()->DrawAsImage(data_dir, "global_dynamic_map.png");
-    }
-    local_submap_->grid()->DrawAsImage(data_dir, "local_map.png");
-    global_static_submap_->SaveSubmapCloud(data_dir, "global_static_submap.pcd");
-    global_dynamic_submap_->SaveSubmapCloud(data_dir, "global_dynamic_submap.pcd");
-    local_submap_->SaveSubmapCloud(data_dir, "local_submap.pcd");
+    const std::string dir =
+        std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/.dexe/data/";
+    new_submap->grid()->DrawAsImage(dir, "local_map.png");
+    new_submap->SaveSubmapCloud(dir, "local_submap.pcd");
   }
-  std::chrono::system_clock::time_point end_time = std::chrono::system_clock::now();
-  std::chrono::duration<double> elapsed_seconds = end_time - start_time;
-  LOG(INFO) << "Local map updated in " << elapsed_seconds.count() << " seconds.";
-  LOG(WARNING) << "Update local map at " << robot_pose_->translation().x() 
-               << ", " << robot_pose_->translation().y();
+  return new_submap;
 }
 
 void LocalMapUpdater2D::UpdateDynamicMap(
@@ -361,14 +364,9 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetGlobalSubmap() const
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
   
-  // 根据策略返回相应的 submap
-  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
-    // 策略1: 不使用dynamic，返回static map
-    return global_static_submap_;
-  } else {
-    // 策略2/3/4: 返回dynamic map
-    return global_dynamic_submap_;
-  }
+  // 统一返回 global_dynamic_submap_（不论策略如何）
+  // 所有匹配计算都使用 dynamic map，static map 仅作为底图数据源
+  return global_dynamic_submap_;
 }
 
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::local_submap()
@@ -380,7 +378,7 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::local_submap()
 std::shared_ptr<transform::Rigid2d> LocalMapUpdater2D::origin_pose()
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  return origin_pose_;
+  return local_map_origin_;
 }
 
 std::shared_ptr<transform::Rigid2d> LocalMapUpdater2D::robot_pose()

@@ -1,6 +1,8 @@
 #ifndef CARTOGRAPHER_LOCALIZATION_2D_LOCAL_MAP_UPDATER_2D_H_
 #define CARTOGRAPHER_LOCALIZATION_2D_LOCAL_MAP_UPDATER_2D_H_
 
+#include <atomic>
+#include <future>
 #include <memory>
 #include <mutex>
 
@@ -21,7 +23,7 @@ class LocalMapUpdater2D
 public:
   LocalMapUpdater2D(const proto::LocalMapUpdaterOptions2D& options,
                     const mapping::proto::SubmapsOptions2D& submap_options);
-  ~LocalMapUpdater2D() = default;
+  ~LocalMapUpdater2D();
 
   void SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
@@ -51,9 +53,16 @@ public:
   std::shared_ptr<transform::Rigid2d> robot_pose();
 
 private:
-  bool NeedUpdateLocalMap();
+  // 判断是否需要触发局部地图重建（机器人接近当前 local map 边界）
+  bool NeedRebuildLocalMap() const;
 
-  void UpdateLocalMap();
+  // 纯计算函数：根据快照构建 local submap，可在后台线程安全调用
+  std::shared_ptr<mapping::Submap2D> BuildLocalSubmap(
+      std::shared_ptr<mapping::Submap2D> source_snapshot,
+      transform::Rigid2d origin_snapshot);
+
+  // 异步启动 BuildLocalSubmap，完成后替换 local_submap_
+  void TriggerAsyncRebuild();
 
 private:
   const proto::LocalMapUpdaterOptions2D options_;
@@ -65,10 +74,9 @@ private:
   std::shared_ptr<mapping::Submap2D> local_submap_;
 
   std::shared_ptr<transform::Rigid2d> robot_pose_;
-  std::shared_ptr<transform::Rigid2d> origin_pose_;
+  std::shared_ptr<transform::Rigid2d> local_map_origin_;  // 当前 local_submap_ 的中心位姿
 
   sensor::CropBox::Box box_;
-  std::unique_ptr<sensor::BoxFilter> box_filter_;
 
   bool is_local_map_updated_ = false;;
 
@@ -79,6 +87,9 @@ private:
   std::unique_ptr<mapping::RangeDataInserterInterface> range_data_inserter_;
 
   mutable std::mutex data_mutex_;
+
+  std::future<std::shared_ptr<mapping::Submap2D>> build_future_;
+  std::atomic<bool> is_building_{false};
 };
 
 }  // namespace localization
