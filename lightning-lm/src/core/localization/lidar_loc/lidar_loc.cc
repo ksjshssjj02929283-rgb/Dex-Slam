@@ -238,8 +238,8 @@ bool LidarLoc::ProcessLO(const NavState& state) {
 
 bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr output) {
     SE3 init_pose = pose;
-    auto RPYXYZ = math::SE3ToRollPitchYaw(init_pose);
-    double init_yaw = RPYXYZ.yaw;
+    auto init_rpy = math::SE3ToRollPitchYaw(init_pose);
+    double init_yaw = init_rpy.yaw;
 
     confidence = 0;
     bool yaw_search_success = false;
@@ -248,25 +248,27 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
     double radius = lidar_loc::grid_search_angle_range * constant::kDEG2RAD;
     double angle_search_step = 2 * radius / step;
 
-    std::vector<double> searched_yaw;
+    std::vector<double> searched_delta_yaw;
     std::vector<double> scores(step);
     std::vector<int> index;
     std::vector<SE3> pose_opti(step);
 
     for (int i = 0; i < step; ++i) {
-        double search_yaw = init_yaw + i * angle_search_step - radius;
-        searched_yaw.emplace_back(search_yaw);
+        double delta_yaw = i * angle_search_step - radius;
+        searched_delta_yaw.emplace_back(delta_yaw);
         index.emplace_back(i);
     }
 
-    LOG(INFO) << "init yaw: " << init_yaw << ", p: " << RPYXYZ.pitch << ", ro: " << RPYXYZ.roll << ", search from "
-              << searched_yaw.front() << " to " << searched_yaw.back();
+    LOG(INFO) << "init yaw: " << init_yaw << ", p: " << init_rpy.pitch << ", ro: " << init_rpy.roll
+              << ", world yaw delta search from " << searched_delta_yaw.front() << " to "
+              << searched_delta_yaw.back();
 
     /// 粗分辨率
     std::for_each(index.begin(), index.end(), [&](int i) {
         double fitness_score = 0;
-        RPYXYZ.yaw = searched_yaw[i];
-        SE3 pose_esti = math::XYZRPYToSE3(RPYXYZ);
+        const double delta_yaw = searched_delta_yaw[i];
+        // 在世界坐标系施加 yaw 增量：Rz_world(delta) * R_init
+        SE3 pose_esti(SO3::exp(Vec3d(0, 0, delta_yaw)) * init_pose.so3(), init_pose.translation());
 
         Localize(pose_esti, fitness_score, input, output, true);
 
@@ -530,7 +532,7 @@ void LidarLoc::Align(const CloudPtr& input) {
             for (const auto& fp : all_fps) {
                 map_->LoadOnPose(fp.pose_);
                 if (InitWithFP(input, fp.pose_)) {
-                    LOG(INFO) << "init with fp: " << fp.name_;
+                    LOG(INFO) << "init with fp: " << fp.name_ << ", pose: " << fp.pose_.translation().transpose();
                     fp_init_success = true;
                     break;
                 }
