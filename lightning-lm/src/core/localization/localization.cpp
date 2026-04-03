@@ -121,8 +121,12 @@ bool Localization::Init(const std::string& yaml_path, const std::string& global_
     } else if (lidar_type == 3) {
         preprocess_->SetLidarType(LidarType::OUST64);
         LOG(INFO) << "Using OUST 64 Lidar";
+    } else if (lidar_type == 4) {
+        preprocess_->SetLidarType(LidarType::AIRY);
+        LOG(INFO) << "Using RoboSense M1 (AIRY) Lidar";
     } else {
         LOG(WARNING) << "unknown lidar_type";
+        return false;
     }
 
     return true;
@@ -172,6 +176,11 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
     /// NOTE: 在NCLT这种数据集中，lio内部是有缓存的，它拿到的点云不一定是最新时刻的点云
     lio_->ProcessPointCloud2(cloud);
     if (!lio_->Run()) {
+        return;
+    }
+
+    if (!lio_->IsIMUInited()) {
+        LOG_EVERY_N(WARNING, 50) << "IMU not initialized, skip lidar odom/loc pipeline";
         return;
     }
 

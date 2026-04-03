@@ -228,6 +228,12 @@ bool LaserMapping::Run() {
         return false;
     }
 
+    // IMU 初始化未完成时，只推进 IMU 初始化流程，不进入后续激光建图流程。
+    if (!p_imu_->IsIMUInited()) {
+        LOG_EVERY_N(WARNING, 50) << "waiting for imu init, skip laser mapping";
+        return false;
+    }
+
     /// the first scan
     if (flg_first_scan_) {
         LOG(INFO) << "first scan pts: " << scan_undistort_->size();
