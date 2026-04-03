@@ -95,6 +95,9 @@ class LaserMapping {
         }
     }
 
+    /// IMU 是否已完成初始化
+    bool IsIMUInited() const { return p_imu_ && p_imu_->IsIMUInited(); }
+
     CloudPtr GetScanUndist() const { return scan_undistort_; }
 
     /// 获取最新的点云
