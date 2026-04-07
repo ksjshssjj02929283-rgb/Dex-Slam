@@ -240,6 +240,7 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
             rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
             rviz_pub_->UpdateCurrentPose(state.GetPose());
             rviz_pub_->UpdateNavState(state);
+            rviz_pub_->UpdateFrontendPath(state.GetPose());
         }
     }
 
@@ -286,9 +287,6 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
     }
 
     if (rviz_pub_) {
-        rviz_pub_->UpdateSingleKeyframe(cur_kf_);
-        rviz_pub_->UpdateCurrentScan(cur_kf_->GetCloud(), cur_kf_->GetLIOPose());
-        rviz_pub_->UpdateFrontendPath(cur_kf_->GetLIOPose());
         rviz_pub_->UpdateKeyframes(lio_->GetAllKeyframes());
         if (options_.with_loop_closing_) {
             rviz_pub_->UpdateLoopEdges(lc_->GetLoopEdges());
@@ -358,6 +356,7 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
             rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
             rviz_pub_->UpdateCurrentPose(state.GetPose());
             rviz_pub_->UpdateNavState(state);
+            rviz_pub_->UpdateFrontendPath(state.GetPose());
         }
     }
 
@@ -404,9 +403,6 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
     }
 
     if (rviz_pub_) {
-        rviz_pub_->UpdateSingleKeyframe(cur_kf_);
-        rviz_pub_->UpdateCurrentScan(cur_kf_->GetCloud(), cur_kf_->GetLIOPose());
-        rviz_pub_->UpdateFrontendPath(cur_kf_->GetLIOPose());
         rviz_pub_->UpdateKeyframes(lio_->GetAllKeyframes());
         if (options_.with_loop_closing_) {
             rviz_pub_->UpdateLoopEdges(lc_->GetLoopEdges());
