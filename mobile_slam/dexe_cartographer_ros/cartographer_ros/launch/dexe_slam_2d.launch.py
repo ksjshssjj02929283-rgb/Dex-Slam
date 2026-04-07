@@ -1,7 +1,9 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -50,6 +52,22 @@ def generate_launch_description():
     # Locate cartographer_ros share directory to replace $(find cartographer_ros)
     carto_share = get_package_share_directory('cartographer_ros')
     configuration_directory = PathJoinSubstitution([carto_share, 'configuration_files'])
+
+    # Get robot_localization package directory
+    robot_localization_dir = get_package_share_directory('robot_localization')
+    robot_localization_launch_file = os.path.join(
+        robot_localization_dir,
+        'launch',
+        'dexe_localization.launch.py'
+    )
+
+    # Include robot_localization launch file
+    robot_localization_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(robot_localization_launch_file),
+        launch_arguments={
+            'filter_type': 'eskf',
+        }.items()
+    )
 
     # mapping_node: cartographer_node
     cartographer_node = Node(
@@ -109,6 +127,9 @@ def generate_launch_description():
         resolution_arg,
         config_file_arg,  # 修复: 添加缺失的config_file_arg
         use_sim_time_arg,
+        # Robot localization
+        robot_localization_launch,
+        # Cartographer mapping node
         cartographer_node,
         occupancy_grid_node,
         # robot_state_publisher,  # uncomment if enabled above

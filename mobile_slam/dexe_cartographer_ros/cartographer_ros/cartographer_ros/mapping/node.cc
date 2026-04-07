@@ -44,6 +44,8 @@
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "glog/logging.h"
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav_interfaces/srv/set_pose.hpp"
+#include "std_srvs/srv/trigger.hpp"
 //#include "ros/serialization.h"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "tf2_eigen/tf2_eigen.hpp"
@@ -159,6 +161,9 @@ Node::Node(
     tracked_pose_publisher_ =
         node_->create_publisher<::geometry_msgs::msg::PoseStamped>(
             kTrackedPoseTopic, kLatestOnlyPublisherQueueSize);
+    loc_pose_publisher_ =
+        node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            kLocaliztionPoseTopic, rclcpp::SystemDefaultsQoS());
   }
   // tracked_path_publisher_ =
   //     node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
@@ -653,6 +658,22 @@ void Node::PublishLocalTrajectoryData() {
         pose_msg.pose = ToGeometryMsgPose(tracking_to_map);
         // 发布map坐标系下的tracking frame位姿
         tracked_pose_publisher_->publish(pose_msg);
+
+        // 发布 PoseWithCovarianceStamped (loc_pose)，供 robot_localization 使用
+        if (loc_pose_publisher_) {
+          geometry_msgs::msg::PoseWithCovarianceStamped pose_cov_msg;
+          pose_cov_msg.header.frame_id = node_options_.map_frame;
+          pose_cov_msg.header.stamp = stamped_transform.header.stamp;
+          pose_cov_msg.pose.pose = ToGeometryMsgPose(tracking_to_map);
+          pose_cov_msg.pose.covariance[6 * 0 + 0] = 0.05 * 0.05;
+          pose_cov_msg.pose.covariance[6 * 1 + 1] = 0.05 * 0.05;
+          pose_cov_msg.pose.covariance[6 * 5 + 5] = 0.05 * 0.05;
+          loc_pose_publisher_->publish(pose_cov_msg);
+
+          if (need_set_pose_in_filter_) {
+            SetInitialPoseInFilter(pose_cov_msg);
+          }
+        }
 
         // TODO: linfeng.guo: 根据需要，判断是否发布path
         // tracked_path_msg_.header.stamp = stamped_transform.header.stamp;
@@ -1529,6 +1550,78 @@ void Node::MaybeWarnAboutTopicMismatch() {
   //   RCLCPP_WARN(node_->get_logger(), "Currently available topics are: %s",
   //     published_topics_ss.str().c_str());
   // }
+}
+
+bool Node::SetInitialPoseInFilter(
+    const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg)
+{
+  RCLCPP_INFO(node_->get_logger(), "SetInitialPoseInFilter: setting initial pose in robot_localization");
+  auto set_pose_client = node_->create_client<nav_interfaces::srv::SetPose>("/robot_localization/set_pose");
+  if (!set_pose_client->wait_for_service(std::chrono::seconds(3))) {
+    RCLCPP_ERROR(node_->get_logger(), "SetInitialPoseInFilter: timed out waiting for set_pose service");
+    need_set_pose_in_filter_ = false;
+    return false;
+  }
+  auto request = std::make_shared<nav_interfaces::srv::SetPose::Request>();
+  request->pose = pose_cov_msg;
+  auto future = set_pose_client->async_send_request(request);
+  if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    RCLCPP_ERROR(node_->get_logger(), "SetInitialPoseInFilter: set_pose call timed out");
+    return false;
+  }
+  auto result = future.get();
+  if (!result) {
+    RCLCPP_ERROR(node_->get_logger(), "SetInitialPoseInFilter: no response from set_pose");
+    return false;
+  }
+  need_set_pose_in_filter_ = false;
+  RCLCPP_INFO(node_->get_logger(), "SetInitialPoseInFilter: success");
+  return result->success;
+}
+
+bool Node::StopFilter()
+{
+  RCLCPP_INFO(node_->get_logger(), "StopFilter: stopping robot_localization filter");
+  try {
+    auto temp_node = std::make_shared<rclcpp::Node>(
+        "mapping_stop_filter_client",
+        rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
+    auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(
+        "/robot_localization/stop_filter");
+    if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
+      RCLCPP_WARN(node_->get_logger(), "StopFilter: timed out waiting for stop_filter service");
+      return false;
+    }
+    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto future = temp_client->async_send_request(request);
+    rclcpp::executors::SingleThreadedExecutor temp_executor;
+    temp_executor.add_node(temp_node);
+    auto timeout = std::chrono::seconds(5);
+    auto start_time = std::chrono::steady_clock::now();
+    while (rclcpp::ok() &&
+           future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+      temp_executor.spin_some();
+      if (std::chrono::steady_clock::now() - start_time > timeout) {
+        RCLCPP_ERROR(node_->get_logger(), "StopFilter: stop_filter call timed out");
+        return false;
+      }
+    }
+    auto result = future.get();
+    if (!result) {
+      RCLCPP_ERROR(node_->get_logger(), "StopFilter: no response from stop_filter");
+      return false;
+    }
+    if (result->success) {
+      RCLCPP_INFO(node_->get_logger(), "StopFilter: success");
+    } else {
+      RCLCPP_ERROR(node_->get_logger(), "StopFilter: service returned failure: %s",
+                   result->message.c_str());
+    }
+    return result->success;
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(node_->get_logger(), "StopFilter: exception: %s", e.what());
+    return false;
+  }
 }
 
 }  // namespace cartographer_ros

@@ -268,10 +268,14 @@ void Eskf::buildErrorStateTransition(
   // Orientation error dynamics
   F.block<3, 3>(ORIENTATION_OFFSET, ORIENTATION_OFFSET) = -omega_skew;
 
-  // Block 3: ∂(δθ̇)/∂(δω) = -I
-  // Orientation error depends on angular velocity error
+  // Block 3: ∂(δθ̇)/∂(δω) = +I
+  // Derivation (right perturbation, body frame):
+  // δθ̇ = -[ω̄]× δθ + δω
+  // → ∂(δθ̇)/∂(δω) = +I
+  // Physical intuition: if true ω > nominal ω (δω > 0), true orientation moves
+  // faster → orientation error grows (δθ̇ > 0), so coupling must be +I.
   F.block<3, 3>(ORIENTATION_OFFSET, ORIENTATION_V_OFFSET) =
-    -Eigen::Matrix3d::Identity();
+    Eigen::Matrix3d::Identity();
 
   // Block 4: ∂(δv̇)/∂(δa) = I  (NOT R!)
   // CRITICAL FIX: Since velocity is in BODY frame, not world frame:

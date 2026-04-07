@@ -271,12 +271,8 @@ public:
    * issues)
    *
    * @param[in, out] delta - The time delta to validate (may be clamped)
-   * @param[in] topic_name - The topic name for logging purposes
-   * @return true if prediction should be performed, false otherwise
-   *         false means: either reject measurement (backwards time) or 
-   *         skip predict but still correct (same timestamp multi-part messages)
    */
-  bool validateDelta(rclcpp::Duration & delta, const std::string & topic_name);
+  void validateDelta(rclcpp::Duration & delta);
 
 protected:
   /**
