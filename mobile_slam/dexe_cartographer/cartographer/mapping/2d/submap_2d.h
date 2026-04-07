@@ -113,6 +113,16 @@ class Submap2D : public Submap {
   void SetCullingInterval(const int& interval) { culling_interval_ = interval; }
 
   void FreshCloudData() const;
+  
+  // 重建ikd-tree (从已有的点云数据)
+  void RebuildIkdTrees();
+
+  // 对已重建的 ikd-tree 调用 Finish()，使其切换为 PCL 只读后端（内存更小，查询更快）
+  void FinishIkdTrees();
+
+  // 销毁 ikd-tree，释放内存（active submap 离开活跃集合时调用）
+  void DestroyIkdTrees();
+  
  private:
   void CloudDataCulling();
   // void GenerateCloudKdTree();

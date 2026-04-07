@@ -54,8 +54,8 @@
 #include "cartographer_ros/options/localization_node_options.h"
 #include "cartographer_ros/options/trajectory_options.h"
 
-#include "file_manager.hpp"
-#include "pose_save_tool.hpp"
+#include "cartographer/utility/include/file_manager.hpp"
+#include "cartographer/utility/include/pose_save_tool.hpp"
 
 namespace cartographer_ros
 {
@@ -92,7 +92,6 @@ public:
   // Serialization
   void SerializeState(const std::string& filename, const bool include_unfinished_submaps);
   void LoadState(const std::string& state_filename, bool load_frozen_state);
-  void LoadMapData(const std::string& map_filename);
 
   bool SaveMap(const std::string& map_filename, const double resolution);
 
@@ -269,7 +268,7 @@ private:
   rclcpp::TimerBase::SharedPtr publish_local_trajectory_data_timer_;
 
   // Pose save tool
-  std::shared_ptr<dcm::utility::PoseSaveTool> carto_pose_tool_;
+  std::shared_ptr<cartographer::utility::PoseSaveTool> carto_pose_tool_;
 
   // Flags
   bool need_set_pose_in_filter_ = false;

@@ -70,16 +70,17 @@ bool MapLoader::LoadMapDataInfo(const std::string& map_file,
     return false;
   }
 
-  if (!doc["grid_map"].IsDefined()) {
-    LOG(ERROR) << "The map does not contain a grid_map tag or it is invalid.";
+  // 从 image (PGM) 字段读取栅格地图路径，不再使用 grid_map (PNG)
+  if (!doc["image"].IsDefined()) {
+    LOG(ERROR) << "The map does not contain an image tag or it is invalid.";
     return false;
   }
   try {
-    doc["grid_map"] >> map_data_info.grid_filename;
+    doc["image"] >> map_data_info.grid_filename;
 
     if(map_data_info.grid_filename.size() == 0)
     {
-      LOG(ERROR) << "The grid_map tag cannot be an empty string.";
+      LOG(ERROR) << "The image tag cannot be an empty string.";
       return false;
     }
 
@@ -92,7 +93,7 @@ bool MapLoader::LoadMapDataInfo(const std::string& map_file,
       map_data_info.grid_filename = mapfpath.string();
     }
   } catch (YAML::InvalidScalar& e) {
-    LOG(ERROR) << "The map does not contain an line_map tag or it is invalid.";
+    LOG(ERROR) << "The map does not contain a valid image tag or it is invalid.";
     return false;
   }
 

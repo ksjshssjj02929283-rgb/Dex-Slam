@@ -26,11 +26,14 @@ POSE_ESTIMATOR_2D = {
   pose_initializer_2d = POSE_INITIALIZER_2D,
   auto_trigger_global_relocalization = true,  -- 控制是否自动触发全局重定位
 
-  -- 位姿验证参数：用于检测定位质量并在必要时重置
-  enable_pose_validation = true,                -- 是否启用位姿验证
-  pose_validation_min_score = 0.25,              -- 验证的最小匹配分数阈值
-  pose_validation_max_translation_error = 0.05, -- 最大允许的平移误差(米) 5cm
-  pose_validation_max_rotation_error = 0.035,   -- 最大允许的旋转误差(弧度) ~2度
+  -- 一致性检查器参数：用于位姿一致性检查和质量验证
+  consistency_checker = {
+    translation_threshold = 0.05,        -- 平移误差阈值 (米)，5cm
+    rotation_threshold = math.rad(30.),  -- 旋转误差阈值 (弧度)，30度
+    max_linear_velocity = 1.0,           -- 最大线速度 (m/s)
+    max_angular_velocity = math.rad(45.),-- 最大角速度 (rad/s)，45度/秒
+    min_score = 0.3,                     -- 最小匹配分数阈值，用于验证和恢复
+  },
 
   adaptive_voxel_filter = {
     max_length = 0.5,
@@ -99,6 +102,13 @@ POSE_ESTIMATOR_2D = {
     min_z = -1.,
     max_z = 1.,
     update_threshold = 7.5,
+    -- 动态地图策略:
+    -- 0 (NONE): 不使用dynamic，也不更新dynamic map
+    -- 1 (SHORT): 短时间保留（暂未实现）
+    -- 2 (LONG): 长时间保留在内存，车辆移出区域后仍然保留，但不会存盘
+    -- 3 (PERSISTENT): 更长时间的保留，会存盘，下次运行也会读取
+    dynamic_map_policy = 3,  -- 默认使用 PERSISTENT 策略
+    save_debug_data = true,
   },
 
   use_online_correlative_scan_matching = true,

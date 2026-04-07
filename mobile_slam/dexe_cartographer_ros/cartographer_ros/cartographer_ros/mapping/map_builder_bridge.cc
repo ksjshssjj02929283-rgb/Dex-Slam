@@ -224,18 +224,19 @@ bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double res
     LOG(ERROR) << "Failed to save grid map for " << map_filename;
     return false;
   }
-  
-  bool cloud_map_success = SaveCloudMap(map_filename, final_submap);
-  if (!cloud_map_success) {
-    LOG(ERROR) << "Failed to save cloud map for " << map_filename;
-    return false;
+
+  if (node_options_.save_map_pcd) {
+    bool cloud_map_success = SaveCloudMap(map_filename, final_submap);
+    if (!cloud_map_success) {
+      LOG(WARNING) << "Failed to save cloud map (PCD) for " << map_filename;
+    }
   }
   
-  bool line_map_success = SaveLineMap(map_filename, final_submap);
-  if (!line_map_success) {
-    LOG(ERROR) << "Failed to save line map for " << map_filename;
-    return false;
-  }
+  // bool line_map_success = SaveLineMap(map_filename, final_submap);
+  // if (!line_map_success) {
+  //   LOG(ERROR) << "Failed to save line map for " << map_filename;
+  //   return false;
+  // }
 
   LOG(INFO) << "Optimized SaveMap process completed successfully for " << map_filename;
   return true;
@@ -540,30 +541,50 @@ bool MapBuilderBridge::SaveGridMapFromRange(
   //          << ", Resolution: " << resolution;
   
   // 保存文件
-  cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
-  WritePgm(image, resolution, &pgm_writer,
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
+  // cartographer::io::StreamFileWriter pgm_writer(map_filename + ".pgm");
+  // WritePgm(image, resolution, &pgm_writer,
+  //          node_options_.mapping_occ_thresh,
+  //          node_options_.mapping_free_thresh);
 
-  cartographer::io::StreamFileWriter png_writer(map_filename + ".png");
-  WritePng(image, map_filename + ".png",
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
-
+  // Task 1: 注释掉PNG图像的生成，只保留PGM格式
   const Eigen::Vector2d map_origin(
     -result.origin.x() * resolution,
     (result.origin.y() - image.height()) * resolution);
 
-  // LOG(INFO) << "SaveGridMapFromRange - Final origin: (" << map_origin.x() << ", " << map_origin.y() << ")";
+  // 提取地图目录路径
+  std::string map_dir = map_filename.substr(0, map_filename.find_last_of("/\\"));
+  if (map_dir.empty()) {
+    map_dir = ".";
+  }
 
+  // 1. 内存生成原始地图的 cv::Mat（不写入磁盘）
+  cv::Mat origin_mat = GeneratePngMat(image,
+                                      node_options_.mapping_occ_thresh,
+                                      node_options_.mapping_free_thresh);
+
+  // 2. 生成 navigation map 作为默认输出 map.png
+  WriteNavigationMap(origin_mat,
+                     map_filename + ".png",
+                     node_options_.navigation_map_filter_mode,
+                     node_options_.save_debug_map,
+                     map_dir);
+
+  // 3. 写入 map.yaml（引用 navigation map = map.png）
   cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
   WriteYaml(resolution, map_origin,
             map_filename, &yaml_writer,
             node_options_.mapping_occ_thresh,
             node_options_.mapping_free_thresh);
 
-  LOG(INFO) << "SaveGridMapFromRange with provided submap completed. Saved to " 
-            << map_filename + ".pgm/.png/.yaml"
+  // 4. 只有需要保存原始地图时，才将 origin_mat 写入磁盘
+  if (node_options_.save_origin_map) {
+    const std::string origin_png = map_filename + "_origin.png";
+    cv::imwrite(origin_png, origin_mat);
+    LOG(INFO) << "SaveGridMapFromRange: origin map saved to " << origin_png;
+  }
+
+  LOG(INFO) << "SaveGridMapFromRange with provided submap completed. Saved to "
+            << map_filename + ".png/.yaml (navigation map)"
             << " with size " << image.width() << "x" << image.height();
 
   return true;
@@ -768,9 +789,10 @@ bool MapBuilderBridge::SaveGridMap(
   WritePgm(image, resolution, &pgm_writer,
            node_options_.mapping_occ_thresh,
            node_options_.mapping_free_thresh);
-  WritePng(image, map_filename + ".png",
-           node_options_.mapping_occ_thresh,
-           node_options_.mapping_free_thresh);
+  // Task 1: 注释掉PNG图像的生成，只保留PGM格式
+  // WritePng(image, map_filename + ".png",
+  //          node_options_.mapping_occ_thresh,
+  //          node_options_.mapping_free_thresh);
   const Eigen::Vector2d origin(
     -result.origin.x() * resolution,
     (result.origin.y() - image.height()) * resolution);

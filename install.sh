@@ -15,5 +15,7 @@ if [ ! -d "$CURDIR/install" ]; then
     exit 1
 fi
 
+rm -rf "$CURDIR/install/cartographer*"
+
 find "$CURDIR/install" -maxdepth 1 -type f -exec cp {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/$PACKAGE_NAME/" \;
 find "$CURDIR/install" -maxdepth 1 -mindepth 1 -type d -exec cp -r {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/install/" \;

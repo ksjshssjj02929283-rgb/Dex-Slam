@@ -66,6 +66,8 @@ public:
   const int inliers() const {return inliers_;}
 
   void SetLoseTime(int lose_time) {lose_time_ = lose_time;}
+  void SetLocalId(int local_id) {local_id_ = local_id;}
+  void SetInliers(int inliers) {inliers_ = inliers;}
 
   void UpdateLineData(const sensor::LineData & line_data);
 

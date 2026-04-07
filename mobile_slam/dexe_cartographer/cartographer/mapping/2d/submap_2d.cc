@@ -147,9 +147,11 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
         line_data.set_normal(normal);
       }
       
-      // 创建 MapLine2D 对象（使用 global_id 作为 key）
+      // 创建 MapLine2D 对象（使用 global_id，local_id 在构造时设置）
       MapLine2D map_line(MapLine2D::static_line, map_line_proto.global_id(), line_data);
+      map_line.SetLocalId(map_line_proto.local_id());  // 显式设置 local_id
       map_line.SetLoseTime(map_line_proto.lose_time());
+      map_line.SetInliers(map_line_proto.inliers());  // 恢复 inliers
       
       // 反序列化线段数据列表
       for (const auto& line_list_proto : map_line_proto.line_data_list()) {
@@ -166,7 +168,8 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
         map_line.UpdateLineData(list_line_data);
       }
       
-      line_map_data.insert({map_line_proto.global_id(), std::move(map_line)});
+      // 使用 local_id 作为 key（与序列化时一致）
+      line_map_data.insert({map_line_proto.local_id(), std::move(map_line)});
     }
     
     line_map_2d_list_ = std::make_unique<LineMap2DList>(latest_local_id, std::move(line_map_data));
@@ -175,6 +178,7 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
   }
   
   // 从 proto 反序列化点云数据
+  // 无论 proto 中是否有点云数据，都要创建点云对象，确保指针不为 nullptr
   if (proto.has_cloud() && proto.cloud().points_size() > 0) {
     std::vector<sensor::RangefinderPoint> points;
     std::vector<float> intensities;
@@ -198,9 +202,13 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     } else {
       cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
     }
+  } else {
+    // 如果没有点云数据，创建空的点云对象
+    cloud_ = std::make_unique<sensor::PointCloud>();
   }
   
   // 从 proto 反序列化高亮点云数据
+  // 无论 proto 中是否有高亮点云数据，都要创建点云对象，确保指针不为 nullptr
   if (proto.has_highlight_cloud() && proto.highlight_cloud().points_size() > 0) {
     std::vector<sensor::RangefinderPoint> points;
     std::vector<float> intensities;
@@ -224,6 +232,9 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     } else {
       highlight_cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
     }
+  } else {
+    // 如果没有高亮点云数据，创建空的点云对象
+    highlight_cloud_ = std::make_unique<sensor::PointCloud>();
   }
   
   set_num_range_data(proto.num_range_data());  // 设置激光点数量
@@ -324,41 +335,46 @@ proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
     }
   }
   
-  // 序列化点云数据
-  if (cloud_ && !cloud_->empty()) {
-    auto* cloud_proto = submap_2d->mutable_cloud();
-    for (const auto& point : cloud_->points()) {
+  // 序列化点云数据 - 通过 cloud() accessor 访问，触发 lazy FreshCloudData()
+  // （InsertCloudData 只写 ikd-tree 不写 cloud_，FreshCloudData 负责同步回 cloud_）
+  auto* cloud_proto = submap_2d->mutable_cloud();
+  const sensor::PointCloud* cloud_ptr = cloud();
+  if (cloud_ptr && !cloud_ptr->empty()) {
+    for (const auto& point : cloud_ptr->points()) {
       auto* point_proto = cloud_proto->add_points();
       point_proto->set_x(point.position.x());
       point_proto->set_y(point.position.y());
       point_proto->set_z(point.position.z());
     }
     // 序列化强度信息（如果有）
-    const auto& intensities = cloud_->intensities();
+    const auto& intensities = cloud_ptr->intensities();
     if (!intensities.empty()) {
       for (float intensity : intensities) {
         cloud_proto->add_intensities(intensity);
       }
     }
   }
+  // 如果 cloud_ 为空或nullptr，cloud_proto 仍然存在但没有 points，这样反序列化时会创建空点云
   
-  // 序列化高亮点云数据
-  if (highlight_cloud_ && !highlight_cloud_->empty()) {
-    auto* highlight_cloud_proto = submap_2d->mutable_highlight_cloud();
-    for (const auto& point : highlight_cloud_->points()) {
+  // 序列化高亮点云数据 - highlight_cloud_ 已在 cloud() accessor 的 FreshCloudData() 中同步
+  auto* highlight_cloud_proto = submap_2d->mutable_highlight_cloud();
+  const sensor::PointCloud* highlight_cloud_ptr = highlight_cloud();
+  if (highlight_cloud_ptr && !highlight_cloud_ptr->empty()) {
+    for (const auto& point : highlight_cloud_ptr->points()) {
       auto* point_proto = highlight_cloud_proto->add_points();
       point_proto->set_x(point.position.x());
       point_proto->set_y(point.position.y());
       point_proto->set_z(point.position.z());
     }
     // 序列化强度信息（如果有）
-    const auto& intensities = highlight_cloud_->intensities();
+    const auto& intensities = highlight_cloud_ptr->intensities();
     if (!intensities.empty()) {
       for (float intensity : intensities) {
         highlight_cloud_proto->add_intensities(intensity);
       }
     }
   }
+  // 如果 highlight_cloud_ 为空或nullptr，highlight_cloud_proto 仍然存在但没有 points，这样反序列化时会创建空点云
   
   return proto;
 }
@@ -466,6 +482,9 @@ void Submap2D::UpdateFromProto(const proto::Submap& proto) {
       highlight_cloud_ = std::make_unique<sensor::PointCloud>(std::move(points));
     }
   }
+
+  // RebuildIkdTrees();
+  // Finish();
 }
 
 /**
@@ -524,6 +543,10 @@ void Submap2D::InsertRangeData(
 void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
                                const sensor::PointCloud & highlight_cloud_data)
 {
+  // submap 已 finish（ikd-tree 已变为只读），不再插入点云数据
+  if (insertion_finished()) {
+    return;
+  }
   is_dirty_cloud_ = true;
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
   PointCloudToPCL(cloud_data, cloud_pcl);
@@ -567,6 +590,16 @@ void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
 
 void Submap2D::CloudDataCulling()
 {
+  // submap 已 finish，ikd-tree 已只读，且 mutex 已销毁，禁止再调用任何写操作
+  if (insertion_finished()) {
+    return;
+  }
+  // 检查 ikd-tree 是否已初始化
+  if (cloud_ikdtree_->Root_Node == nullptr && highlight_cloud_ikdtree_->Root_Node == nullptr) {
+    // 如果两个 ikd-tree 都为空，直接返回
+    return;
+  }
+
   const MapLimits& limits = grid_->limits();
   // 需要先调用flatten函数，更新PCL_Storage
   cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
@@ -605,6 +638,12 @@ void Submap2D::CloudDataCulling()
 
 void Submap2D::FreshCloudData() const
 {
+  // ikd-tree 已被 DestroyIkdTrees() 销毁时，cloud_/highlight_cloud_ 已是最新数据，
+  // 直接返回即可，避免空指针解引用。
+  if (!cloud_ikdtree_ || !highlight_cloud_ikdtree_) {
+    is_dirty_cloud_ = false;
+    return;
+  }
   ikd_tree::iKdTree<pcl::PointXYZ>::PointVector().swap(cloud_ikdtree_->PCL_Storage);
   cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
                           cloud_ikdtree_->PCL_Storage,
@@ -633,6 +672,98 @@ void Submap2D::FreshCloudData() const
     highlight_cloud_->push_back(p);
   }
   is_dirty_cloud_ = false;
+}
+
+void Submap2D::RebuildIkdTrees()
+{
+  cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+
+  // 重建cloud的ikd-tree
+  if (cloud_ && !cloud_->empty()) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl(new pcl::PointCloud<pcl::PointXYZ>());
+    for (const auto& point : cloud_->points()) {
+      pcl::PointXYZ p;
+      p.x = point.position.x();
+      p.y = point.position.y();
+      p.z = 0.0;
+      cloud_pcl->push_back(p);
+    }
+    
+    // 检查是否需要构建
+    if (!cloud_ikdtree_) {
+      LOG(ERROR) << "Cloud ikd-tree not initialized";
+    } else if (cloud_ikdtree_->Root_Node == nullptr) {
+      float resolution = grid_->limits().resolution();
+      cloud_ikdtree_->set_downsample_param(resolution);
+      cloud_ikdtree_->Build(cloud_pcl->points);
+      cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
+                        cloud_ikdtree_->PCL_Storage,
+                        ikd_tree::NOT_RECORD);
+      LOG(INFO) << "Rebuilt cloud ikd-tree with " << cloud_pcl->points.size() << " points";
+    } else {
+      LOG(INFO) << "Cloud ikd-tree already built, skipping";
+    }
+  } else {
+    LOG(INFO) << "Cloud is empty, skipping ikd-tree build";
+  }
+  
+  // 重建highlight_cloud的ikd-tree
+  if (highlight_cloud_ && !highlight_cloud_->empty()) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr highlight_cloud_pcl(new pcl::PointCloud<pcl::PointXYZ>());
+    for (const auto& point : highlight_cloud_->points()) {
+      pcl::PointXYZ p;
+      p.x = point.position.x();
+      p.y = point.position.y();
+      p.z = 0.0;
+      highlight_cloud_pcl->push_back(p);
+    }
+    
+    // 检查是否需要构建
+    if (!highlight_cloud_ikdtree_) {
+      LOG(ERROR) << "Highlight cloud ikd-tree not initialized";
+    } else if (highlight_cloud_ikdtree_->Root_Node == nullptr) {
+      float resolution = grid_->limits().resolution();
+      highlight_cloud_ikdtree_->set_downsample_param(resolution);
+      highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
+                  highlight_cloud_ikdtree_->PCL_Storage,
+                  ikd_tree::NOT_RECORD);
+      highlight_cloud_ikdtree_->Build(highlight_cloud_pcl->points);
+      LOG(INFO) << "Rebuilt highlight cloud ikd-tree with " << highlight_cloud_pcl->points.size() << " points";
+    } else {
+      LOG(INFO) << "Highlight cloud ikd-tree already built, skipping";
+    }
+  } else {
+    LOG(INFO) << "Highlight cloud is empty, skipping ikd-tree build";
+  }
+  set_insertion_finished(false);  // 重建ikd-tree后，允许继续插入点云数据
+}
+
+void Submap2D::FinishIkdTrees() {
+  // 对已重建的 ikd-tree 调用 Finish()，将其切换为 PCL KdTreeFLANN 只读后端。
+  // 此后 cloud_ikdtree() != nullptr，但底层已无 ikd 节点，内存更小、查询更快。
+  if (cloud_ikdtree_ && cloud_ikdtree_->Root_Node != nullptr) {
+    cloud_ikdtree_->Finish();
+  }
+  if (highlight_cloud_ikdtree_ && highlight_cloud_ikdtree_->Root_Node != nullptr) {
+    highlight_cloud_ikdtree_->Finish();
+  }
+}
+
+void Submap2D::DestroyIkdTrees() {
+  // 销毁前先将 ikd-tree 数据同步回 cloud_，保证 ToProto() 序列化时数据完整。
+  // 同时清除 is_dirty_cloud_ 标志，防止销毁后 cloud() accessor 再次尝试访问已释放的 ikd-tree。
+  if (is_dirty_cloud_ && cloud_ikdtree_ && highlight_cloud_ikdtree_) {
+    FreshCloudData();  // 同步数据，内部会将 is_dirty_cloud_ 置为 false
+  }
+  is_dirty_cloud_ = false;  // 确保即使上面未执行也清除标志
+
+  if (cloud_ikdtree_) {
+    cloud_ikdtree_.reset();
+  }
+  if (highlight_cloud_ikdtree_) {
+    highlight_cloud_ikdtree_.reset();
+  }
 }
 
 void Submap2D::PointCloudToPCL(const sensor::PointCloud & cloud_data,
@@ -692,6 +823,7 @@ void Submap2D::Finish() {
   line_map_2d_list_->LineDataCulling();
   // LOG(WARNING) << "Finishing submap...";
   CloudDataCulling();
+  FinishIkdTrees();
 
   // auto start_time = std::chrono::high_resolution_clock::now();
   // FreshCloudData();

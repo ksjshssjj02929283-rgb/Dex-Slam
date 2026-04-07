@@ -16,6 +16,24 @@ syntax = "proto3";
 
 package cartographer.localization.proto;
 
+// 动态地图策略
+enum DynamicMapPolicy {
+  // 策略1: 不使用dynamic，也不更新dynamic map
+  NONE = 0;
+  
+  // 策略2: 短时间保留，车辆移出该区域就会清空（暂未实现）
+  // 使用dynamic，但是每次加载local map的时候都是从static map中加载，同时更新dynamic map
+  SHORT = 1;
+
+  // 策略3: 长时间保留在内存，车辆移出区域后仍然保留，但不会存盘并在下次开机时使用
+  // 使用dynamic，但是不保存到 static map中，同时更新dynamic map
+  LONG = 2;
+
+  // 策略4: 更长时间的保留，会存盘，下次运行也会读取，超过一定时间后才会清除
+  // 使用dynamic，同时保存到static map中
+  PERSISTENT = 3;
+}
+
 message LocalMapUpdaterOptions2D {
   float min_x = 1;
   float max_x = 2;
@@ -24,4 +42,10 @@ message LocalMapUpdaterOptions2D {
   float min_z = 5;
   float max_z = 6;
   float update_threshold = 7;
+  
+  // 动态地图策略
+  DynamicMapPolicy dynamic_map_policy = 8;
+  
+  // 是否保存调试数据（地图图像和点云文件）
+  bool save_debug_data = 9;
 }

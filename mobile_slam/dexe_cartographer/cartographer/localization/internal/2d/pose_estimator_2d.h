@@ -50,6 +50,7 @@
 #include "cartographer/localization/2d/cloud_map_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
+#include "cartographer/localization/internal/2d/consistency_checker.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -94,15 +95,12 @@ class PoseEstimator2D {
   PoseEstimator2D(const PoseEstimator2D&) = delete;
   PoseEstimator2D& operator=(const PoseEstimator2D&) = delete;
 
-  void InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map);
-  void InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map);
-  void InitGlobalHighlightCloudMap(std::shared_ptr<CloudMap2D> highlight_cloud_map);
-  void InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2DList>& line_map);
+  void InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
 
-  std::shared_ptr<GridMap2D> GetGlobalGridMap() const { return global_grid_map_; }
-  std::shared_ptr<CloudMap2D> GetGlobalCloudMap() const { return global_cloud_map_; }
-  std::shared_ptr<CloudMap2D> GetGlobalHighlighCloudMap() const { return global_highlight_cloud_map_; }
-  std::shared_ptr<mapping::LineMap2DList> GetGlobalLineMap() const { return global_line_map_; }
+  std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const { return global_static_submap_; }
+  
+  // 获取 LocalMapUpdater2D (用于访问动态地图策略和动态 submap)
+  LocalMapUpdater2D* GetLocalMapUpdater() const { return local_map_updater_.get(); }
 
   bool SetInitialPose(const transform::Rigid3d &initial_pose);
 
@@ -170,18 +168,8 @@ class PoseEstimator2D {
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data);
 
-  // 验证位姿估计质量的结果
-  struct PoseValidationResult {
-    bool is_valid;              // 验证是否通过
-    transform::Rigid2d validated_pose;  // 验证后的位姿（real time matcher的结果）
-    double validation_score;    // 验证评分
-  };
-
-  // 验证位姿估计质量，通过real time matcher在局部地图上匹配
-  // 比较scan match估计的位姿和real time matcher估计的位姿
-  PoseValidationResult ValidatePoseEstimate(
-    const transform::Rigid2d& estimated_pose,
-    const sensor::PointCloud& point_cloud);
+  // 获取当前定位置信度
+  double GetLocalizationConfidence() const;
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
@@ -190,11 +178,9 @@ private:
   const proto::PoseEstimatorOptions2D options_;
   mapping::ActiveSubmaps2D active_submaps_;
 
-  std::shared_ptr<GridMap2D> global_grid_map_ = nullptr;
-  std::shared_ptr<CloudMap2D> global_cloud_map_ = nullptr;
-  std::shared_ptr<CloudMap2D> global_highlight_cloud_map_ = nullptr;
-  std::unique_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> global_highlight_cloud_ikdtree_ = nullptr;
-  std::shared_ptr<mapping::LineMap2DList> global_line_map_ = nullptr;
+  // 全局静态地图submap，包含所有全局地图数据(包括cloud和highlight_cloud的ikd-tree)
+  std::shared_ptr<mapping::Submap2D> global_static_submap_ = nullptr;
+  
   // MotionFilter motion_filter_;
   mapping::MotionFilter keyframe_motion_filter_;
   mapping::MotionFilter map_insertion_motion_filter_;
@@ -232,6 +218,9 @@ private:
   std::unique_ptr<laser_perception::LaserPerception> laser_perception_;
 
   std::unique_ptr<mapping::scan_matching::LineMatcher2D> line_matcher_;
+
+  // 一致性检查器，用于检测定位与地图的一致性
+  std::unique_ptr<ConsistencyChecker> consistency_checker_;
 
   std::mutex data_mutex_;
   

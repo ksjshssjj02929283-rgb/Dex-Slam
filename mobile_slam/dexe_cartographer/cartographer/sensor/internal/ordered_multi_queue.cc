@@ -46,7 +46,11 @@ OrderedMultiQueue::OrderedMultiQueue() {}
 
 OrderedMultiQueue::~OrderedMultiQueue() {
   for (auto& entry : queues_) {
-    CHECK(entry.second.finished);
+    if (!entry.second.finished) {
+      LOG(WARNING) << "Queue (" << entry.first.trajectory_id << ", "
+                   << entry.first.sensor_id
+                   << ") was not finished before destruction (likely interrupted).";
+    }
   }
 }
 

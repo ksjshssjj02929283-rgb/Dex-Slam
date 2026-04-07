@@ -47,10 +47,7 @@ public:
   LocalizationUpdater(const LocalizationUpdater &) = delete;
   LocalizationUpdater &operator=(const LocalizationUpdater &) = delete;
 
-  void InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map);
-  void InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map, std::shared_ptr<CloudMap2D> highlight_cloud_map);
-  void InitGlobalLineMap(const std::shared_ptr<sensor::LineMapData>& line_map_data);
-
+  // 从全局静态submap中获取地图数据（仅在加载pbstream后可用）
   std::shared_ptr<GridMap2D> GetGlobalGridMap() const;
   std::shared_ptr<CloudMap2D> GetGlobalCloudMap() const;
   std::shared_ptr<CloudMap2D> GetGlobalHighlighCloudMap() const;
@@ -110,20 +107,26 @@ public:
       &GetAllTrajectoryBuilderOptions() const {
     return all_trajectory_builder_options_;
   }
+  
+  // 获取 PoseEstimator2D (用于获取动态地图)
+  localization::PoseEstimator2D* GetPoseEstimator2D() const {
+    return pose_estimator_2d_;
+  }
 
 private:
+  // 从 pose_graph_ 的所有轨迹节点重新生成 global_static_submap_
+  // 当旧格式 pbstream（不含 kGlobalStaticSubmap 字段）被加载时，作为 fallback
+  std::shared_ptr<mapping::Submap2D> GenerateGlobalStaticSubmap(double resolution);
   const proto::LocalizationUpdaterOptions options_;
   common::ThreadPool thread_pool_;
 
   std::unique_ptr<mapping::PoseGraph> pose_graph_;
 
-
-  std::shared_ptr<GridMap2D> global_grid_map_;
-
-  std::shared_ptr<mapping::LineMap2DList> global_line_map_;
-
-  std::shared_ptr<CloudMap2D> global_cloud_map_;
-  std::shared_ptr<CloudMap2D> global_highlight_cloud_map_;
+  // ValueConversionTables用于global_static_submap_的概率值转换
+  // 必须是持久的成员变量，因为grid保存了指向它内部查找表的指针
+  mapping::ValueConversionTables conversion_tables_;
+  
+  std::shared_ptr<mapping::Submap2D> global_static_submap_;
 
   std::shared_ptr<std::vector<Eigen::Vector2d>> global_reflector_map_;
 
@@ -133,6 +136,9 @@ private:
       trajectory_builders_;
   std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>
       all_trajectory_builder_options_;
+      
+  // 保存 PoseEstimator2D 指针 (用于访问动态地图)
+  localization::PoseEstimator2D* pose_estimator_2d_ = nullptr;
 };
 
 std::unique_ptr<LocalizationUpdater> CreateLocalizationUpdater(
