@@ -9,9 +9,9 @@
 
 #include "common/nav_state.h"
 #include "common/timed_pose.h"
-#include "core/ivox3d/ivox_manager.hpp"
+#include "core/maps/ivox3d/ivox_manager.hpp"
 #include "core/localization/localization_result.h"
-#include "core/maps/tiled_map.h"
+#include "core/maps/tiled_map/tiled_map.h"
 
 #include "pclomp/ndt_omp_impl.hpp"
 

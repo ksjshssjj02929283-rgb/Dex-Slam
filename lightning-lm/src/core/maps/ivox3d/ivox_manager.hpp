@@ -21,7 +21,7 @@
 
 #include "common/eigen_types.h"
 #include "common/options.h"
-#include "core/ivox3d/ivox3d.h"
+#include "core/maps/ivox3d/ivox3d.h"
 #include "core/lightning_math.hpp"
 
 namespace lightning {

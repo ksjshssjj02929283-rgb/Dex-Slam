@@ -7,7 +7,7 @@
 
 #include "common/eigen_types.h"
 #include "common/keyframe.h"
-#include "core/g2p5/g2p5_map.h"
+#include "core/maps/g2p5/g2p5_map.h"
 #include "core/system/async_message_process.h"
 
 #include <thread>

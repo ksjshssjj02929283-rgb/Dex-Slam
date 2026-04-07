@@ -64,12 +64,12 @@ ament_target_dependencies(lightning.utils
 # 4a. VoxelMap 模块 - 自适应八叉树体素地图
 # ----------------------------------------------------------------------------
 add_library(lightning.core.voxel_map STATIC
-    core/voxel_map/src/octo_tree.cpp
-    core/voxel_map/src/voxel_map_manager.cpp
+    core/maps/voxel_map/src/octo_tree.cpp
+    core/maps/voxel_map/src/voxel_map_manager.cpp
 )
 
 target_include_directories(lightning.core.voxel_map PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/voxel_map/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/maps/voxel_map/include
 )
 
 target_link_libraries(lightning.core.voxel_map
@@ -129,9 +129,9 @@ target_link_libraries(lightning.core.loop
 # 6. G2P5 模块 - 2.5D 地图生成
 # ----------------------------------------------------------------------------
 add_library(lightning.core.g2p5 STATIC
-    core/g2p5/g2p5_map.cc
-    core/g2p5/g2p5.cc
-    core/g2p5/g2p5_subgrid.cc
+    core/maps/g2p5/g2p5_map.cc
+    core/maps/g2p5/g2p5.cc
+    core/maps/g2p5/g2p5_subgrid.cc
 )
 
 target_link_libraries(lightning.core.g2p5
@@ -149,8 +149,8 @@ ament_target_dependencies(lightning.core.g2p5
 # 7. Maps 模块 - 地图管理
 # ----------------------------------------------------------------------------
 add_library(lightning.core.maps STATIC
-    core/maps/tiled_map.cc
-    core/maps/tiled_map_chunk.cc
+    core/maps/tiled_map/tiled_map.cc
+    core/maps/tiled_map/tiled_map_chunk.cc
 )
 
 target_link_libraries(lightning.core.maps
@@ -206,7 +206,7 @@ add_library(lightning.ui STATIC
 )
 
 target_include_directories(lightning.ui PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/voxel_map/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/maps/voxel_map/include
 )
 
 target_link_libraries(lightning.ui
@@ -256,7 +256,7 @@ add_library(lightning.wrapper STATIC
 )
 
 target_include_directories(lightning.wrapper PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/voxel_map/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/maps/voxel_map/include
 )
 
 target_link_libraries(lightning.wrapper

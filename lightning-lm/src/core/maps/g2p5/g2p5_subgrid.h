@@ -6,7 +6,7 @@
 #define LIGHTNING_G2P5_SUBGRID_H
 
 #include "common/std_types.h"
-#include "core/g2p5/g2p5_grid_data.h"
+#include "core/maps/g2p5/g2p5_grid_data.h"
 
 namespace lightning::g2p5 {
 
