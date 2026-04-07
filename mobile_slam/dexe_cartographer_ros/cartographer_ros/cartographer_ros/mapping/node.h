@@ -44,6 +44,8 @@
 #include "cartographer_ros_msgs/srv/write_state.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "nav_interfaces/srv/set_pose.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
@@ -234,10 +236,14 @@ class Node
 
   // new added by hz:
   ::rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr local_pose_publisher_;
+  ::rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr loc_pose_publisher_;
   ::rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr init_pose_subscriber_;
   ::rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr apriltag_pose_subscriber_;
   void HandleInitPoseMsg(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
   void HandleApriltagPoseMsg(const geometry_msgs::msg::PoseArray::SharedPtr msg);
+  // Robot localization filter helpers
+  bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);
+  bool StopFilter();
   cartographer::transform::Rigid3d init_pose;
   bool flag_init_pose_received = false;
   TrajectoryOptions trajectory_options;
@@ -249,6 +255,7 @@ class Node
   bool flag_recorded_apriltag_pose_received = false;
   int miss_apriltag_detection_count = 0;
   bool flag_finish_initial_localization = false; 
+  bool need_set_pose_in_filter_ = false;
   // new added by hz end
 
 

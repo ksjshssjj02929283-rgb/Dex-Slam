@@ -75,31 +75,141 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: false
+        ankle:
+          Value: true
         base_footprint:
           Value: true
         base_link:
           Value: true
-        camera_01_depth_optical_frame:
+        buttock:
           Value: true
-        camera_02_depth_optical_frame:
+        chassis_base_link:
           Value: true
-        camera_03_depth_optical_frame:
+        front_depth:
           Value: true
-        camera_04_depth_optical_frame:
+        front_rgb:
           Value: true
-        camera_04_link_color:
+        head_base_link:
           Value: true
-        imu_link:
+        imu_chassis_link:
+          Value: true
+        knee:
           Value: true
         laser_back_link:
           Value: true
         laser_forward_link:
           Value: true
+        left_arm_base:
+          Value: true
+        left_base_link:
+          Value: true
+        left_base_to_left_arm_connector:
+          Value: true
+        left_ee:
+          Value: true
+        left_j1:
+          Value: true
+        left_j2:
+          Value: true
+        left_j3:
+          Value: true
+        left_j4:
+          Value: true
+        left_j5:
+          Value: true
+        left_j6:
+          Value: true
+        left_j7:
+          Value: true
+        left_l_base_link:
+          Value: true
+        left_l_index_dist:
+          Value: true
+        left_l_index_prox:
+          Value: true
+        left_l_little_dist:
+          Value: true
+        left_l_little_prox:
+          Value: true
+        left_l_middle_dist:
+          Value: true
+        left_l_middle_prox:
+          Value: true
+        left_l_ring_dist:
+          Value: true
+        left_l_ring_prox:
+          Value: true
+        left_l_thumb_dist:
+          Value: true
+        left_l_thumb_prox:
+          Value: true
         map:
           Value: true
         merged_laser_link:
           Value: true
+        neck1:
+          Value: true
+        neck2:
+          Value: true
+        neck_base:
+          Value: true
         odom:
+          Value: true
+        rear_depth:
+          Value: true
+        rear_rgb:
+          Value: true
+        right_arm_base:
+          Value: true
+        right_base_link:
+          Value: true
+        right_base_to_right_arm_connector:
+          Value: true
+        right_ee:
+          Value: true
+        right_j1:
+          Value: true
+        right_j2:
+          Value: true
+        right_j3:
+          Value: true
+        right_j4:
+          Value: true
+        right_j5:
+          Value: true
+        right_j6:
+          Value: true
+        right_j7:
+          Value: true
+        right_r_base_link:
+          Value: true
+        right_r_index_dist:
+          Value: true
+        right_r_index_prox:
+          Value: true
+        right_r_little_dist:
+          Value: true
+        right_r_little_prox:
+          Value: true
+        right_r_middle_dist:
+          Value: true
+        right_r_middle_prox:
+          Value: true
+        right_r_ring_dist:
+          Value: true
+        right_r_ring_prox:
+          Value: true
+        right_r_thumb_dist:
+          Value: true
+        right_r_thumb_prox:
+          Value: true
+        torso_base_link:
+          Value: true
+        waist:
+          Value: true
+        wheel_left:
+          Value: true
+        wheel_right:
           Value: true
       Marker Scale: 0.30000001192092896
       Name: TF
@@ -108,35 +218,101 @@ Visualization Manager:
       Show Names: true
       Tree:
         map:
-          {}
-        odom:
-          base_footprint:
-            base_link:
-              camera_01_depth_optical_frame:
-                {}
-              camera_02_depth_optical_frame:
-                {}
-              camera_03_depth_optical_frame:
-                {}
-              camera_04_depth_optical_frame:
-                {}
-              camera_04_link_color:
-                {}
-              imu_link:
-                {}
-              laser_back_link:
-                {}
-              laser_forward_link:
-                {}
-              merged_laser_link:
-                {}
+          odom:
+            base_footprint:
+              base_link:
+                chassis_base_link:
+                  torso_base_link:
+                    ankle:
+                      knee:
+                        buttock:
+                          waist:
+                            head_base_link:
+                              neck_base:
+                                neck1:
+                                  neck2:
+                                    {}
+                            left_base_link:
+                              left_base_to_left_arm_connector:
+                                left_arm_base:
+                                  left_j1:
+                                    left_j2:
+                                      left_j3:
+                                        left_j4:
+                                          left_j5:
+                                            left_j6:
+                                              left_j7:
+                                                left_ee:
+                                                  left_l_base_link:
+                                                    left_l_index_prox:
+                                                      left_l_index_dist:
+                                                        {}
+                                                    left_l_little_prox:
+                                                      left_l_little_dist:
+                                                        {}
+                                                    left_l_middle_prox:
+                                                      left_l_middle_dist:
+                                                        {}
+                                                    left_l_ring_prox:
+                                                      left_l_ring_dist:
+                                                        {}
+                                                    left_l_thumb_prox:
+                                                      left_l_thumb_dist:
+                                                        {}
+                            right_base_link:
+                              right_base_to_right_arm_connector:
+                                right_arm_base:
+                                  right_j1:
+                                    right_j2:
+                                      right_j3:
+                                        right_j4:
+                                          right_j5:
+                                            right_j6:
+                                              right_j7:
+                                                right_ee:
+                                                  right_r_base_link:
+                                                    right_r_index_prox:
+                                                      right_r_index_dist:
+                                                        {}
+                                                    right_r_little_prox:
+                                                      right_r_little_dist:
+                                                        {}
+                                                    right_r_middle_prox:
+                                                      right_r_middle_dist:
+                                                        {}
+                                                    right_r_ring_prox:
+                                                      right_r_ring_dist:
+                                                        {}
+                                                    right_r_thumb_prox:
+                                                      right_r_thumb_dist:
+                                                        {}
+                  wheel_left:
+                    {}
+                  wheel_right:
+                    {}
+                front_depth:
+                  {}
+                front_rgb:
+                  {}
+                imu_chassis_link:
+                  {}
+                laser_back_link:
+                  {}
+                laser_forward_link:
+                  {}
+                merged_laser_link:
+                  {}
+                rear_depth:
+                  {}
+                rear_rgb:
+                  {}
       Update Interval: 0
       Value: true
     - Alpha: 0.699999988079071
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: false
-      Enabled: false
+      Enabled: true
       Name: MappingMap
       Topic:
         Depth: 5
@@ -144,15 +320,15 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Best Effort
-        Value: /mapping_map
+        Value: /map
       Update Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mapping_map_updates
+        Value: /map_updates
       Use Timestamp: false
-      Value: false
+      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -165,7 +341,7 @@ Visualization Manager:
       Color: 25; 255; 0
       Color Transformer: FlatColor
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 4096
@@ -186,7 +362,7 @@ Visualization Manager:
         Value: /scan_matched_points2
       Use Fixed Frame: true
       Use rainbow: false
-      Value: true
+      Value: false
     - Class: cartographer_rviz/SubmapsDisplay
       Enabled: true
       Fade-out distance: 1
@@ -204,8 +380,8 @@ Visualization Manager:
           11.100: true
           12.100: true
           13.100: true
-          14.93: true
-          15.43: true
+          14.97: true
+          15.47: true
           2.100: true
           3.100: true
           4.100: true
@@ -283,7 +459,7 @@ Visualization Manager:
           Scale: 0.10000000149011612
           Value: true
         Value: true
-      Enabled: true
+      Enabled: false
       Keep: 100
       Name: Odometry
       Position Tolerance: 0.10000000149011612
@@ -304,7 +480,7 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /feedback/odom
-      Value: true
+      Value: false
     - Class: rviz_common/Group
       Displays:
         - Alpha: 1
@@ -367,6 +543,152 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: FeatureMap
+    - Class: rviz_common/Group
+      Displays:
+        - Alpha: 1
+          Axes Length: 1
+          Axes Radius: 0.10000000149011612
+          Class: rviz_default_plugins/PoseWithCovariance
+          Color: 255; 25; 0
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 1
+              Value: true
+            Value: true
+          Enabled: true
+          Head Length: 0.30000001192092896
+          Head Radius: 0.10000000149011612
+          Name: PoseWithCovariance
+          Shaft Length: 1
+          Shaft Radius: 0.05000000074505806
+          Shape: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /loc_pose
+          Value: true
+        - Angle Tolerance: 0.10000000149011612
+          Class: rviz_default_plugins/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: true
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 1
+              Value: true
+            Value: true
+          Enabled: true
+          Keep: 100
+          Name: Odometry
+          Position Tolerance: 0.10000000149011612
+          Shape:
+            Alpha: 1
+            Axes Length: 1
+            Axes Radius: 0.10000000149011612
+            Color: 255; 25; 0
+            Head Length: 0.05999999865889549
+            Head Radius: 0.019999999552965164
+            Shaft Length: 0.20000000298023224
+            Shaft Radius: 0.009999999776482582
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /odometry/filtered
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/LaserScan
+          Color: 255; 255; 255
+          Color Transformer: Intensity
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 225
+          Min Color: 0; 0; 0
+          Min Intensity: 4
+          Name: LaserScan
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.009999999776482582
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /laser_scan/front
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/LaserScan
+          Color: 255; 255; 255
+          Color Transformer: Intensity
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Max Intensity: 191
+          Min Color: 0; 0; 0
+          Min Intensity: 6
+          Name: LaserScan
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.009999999776482582
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /laser_scan/rear
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+      Enabled: true
+      Name: FilterInfo
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -413,7 +735,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -1.7350003719329834
+      Angle: -1.6150004863739014
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -423,11 +745,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 68.66041564941406
+      Scale: 54.672550201416016
       Target Frame: map
       Value: TopDownOrtho (rviz_default_plugins)
-      X: 6.838924407958984
-      Y: 0.11849687993526459
+      X: 7.555659770965576
+      Y: 4.512181758880615
     Saved: ~
 Window Geometry:
   Displays:

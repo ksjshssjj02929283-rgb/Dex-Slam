@@ -121,6 +121,12 @@ public:
     stop_show_map_client_ = this->create_client<std_srvs::srv::Trigger>(
       "/cartographer_occupancy_grid_node/stop_showing_map");
 
+    // Clients for robot_localization filter control
+    start_filter_client_ = this->create_client<std_srvs::srv::Trigger>(
+      "/robot_localization/start_filter");
+    stop_filter_client_ = this->create_client<std_srvs::srv::Trigger>(
+      "/robot_localization/stop_filter");
+
     // Timer: 5Hz -> 0.2s
     publish_timer_ = this->create_wall_timer(
       std::chrono::milliseconds(200),
@@ -207,6 +213,7 @@ private:
     trajectories_finished_ = false;  // 重置标志
 
     StartShowMap();
+    StartFilter();
 
     res->success = true;
     res->message = "OK";
@@ -379,9 +386,19 @@ private:
     return CallTriggerSync(stop_show_map_client_);
   }
 
+  bool StartFilter() {
+    return CallTriggerSync(start_filter_client_);
+  }
+
+  bool StopFilter() {
+    return CallTriggerSync(stop_filter_client_);
+  }
+
   // 重置建图节点（清理所有资源）
   void ResetMappingNode() {
     LOG(INFO) << "Resetting mapping node...";
+
+    StopFilter();
     
     mapping_node_.reset();
     node_options_.reset();
@@ -479,6 +496,8 @@ private:
 
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_show_map_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stop_show_map_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_filter_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stop_filter_client_;
 
   // TF2
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
