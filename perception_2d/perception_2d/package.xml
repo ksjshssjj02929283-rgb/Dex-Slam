@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<!--
+  Copyright (c) 2021 Geekplus Inc
+ 
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+ 
+      http://www.apache.org/licenses/LICENSE-2.0
+ 
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+
+<package format="3">
+  <name>perception_2d</name>
+  <version>0.0.0</version>
+  <description>
+    perception_2d is a system that provides the target pose of struct(such as line or 
+    some special structs) in the environment from the 2d-lidar sensor.
+  </description>
+  <maintainer email="chao.yang@geekplus.com">
+    The Geekplus Authors
+  </maintainer>
+  <license>Apache 2.0</license>
+
+  <url>https://github.com/googlecartographer/cartographer</url>
+
+  <author email="chao.yang@geekplus.com">
+    The Geekplus Authors
+  </author>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

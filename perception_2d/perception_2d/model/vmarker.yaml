@@ -1,0 +1,14 @@
+%YAML 1.0
+---
+
+model_points:
+  point1: [0.05, -0.275]
+  point2: [0.05, -0.125]
+  point3: [0.0, 0.0]
+  point4: [0.05, 0.125]
+  point5: [0.05, 0.275]
+
+model_pose:
+  x: 1.7
+  y: 0.0
+  theta: 3.1415926

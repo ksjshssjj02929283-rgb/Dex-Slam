@@ -1,0 +1,24 @@
+perception_2d_node:
+    scan_topics: /scan
+    use_odometry: True
+    num_laser_scans: 1
+    num_subdivisions_per_laser_scan: 1
+    tracking_frame: base_link
+    lookup_transform_timeout_sec: 0.1
+    predict_rec: True
+    reflect_rec: True
+    line_rec: True
+    shape_rec: False
+    vmark_rec: False
+    intensities_min: 900
+    range_max: 20.0
+    range_min: 0.1
+    search_distance: 0.4
+    search_angle: 0.2
+    max_error: 0.04
+    min_select_points: 10
+    min_cluster_points: 2
+    reflector_error: 0.02
+    reflector_radius: 0.055
+    start_rec_dis: 4.0
+    min_line_length: 0.35
