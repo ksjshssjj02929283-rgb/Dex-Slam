@@ -101,6 +101,10 @@ bool Localization::Init(const std::string& yaml_path, const std::string& global_
             ui_->UpdateNavState(loc_result_.ToNavState());
             ui_->UpdateRecentPose(loc_result_.pose_);
         }
+        if (rviz_pub_) {
+            rviz_pub_->UpdateCurrentPose(loc_result_.pose_);
+            rviz_pub_->UpdateNavState(loc_result_.ToNavState());
+        }
     });
 
     /// 预处理器
@@ -190,10 +194,6 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
     lidar_loc_->ProcessLO(lo_state);
     pgo_->ProcessLidarOdom(lo_state);
 
-    // 发布里程计位姿到 RViz
-    if (rviz_pub_) {
-        rviz_pub_->UpdateFrontendPath(lo_state.GetPose());
-    }
 
     // LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
     //           << lo_state.GetPose().translation().transpose();
@@ -246,9 +246,7 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
     // 发布定位结果到 RViz
     if (rviz_pub_) {
         rviz_pub_->UpdateCurrentScan(scan_undist, res.pose_);
-        rviz_pub_->UpdateCurrentPose(res.pose_);
         rviz_pub_->UpdateBackendPath(res.pose_);
-        rviz_pub_->UpdateNavState(res.ToNavState());
     }
 
     if (loc_state_callback_) {

@@ -67,11 +67,16 @@ bool LocSystem::Init(const std::string &yaml_path) {
     if (options_.with_rviz_) {
         LOG(INFO) << "loc with RViz visualization";
         RVizPublisher::Options rviz_opt;
-        rviz_opt.pub_current_scan = true;
-        rviz_opt.pub_local_map = true;
-        rviz_opt.pub_trajectory = true;
+        // 定位模式下也按配置发布静态全局图和动态图，和 UI 的地图更新保持一致。
+        rviz_opt.pub_current_scan = yaml.GetValue<bool>("rviz", "pub_current_scan");
+        rviz_opt.pub_local_map = yaml.GetValue<bool>("rviz", "pub_local_map");
+        rviz_opt.pub_global_map = yaml.GetValue<bool>("rviz", "pub_global_map");
+        rviz_opt.pub_dynamic_map = true;
+        rviz_opt.pub_trajectory = yaml.GetValue<bool>("rviz", "pub_trajectory");
         rviz_opt.pub_keyframes = false;
         rviz_opt.pub_loop_edges = false;
+        rviz_opt.local_map_downsample = yaml.GetValue<int>("rviz", "local_map_downsample");
+        rviz_opt.global_map_downsample = yaml.GetValue<int>("rviz", "global_map_downsample");
         rviz_pub_ = std::make_shared<RVizPublisher>(node_, rviz_opt);
     }
 

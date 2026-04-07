@@ -285,12 +285,20 @@ void RVizPublisher::PublishTimerCallback() {
             CloudPtr merged(new PointCloudType);
             
             std::lock_guard<std::mutex> lock_kf(mtx_kf_);
+            const bool use_kf_pose = !keyframes_.empty();
             for (const auto& [id, cloud] : global_map_) {
-                if (cloud && id < (int)keyframes_.size() && keyframes_[id]) {
+                if (!cloud) {
+                    continue;
+                }
+
+                if (use_kf_pose && id < (int)keyframes_.size() && keyframes_[id]) {
                     CloudPtr cloud_in_map(new PointCloudType);
                     auto pose = keyframes_[id]->GetOptPose();
                     pcl::transformPointCloud(*cloud, *cloud_in_map, pose.matrix().cast<float>());
                     *merged += *cloud_in_map;
+                } else if (!use_kf_pose) {
+                    // 定位模式下 map_->GetStaticCloud() 已经是 map 坐标系，直接拼接发布。
+                    *merged += *cloud;
                 }
             }
 
@@ -317,12 +325,20 @@ void RVizPublisher::PublishTimerCallback() {
             CloudPtr merged(new PointCloudType);
             
             std::lock_guard<std::mutex> lock_kf(mtx_kf_);
+            const bool use_kf_pose = !keyframes_.empty();
             for (const auto& [id, cloud] : dynamic_map_) {
-                if (cloud && id < (int)keyframes_.size() && keyframes_[id]) {
+                if (!cloud) {
+                    continue;
+                }
+
+                if (use_kf_pose && id < (int)keyframes_.size() && keyframes_[id]) {
                     CloudPtr cloud_in_map(new PointCloudType);
                     auto pose = keyframes_[id]->GetOptPose();
                     pcl::transformPointCloud(*cloud, *cloud_in_map, pose.matrix().cast<float>());
                     *merged += *cloud_in_map;
+                } else if (!use_kf_pose) {
+                    // 定位模式下 map_->GetDynamicCloud() 已经是 map 坐标系，直接拼接发布。
+                    *merged += *cloud;
                 }
             }
 
