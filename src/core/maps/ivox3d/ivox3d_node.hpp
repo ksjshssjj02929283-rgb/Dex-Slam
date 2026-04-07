@@ -4,7 +4,7 @@
 #include <list>
 #include <vector>
 
-#include "core/ivox3d/hilbert.hpp"
+#include "core/maps/ivox3d/hilbert.hpp"
 #include "core/lightning_math.hpp"
 
 namespace lightning {

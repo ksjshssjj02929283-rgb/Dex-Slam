@@ -14,8 +14,8 @@
 #include "common/point_def.h"
 #include "common/std_types.h"
 #include "core/lightning_math.hpp"
-#include "core/maps/tiled_map_chunk.h"
-#include "core/ivox3d/ivox_manager.hpp"
+#include "core/maps/tiled_map/tiled_map_chunk.h"
+#include "core/maps/ivox3d/ivox_manager.hpp"
 
 namespace lightning {
 

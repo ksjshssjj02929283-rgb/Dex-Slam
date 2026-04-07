@@ -7,7 +7,7 @@
 
 #include "common/eigen_types.h"
 #include "common/std_types.h"
-#include "core/g2p5/g2p5_subgrid.h"
+#include "core/maps/g2p5/g2p5_subgrid.h"
 
 #include <bitset>
 #include <nav_msgs/msg/occupancy_grid.hpp>

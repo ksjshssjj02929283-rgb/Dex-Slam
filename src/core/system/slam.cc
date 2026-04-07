@@ -3,10 +3,10 @@
 //
 
 #include "core/system/slam.h"
-#include "core/g2p5/g2p5.h"
+#include "core/maps/g2p5/g2p5.h"
 #include "core/lio/laser_mapping.h"
 #include "core/loop_closing/loop_closing.h"
-#include "core/maps/tiled_map.h"
+#include "core/maps/tiled_map/tiled_map.h"
 #include "ui/pangolin_window.h"
 #include "wrapper/ros_utils.h"
 #include "wrapper/rviz_publisher.h"

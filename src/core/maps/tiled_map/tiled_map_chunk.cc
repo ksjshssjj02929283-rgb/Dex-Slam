@@ -2,7 +2,7 @@
 // Created by xiang on 23-2-7.
 //
 
-#include "tiled_map_chunk.h"
+#include "core/maps/tiled_map/tiled_map_chunk.h"
 
 #include <pcl/io/pcd_io.h>
 

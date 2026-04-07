@@ -10,7 +10,7 @@
 #include <unordered_map>
 
 #include "common/eigen_types.h"
-#include "core/ivox3d/ivox3d_node.hpp"
+#include "core/maps/ivox3d/ivox3d_node.hpp"
 #include "core/lightning_math.hpp"
 
 namespace lightning {
