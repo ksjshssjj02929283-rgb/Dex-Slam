@@ -14,7 +14,8 @@ iKdTree<PointType>::iKdTree(float delete_param, float balance_param, float box_l
     delete_criterion_param = delete_param;
     balance_criterion_param = balance_param;
     downsample_size = box_length;
-    Rebuild_Logger.clear();
+    Rebuild_Logger_ptr = new MANUAL_Q();
+    Rebuild_Logger_ptr->clear();
     termination_flag = false;
     rebuild_thread = 0;  // 初始化线程句柄
     start_thread();
@@ -24,17 +25,37 @@ template <typename PointType>
 iKdTree<PointType>::~iKdTree()
 {
     // 1. 首先停止线程（包括等待线程完全退出）
+    // 若已调用过 Finish()，stop_thread() 已执行完毕，rebuild_thread == 0，可安全重入
     stop_thread();
     
     // 2. 现在可以安全地禁用删除存储
     Delete_Storage_Disabled = true;
     
     // 3. 清理树节点（现在线程已经完全退出）
-    delete_tree_nodes(&Root_Node);
+    // 若已调用过 Finish()，节点 mutex 已被 release_node_mutexes() 销毁，
+    // delete_tree_nodes() 会再次调用 pthread_mutex_destroy，对已销毁的 mutex 是 UB。
+    // 因此 Finish() 后跳过 delete_tree_nodes，析构时直接 delete 节点内存即可。
+    if (!finished_flag) {
+        delete_tree_nodes(&Root_Node);
+    } else {
+        // mutex 已在 Finish() 中释放，此处只需递归 delete 节点内存（不调 mutex_destroy）
+        // 利用 flatten 到临时 vector 再 delete 节点的方式代价太高，
+        // 直接用简化的内存释放（跳过 mutex_destroy）
+        std::function<void(KD_TREE_NODE**)> free_nodes = [&](KD_TREE_NODE** n) {
+            if (*n == nullptr) return;
+            free_nodes(&(*n)->left_son_ptr);
+            free_nodes(&(*n)->right_son_ptr);
+            delete *n;
+            *n = nullptr;
+        };
+        free_nodes(&Root_Node);
+    }
     
-    // 4. 释放 STATIC_ROOT_NODE，这是一个严重的内存泄漏
+    // 4. 释放 STATIC_ROOT_NODE
     if (STATIC_ROOT_NODE != nullptr) {
-        pthread_mutex_destroy(&(STATIC_ROOT_NODE->push_down_mutex_lock));
+        if (!finished_flag) {
+            pthread_mutex_destroy(&(STATIC_ROOT_NODE->push_down_mutex_lock));
+        }
         delete STATIC_ROOT_NODE;
         STATIC_ROOT_NODE = nullptr;
     }
@@ -46,8 +67,11 @@ iKdTree<PointType>::~iKdTree()
     PointVector().swap(Multithread_Points_deleted);
     PointVector().swap(Rebuild_PCL_Storage);
     
-    // 6. 清理操作日志
-    Rebuild_Logger.clear();
+    // 6. 清理操作日志（指针在 Finish() 中可能已被 delete）
+    if (Rebuild_Logger_ptr != nullptr) {
+        delete Rebuild_Logger_ptr;
+        Rebuild_Logger_ptr = nullptr;
+    }
 }
 
 template <typename PointType>
@@ -56,6 +80,43 @@ void iKdTree<PointType>::InitializeKDTree(float delete_param, float balance_para
     Set_delete_criterion_param(delete_param);
     Set_balance_criterion_param(balance_param);
     set_downsample_param(box_length);
+}
+
+template <typename PointType>
+void iKdTree<PointType>::Finish()
+{
+    if (finished_flag) return;
+
+    // 1. 标记为 finished，之后所有写操作立即返回
+    finished_flag = true;
+
+    // 2. 停止后台重建线程，释放线程及所有 mutex 资源
+    stop_thread();
+
+    // 3. 清空重建相关的临时点云存储，释放内存
+    PointVector().swap(Rebuild_PCL_Storage);
+    PointVector().swap(Points_deleted);
+    PointVector().swap(Downsample_Storage);
+    PointVector().swap(Multithread_Points_deleted);
+    PointVector().swap(PCL_Storage);  // 用户侧存储也不再需要
+
+    // 4. 释放 64MB 的 MANUAL_Q（最大的单块内存）
+    if (Rebuild_Logger_ptr != nullptr) {
+        delete Rebuild_Logger_ptr;
+        Rebuild_Logger_ptr = nullptr;
+    }
+
+    // 5. 重置重建指针
+    Rebuild_Ptr = nullptr;
+    rebuild_flag = false;
+
+    // 6. 遍历全树，销毁每个节点的 push_down_mutex_lock（40 bytes/节点）
+    //    同时将 need_push_down_* 标记清零，使搜索路径上 Push_Down 成为完全 no-op
+    release_node_mutexes(Root_Node);
+    // 同样处理 STATIC_ROOT_NODE 的 mutex
+    if (STATIC_ROOT_NODE != nullptr) {
+        pthread_mutex_destroy(&(STATIC_ROOT_NODE->push_down_mutex_lock));
+    }
 }
 
 template <typename PointType>
@@ -220,7 +281,7 @@ void iKdTree<PointType>::start_thread()
     pthread_mutex_init(&working_flag_mutex, NULL);
     pthread_mutex_init(&search_flag_mutex, NULL);
     pthread_create(&rebuild_thread, NULL, multi_thread_ptr, (void *)this);
-    printf("Multi thread started \n");
+    // printf("Multi thread started \n");
 }
 
 template <typename PointType>
@@ -231,27 +292,26 @@ void iKdTree<PointType>::stop_thread()
     termination_flag = true;
     pthread_mutex_unlock(&termination_flag_mutex_lock);
     
-    // 2. 等待线程完全退出
+    // 2. 等待线程完全退出（rebuild_thread == 0 表示已经 join 过）
     if (rebuild_thread != 0) {
         pthread_join(rebuild_thread, NULL);
         rebuild_thread = 0;
+
+        // 3. 确保没有其他操作在使用这些 mutex（等待所有操作完成）
+        pthread_mutex_lock(&working_flag_mutex);
+        pthread_mutex_unlock(&working_flag_mutex);
+    
+        pthread_mutex_lock(&search_flag_mutex);
+        pthread_mutex_unlock(&search_flag_mutex);
+    
+        // 4. 现在可以安全销毁所有 mutex（只销毁一次）
+        pthread_mutex_destroy(&termination_flag_mutex_lock);
+        pthread_mutex_destroy(&rebuild_logger_mutex_lock);
+        pthread_mutex_destroy(&rebuild_ptr_mutex_lock);
+        pthread_mutex_destroy(&points_deleted_rebuild_mutex_lock);
+        pthread_mutex_destroy(&working_flag_mutex);
+        pthread_mutex_destroy(&search_flag_mutex);
     }
-    
-    // 3. 确保没有其他操作在使用这些 mutex（等待所有操作完成）
-    // 这里需要短暂等待，确保正在进行的操作完成
-    pthread_mutex_lock(&working_flag_mutex);
-    pthread_mutex_unlock(&working_flag_mutex);
-    
-    pthread_mutex_lock(&search_flag_mutex);
-    pthread_mutex_unlock(&search_flag_mutex);
-    
-    // 4. 现在可以安全销毁所有 mutex
-    pthread_mutex_destroy(&termination_flag_mutex_lock);
-    pthread_mutex_destroy(&rebuild_logger_mutex_lock);
-    pthread_mutex_destroy(&rebuild_ptr_mutex_lock);
-    pthread_mutex_destroy(&points_deleted_rebuild_mutex_lock);
-    pthread_mutex_destroy(&working_flag_mutex);
-    pthread_mutex_destroy(&search_flag_mutex);
 }
 
 template <typename PointType>
@@ -277,7 +337,7 @@ void iKdTree<PointType>::multi_thread_rebuild()
         if (Rebuild_Ptr != nullptr)
         {
             /* Traverse and copy */
-            if (!Rebuild_Logger.empty())
+            if (!Rebuild_Logger_ptr->empty())
             {
                 printf("\n\n\n\n\n\n\n\n\n\n\n ERROR!!! \n\n\n\n\n\n\n\n\n");
             }
@@ -322,11 +382,11 @@ void iKdTree<PointType>::multi_thread_rebuild()
                 pthread_mutex_lock(&working_flag_mutex);
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
                 int tmp_counter = 0;
-                while (!Rebuild_Logger.empty())
+                while (!Rebuild_Logger_ptr->empty())
                 {
-                    Operation = Rebuild_Logger.front();
-                    max_queue_size = max(max_queue_size, Rebuild_Logger.size());
-                    Rebuild_Logger.pop();
+                    Operation = Rebuild_Logger_ptr->front();
+                    max_queue_size = max(max_queue_size, Rebuild_Logger_ptr->size());
+                    Rebuild_Logger_ptr->pop();
                     pthread_mutex_unlock(&rebuild_logger_mutex_lock);
                     pthread_mutex_unlock(&working_flag_mutex);
                     run_operation(&new_root_node, Operation);
@@ -417,7 +477,7 @@ void iKdTree<PointType>::multi_thread_rebuild()
             usleep(100);
         }
     }
-    printf("Rebuild thread terminated normally\n");
+    // printf("Rebuild thread terminated normally\n");
 }
 
 template <typename PointType>
@@ -462,6 +522,7 @@ void iKdTree<PointType>::run_operation(KD_TREE_NODE **root, Operation_Logger_Typ
 template <typename PointType>
 void iKdTree<PointType>::Build(PointVector point_cloud)
 {
+    if (finished_flag) return;
     if (Root_Node != nullptr)
     {
         delete_tree_nodes(&Root_Node);
@@ -531,6 +592,7 @@ void iKdTree<PointType>::Radius_Search(PointType point, const float radius, Poin
 template <typename PointType>
 int iKdTree<PointType>::Add_Points(PointVector &PointToAdd, bool downsample_on)
 {
+    if (finished_flag) return 0;
     int NewPointSize = PointToAdd.size();
     int tree_size = size();
     BoxPointType Box_of_Point;
@@ -592,8 +654,8 @@ int iKdTree<PointType>::Add_Points(PointVector &PointToAdd, bool downsample_on)
                     {
                         pthread_mutex_lock(&rebuild_logger_mutex_lock);
                         if (Downsample_Storage.size() > 0)
-                            Rebuild_Logger.push(operation_delete);
-                        Rebuild_Logger.push(operation);
+                            Rebuild_Logger_ptr->push(operation_delete);
+                        Rebuild_Logger_ptr->push(operation);
                         pthread_mutex_unlock(&rebuild_logger_mutex_lock);
                     }
                     pthread_mutex_unlock(&working_flag_mutex);
@@ -616,7 +678,7 @@ int iKdTree<PointType>::Add_Points(PointVector &PointToAdd, bool downsample_on)
                 if (rebuild_flag)
                 {
                     pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                    Rebuild_Logger.push(operation);
+                    Rebuild_Logger_ptr->push(operation);
                     pthread_mutex_unlock(&rebuild_logger_mutex_lock);
                 }
                 pthread_mutex_unlock(&working_flag_mutex);
@@ -629,6 +691,7 @@ int iKdTree<PointType>::Add_Points(PointVector &PointToAdd, bool downsample_on)
 template <typename PointType>
 void iKdTree<PointType>::Add_Point_Boxes(vector<BoxPointType> &BoxPoints)
 {
+    if (finished_flag) return;
     for (int i = 0; i < BoxPoints.size(); i++)
     {
         if (Rebuild_Ptr == nullptr || *Rebuild_Ptr != Root_Node)
@@ -645,7 +708,7 @@ void iKdTree<PointType>::Add_Point_Boxes(vector<BoxPointType> &BoxPoints)
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(operation);
+                Rebuild_Logger_ptr->push(operation);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             pthread_mutex_unlock(&working_flag_mutex);
@@ -657,6 +720,7 @@ void iKdTree<PointType>::Add_Point_Boxes(vector<BoxPointType> &BoxPoints)
 template <typename PointType>
 void iKdTree<PointType>::Delete_Points(PointVector &PointToDel)
 {
+    if (finished_flag) return;
     for (int i = 0; i < PointToDel.size(); i++)
     {
         if (Rebuild_Ptr == nullptr || *Rebuild_Ptr != Root_Node)
@@ -673,7 +737,7 @@ void iKdTree<PointType>::Delete_Points(PointVector &PointToDel)
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(operation);
+                Rebuild_Logger_ptr->push(operation);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             pthread_mutex_unlock(&working_flag_mutex);
@@ -685,6 +749,7 @@ void iKdTree<PointType>::Delete_Points(PointVector &PointToDel)
 template <typename PointType>
 int iKdTree<PointType>::Delete_Point_Boxes(vector<BoxPointType> &BoxPoints)
 {
+    if (finished_flag) return 0;
     int tmp_counter = 0;
     for (int i = 0; i < BoxPoints.size(); i++)
     {
@@ -702,7 +767,7 @@ int iKdTree<PointType>::Delete_Point_Boxes(vector<BoxPointType> &BoxPoints)
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(operation);
+                Rebuild_Logger_ptr->push(operation);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             pthread_mutex_unlock(&working_flag_mutex);
@@ -872,7 +937,7 @@ int iKdTree<PointType>::Delete_by_range(KD_TREE_NODE **root, BoxPointType boxpoi
         if (rebuild_flag)
         {
             pthread_mutex_lock(&rebuild_logger_mutex_lock);
-            Rebuild_Logger.push(delete_box_log);
+            Rebuild_Logger_ptr->push(delete_box_log);
             pthread_mutex_unlock(&rebuild_logger_mutex_lock);
         }
         pthread_mutex_unlock(&working_flag_mutex);
@@ -888,7 +953,7 @@ int iKdTree<PointType>::Delete_by_range(KD_TREE_NODE **root, BoxPointType boxpoi
         if (rebuild_flag)
         {
             pthread_mutex_lock(&rebuild_logger_mutex_lock);
-            Rebuild_Logger.push(delete_box_log);
+            Rebuild_Logger_ptr->push(delete_box_log);
             pthread_mutex_unlock(&rebuild_logger_mutex_lock);
         }
         pthread_mutex_unlock(&working_flag_mutex);
@@ -936,7 +1001,7 @@ void iKdTree<PointType>::Delete_by_point(KD_TREE_NODE **root, PointType point, b
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(delete_log);
+                Rebuild_Logger_ptr->push(delete_log);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             pthread_mutex_unlock(&working_flag_mutex);
@@ -955,7 +1020,7 @@ void iKdTree<PointType>::Delete_by_point(KD_TREE_NODE **root, PointType point, b
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(delete_log);
+                Rebuild_Logger_ptr->push(delete_log);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             pthread_mutex_unlock(&working_flag_mutex);
@@ -1013,7 +1078,7 @@ void iKdTree<PointType>::Add_by_range(KD_TREE_NODE **root, BoxPointType boxpoint
         if (rebuild_flag)
         {
             pthread_mutex_lock(&rebuild_logger_mutex_lock);
-            Rebuild_Logger.push(add_box_log);
+            Rebuild_Logger_ptr->push(add_box_log);
             pthread_mutex_unlock(&rebuild_logger_mutex_lock);
         }
         pthread_mutex_unlock(&working_flag_mutex);
@@ -1029,7 +1094,7 @@ void iKdTree<PointType>::Add_by_range(KD_TREE_NODE **root, BoxPointType boxpoint
         if (rebuild_flag)
         {
             pthread_mutex_lock(&rebuild_logger_mutex_lock);
-            Rebuild_Logger.push(add_box_log);
+            Rebuild_Logger_ptr->push(add_box_log);
             pthread_mutex_unlock(&rebuild_logger_mutex_lock);
         }
         pthread_mutex_unlock(&working_flag_mutex);
@@ -1076,7 +1141,7 @@ void iKdTree<PointType>::Add_by_point(KD_TREE_NODE **root, PointType point, bool
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(add_log);
+                Rebuild_Logger_ptr->push(add_log);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             pthread_mutex_unlock(&working_flag_mutex);
@@ -1095,7 +1160,7 @@ void iKdTree<PointType>::Add_by_point(KD_TREE_NODE **root, PointType point, bool
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(add_log);
+                Rebuild_Logger_ptr->push(add_log);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             pthread_mutex_unlock(&working_flag_mutex);
@@ -1455,7 +1520,7 @@ void iKdTree<PointType>::Push_Down(KD_TREE_NODE *root)
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(operation);
+                Rebuild_Logger_ptr->push(operation);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             root->need_push_down_to_left = false;
@@ -1498,7 +1563,7 @@ void iKdTree<PointType>::Push_Down(KD_TREE_NODE *root)
             if (rebuild_flag)
             {
                 pthread_mutex_lock(&rebuild_logger_mutex_lock);
-                Rebuild_Logger.push(operation);
+                Rebuild_Logger_ptr->push(operation);
                 pthread_mutex_unlock(&rebuild_logger_mutex_lock);
             }
             root->need_push_down_to_right = false;
@@ -1729,6 +1794,19 @@ void iKdTree<PointType>::delete_tree_nodes(KD_TREE_NODE **root)
     *root = nullptr;
 
     return;
+}
+
+template <typename PointType>
+void iKdTree<PointType>::release_node_mutexes(KD_TREE_NODE *root)
+{
+    // 递归遍历全树，销毁每节点的 push_down_mutex_lock
+    // 并清除 Push_Down 传播标记，使 finished 后搜索路径上 Push_Down 完全成为 no-op
+    if (root == nullptr) return;
+    release_node_mutexes(root->left_son_ptr);
+    release_node_mutexes(root->right_son_ptr);
+    root->need_push_down_to_left = false;
+    root->need_push_down_to_right = false;
+    pthread_mutex_destroy(&(root->push_down_mutex_lock));
 }
 
 template <typename PointType>

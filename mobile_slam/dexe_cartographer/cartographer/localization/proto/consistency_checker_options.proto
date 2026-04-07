@@ -1,0 +1,31 @@
+// Copyright 2025 The Cartographer Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package cartographer.localization.proto;
+
+// 一致性检查器配置选项
+message ConsistencyCheckerOptions {
+  // 位姿一致性阈值
+  double translation_threshold = 1;  // 平移误差阈值 (米)，默认 0.05 (5cm)
+  double rotation_threshold = 2;     // 旋转误差阈值 (弧度)，默认 0.524 (30度)
+  
+  // 速度阈值（用于检测异常运动）
+  double max_linear_velocity = 3;    // 最大线速度 (m/s)，默认 2.0
+  double max_angular_velocity = 4;   // 最大角速度 (rad/s)，默认 1.57 (90度/秒)
+  
+  // 匹配分数阈值
+  double min_score = 5;              // 最小匹配分数阈值，默认 0.4
+}

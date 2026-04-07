@@ -25,6 +25,8 @@
 
 #include "absl/memory/memory.h"
 #include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
+#include "cartographer/mapping/internal/2d/tsdf_range_data_inserter_2d.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/sensor/sync_point_cloud.h"
@@ -69,7 +71,15 @@ PoseEstimator2D::PoseEstimator2D(
             options_.line_matcher_options());
 
   local_map_updater_ =
-      std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options());
+      std::make_unique<LocalMapUpdater2D>(options_.local_map_updater_options(),
+                                          options_.submaps_options());
+
+  // 初始化一致性检查器
+  consistency_checker_ = std::make_unique<ConsistencyChecker>(options_);
+  
+  // 设置 scan matchers 到 consistency checker
+  consistency_checker_->SetRealTimeCorrelativeScanMatcher(&real_time_correlative_scan_matcher_);
+  consistency_checker_->SetCeresScanMatcher(&ceres_scan_matcher_);
 
   loc_state_ = LocalizationState::NOT_INITIALIZED;
 
@@ -87,81 +97,41 @@ PoseEstimator2D::~PoseEstimator2D() {
   // 2. 清空 active_submaps，确保不再有新的插入操作
   active_submaps_.clear();
   
-  // 3. 显式释放 ikd-tree（可能有后台线程或缓存）
-  if (global_highlight_cloud_ikdtree_) {
-    global_highlight_cloud_ikdtree_.reset();
-  }
+  // 3. 释放地图数据（shared_ptr 会处理引用计数）
+  global_static_submap_.reset();
   
-  // 4. 释放地图数据（shared_ptr 会处理引用计数）
-  global_grid_map_.reset();
-  global_cloud_map_.reset();
-  global_highlight_cloud_map_.reset();
-  global_line_map_.reset();
-  
-  // 5. 释放其他资源
+  // 4. 释放其他资源
   local_map_updater_.reset();
   data_preprocessor_.reset();
   laser_perception_.reset();
   line_matcher_.reset();
 }
 
-void PoseEstimator2D::InitGlobalGridMap(std::shared_ptr<GridMap2D> grid_map)
+void PoseEstimator2D::InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap)
 {
-  global_grid_map_ = grid_map;
-  local_map_updater_->SetGlobalGridMap(grid_map);
-
-  loc_state_ = LocalizationState::INITIALIZED;
-}
-
-void PoseEstimator2D::InitGlobalCloudMap(std::shared_ptr<CloudMap2D> cloud_map)
-{
-  if (global_grid_map_ == nullptr) {
-    LOG(ERROR) << "Global grid map is not iUpdateLocalCloudMapnitialized!";
+  if (!global_submap) {
+    LOG(ERROR) << "Cannot initialize global maps from null submap";
     return;
   }
+  global_static_submap_ = global_submap;
 
-  global_cloud_map_ = cloud_map;
-  // insert成功，就获取submap的cloud，并将其加入的gicp的target中
-    // 这个过程的平均时间是0.25~0.5ms
-  pcl::PointCloud<pcl::PointXYZ>::Ptr global_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  for (const auto& point : global_cloud_map_->cloud()->points()) {
-    pcl::PointXYZ p;
-    p.x = point.position.x();
-    p.y = point.position.y();
-    p.z = 0.0;
-    global_map_cloud->push_back(p);
-  }
+  // 初始化 local_map_updater_ 的全局地图引用
+  CHECK(global_static_submap_->grid());
+  CHECK(global_static_submap_->cloud());
+  CHECK(global_static_submap_->highlight_cloud());
+  CHECK(global_static_submap_->line_map_2d_list());
 
-  local_map_updater_->SetGlobalCloudMap(cloud_map);
-  // box_filter_->SetOrigin(pose_estimate.translation().cast<float>());
-  // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_submap(new pcl::PointCloud<pcl::PointXYZ>());
-  // box_filter_->Filter(submap_cloud, filtered_sub
-}
+  // 直接将 global_static_submap_ 传递给 local_map_updater_
+  local_map_updater_->SetGlobalSubmap(global_static_submap_);
 
-void PoseEstimator2D::InitGlobalHighlightCloudMap(std::shared_ptr<CloudMap2D> highlight_cloud_map)
-{
-  global_highlight_cloud_map_ = highlight_cloud_map;
-  // insert成功，就获取submap的cloud，并将其加入的gicp的target中
-    // 这个过程的平均时间是0.25~0.5ms
-  pcl::PointCloud<pcl::PointXYZ>::Ptr global_highlight_map_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  for (const auto& point : global_cloud_map_->cloud()->points()) {
-    pcl::PointXYZ p;
-    p.x = point.position.x();
-    p.y = point.position.y();
-    p.z = 0.0;
-    global_highlight_map_cloud->push_back(p);
-  }
+  LOG(INFO) << "All global maps initialized successfully from global submap";
 
-  global_highlight_cloud_ikdtree_ = std::make_unique<ikd_tree::iKdTree<pcl::PointXYZ>>();
+  // 地图初始化完成，状态设置为INITIALIZED
+  loc_state_ = LocalizationState::INITIALIZED;
 
-  float resolution = global_grid_map_->limits().resolution();
-  global_highlight_cloud_ikdtree_->set_downsample_param(resolution);
-  global_highlight_cloud_ikdtree_->Build(global_highlight_map_cloud->points);
-}
-
-void PoseEstimator2D::InitGlobalLineMap(const std::shared_ptr<mapping::LineMap2DList>& line_map)
-{
-  global_line_map_ = line_map;
+  // std::string home_dir = std::getenv("HOME") ? std::getenv("HOME") : "/tmp";
+  // std::string folder = home_dir + "/.dexe/data/submaps/";
+  // global_grid_map_->DrawAsImage(folder, "pose_estimator.png");
 }
 
 bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
@@ -175,7 +145,6 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
   if (!pose_initializer_) {
     pose_initializer_ = std::make_unique<PoseInitializer>(
                                   options_.pose_initializer_options());
-    pose_initializer_->InitGlobalLineMap(global_line_map_);
   }
 
   local_map_updater_->UpdateRobotPose(transform::Project2D(initial_pose));
@@ -183,8 +152,13 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
     LOG(WARNING) << "There is no need to update local map for initial pose setting!";
   }
 
-  pose_initializer_->InitGlobalGridMap(local_map_updater_->local_grid_map());
-  pose_initializer_->InitGlobalCloudMap(local_map_updater_->local_cloud_map());
+  auto local_submap = local_map_updater_->local_submap();
+  if (!local_submap) {
+    LOG(ERROR) << "Local submap is not available!";
+    return false;
+  }
+
+  pose_initializer_->InitGlobalSubmap(local_submap);
 
   pose_initializer_->SetInitialPose(transform::Project2D(initial_pose));
   pose_initializer_->start();
@@ -198,8 +172,8 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
 
 void PoseEstimator2D::TriggerGlobalRelocalization()
 {
-  if (global_grid_map_ == nullptr) {
-    LOG(ERROR) << "Global grid map is not initialized, cannot trigger global relocalization.";
+  if (!global_static_submap_ || !global_static_submap_->grid()) {
+    LOG(ERROR) << "Global static submap is not initialized, cannot trigger global relocalization.";
     return;
   }
   
@@ -207,12 +181,10 @@ void PoseEstimator2D::TriggerGlobalRelocalization()
   if (!pose_initializer_) {
     pose_initializer_ = std::make_unique<PoseInitializer>(
                                   options_.pose_initializer_options());
-    pose_initializer_->InitGlobalLineMap(global_line_map_);
   }
 
-  // 设置全局地图用于全局重定位
-  pose_initializer_->InitGlobalGridMap(global_grid_map_);
-  pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+  // 使用 global_static_submap_ 初始化 pose_initializer_
+  pose_initializer_->InitGlobalSubmap(global_static_submap_);
 
   // 触发全局重定位
   pose_initializer_->TriggerGlobalRelocalization();
@@ -325,10 +297,13 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                                     line_data,
                                     *active_submaps_.line_map_2d_list(),
                                     tracked_lane_data);
+    // TODO: 这里使用的线特征是否需要会使用local dynamic map中的线特征
     line_matcher_->TrackLineFromMap(initial_ceres_pose,
                                     line_data,
-                                    *global_line_map_,
+                                    // *global_static_submap_->line_map_2d_list(),
+                                    *local_map_updater_->GetGlobalSubmap()->line_map_2d_list(),
                                     global_tracked_lane_data);
+                                    
   }
 
   // 4. 使用ceres进行位姿估计，得到pose_observation
@@ -336,15 +311,12 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   auto pose_observation = absl::make_unique<transform::Rigid2d>();
   ceres::Solver::Summary summary;
 
-  auto local_grid_map = local_map_updater_->local_grid_map();
-  auto local_cloud_ikdtree = local_map_updater_->local_cloud_map_ikdtree();
-  
-  // ⚠️ 安全性检查：确保所有地图资源在使用前都已初始化且有效
-  if (!local_grid_map || !local_cloud_ikdtree || !global_highlight_cloud_ikdtree_) {
-    LOG(ERROR) << "Local map resources not initialized, cannot perform scan matching";
-    return absl::make_unique<transform::Rigid2d>(initial_ceres_pose);
+  auto local_submap = local_map_updater_->local_submap();
+  if (!local_submap) {
+    LOG(ERROR) << "Local submap is not available!";
+    return nullptr;
   }
-  
+
   common::TicToc tic_toc;
 
   Eigen::Matrix3d cov;
@@ -353,11 +325,12 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                           highlight_point_cloud,
                           tracked_lane_data,
                           global_tracked_lane_data,
-                          *matching_submap->grid(), *local_grid_map,
-                          *matching_submap->line_map_2d_list(), *global_line_map_,
+                          *matching_submap->grid(), *local_submap->grid(),
+                          *matching_submap->line_map_2d_list(),
+                          *local_submap->line_map_2d_list(),
                           *matching_submap->cloud_ikdtree(),
-                          *local_cloud_ikdtree,
-                          *global_highlight_cloud_ikdtree_,
+                          *local_submap->cloud_ikdtree(),
+                          *matching_submap->highlight_cloud_ikdtree(),
                           pose_observation.get(), cov,
                           &summary);
   double match_time = tic_toc.toc();
@@ -370,14 +343,14 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     transform::Rigid2d check_pose;
     real_time_correlative_scan_matcher_.Match(
       initial_ceres_pose, filtered_gravity_aligned_point_cloud,
-      *local_grid_map, &initial_ceres_pose);
+      *local_submap->grid(), &initial_ceres_pose);
 
     ceres_scan_matcher_.Match(initial_ceres_pose.translation(), initial_ceres_pose,
                               filtered_gravity_aligned_point_cloud,
                               highlight_point_cloud,
-                              *local_grid_map,
-                              *local_cloud_ikdtree,
-                              *global_highlight_cloud_ikdtree_,
+                              *local_submap->grid(),
+                              *local_submap->cloud_ikdtree(),
+                              *local_submap->highlight_cloud_ikdtree(),
                               pose_observation.get(),
                               &summary);
 
@@ -392,6 +365,20 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 
   // std::cout << "cov: \n" << cov.matrix() << std::endl;
   // LOG(INFO) << "scan match: " << *pose_observation;
+
+  // 【新增】检查pose_observation是否包含NaN或Inf
+  if (pose_observation) {
+    const auto& trans = pose_observation->translation();
+    const double angle = pose_observation->rotation().angle();
+    
+    if (!std::isfinite(trans.x()) || !std::isfinite(trans.y()) || !std::isfinite(angle)) {
+      LOG(ERROR) << "ScanMatch produced invalid pose! "
+                 << "Translation: [" << trans.x() << ", " << trans.y() << "], "
+                 << "Rotation angle: " << angle;
+      // 返回nullptr表示匹配失败
+      return nullptr;
+    }
+  }
 
   // 5. 如果匹配成功，向Metric中增加观测信息
   if (pose_observation) {
@@ -410,153 +397,15 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
 }
 
 /**
- * @brief 验证位姿估计质量
+ * @brief 获取当前定位置信度
  * 
- * 分两步验证：
- * 1. 在动态地图(active_submaps_.front())上验证位姿和得分
- * 2. 在静态地图(local_map_updater的局部地图)上验证得分
- * 
- * @param estimated_pose scan match估计得到的位姿
- * @param point_cloud 用于验证的点云
- * @return PoseValidationResult 包含验证结果、验证位姿和评分
+ * @return double 置信度值 [0, 1]
  */
-PoseEstimator2D::PoseValidationResult PoseEstimator2D::ValidatePoseEstimate(
-    const transform::Rigid2d& estimated_pose,
-    const sensor::PointCloud& point_cloud)
-{
-  PoseValidationResult result;
-  result.validated_pose = estimated_pose;
-  result.validation_score = 0.0;
-  result.is_valid = true;
-
-  // 检查是否启用位姿验证
-  if (!options_.enable_pose_validation()) {
-    return result;  // 验证功能未启用，直接通过
+double PoseEstimator2D::GetLocalizationConfidence() const {
+  if (consistency_checker_) {
+    return consistency_checker_->GetConfidence();
   }
-
-  // 从配置文件读取参数
-  const double kMinValidationScore = options_.pose_validation_min_score();
-  const double kMaxTranslationError = options_.pose_validation_max_translation_error();
-  const double kMaxRotationError = options_.pose_validation_max_rotation_error();
-
-  // ========== 第一步：在动态地图上验证位姿和得分 ==========
-  bool dynamic_map_valid = false;
-  bool has_dynamic_map = false;  // 标记动态地图是否可用
-  double dynamic_validation_score = 0.0;
-  transform::Rigid2d dynamic_validation_pose = estimated_pose;
-  double dynamic_translation_error = 0.0;
-  double dynamic_rotation_error = 0.0;
-  std::shared_ptr<const mapping::Submap2D> dynamic_submap = nullptr;
-
-  if (!active_submaps_.submaps().empty()) {
-    dynamic_submap = active_submaps_.submaps().front();
-    
-    if (dynamic_submap &&
-        dynamic_submap->grid() &&
-        dynamic_submap->num_range_data() > 0)
-    {
-      has_dynamic_map = true;
-      
-      // 在动态地图上进行correlative scan matching
-      dynamic_validation_score = real_time_correlative_scan_matcher_.Match(
-          estimated_pose, 
-          point_cloud, 
-          *dynamic_submap->grid(),
-          &dynamic_validation_pose);
-
-      // 计算位姿误差
-      dynamic_translation_error = 
-          (dynamic_validation_pose.translation() - estimated_pose.translation()).norm();
-      dynamic_rotation_error = 
-          std::abs(dynamic_validation_pose.rotation().angle() - estimated_pose.rotation().angle());
-
-      // 动态地图验证：同时检查得分和位姿误差
-      const bool dynamic_score_valid = dynamic_validation_score >= kMinValidationScore;
-      const bool dynamic_translation_valid = dynamic_translation_error <= kMaxTranslationError;
-      const bool dynamic_rotation_valid = dynamic_rotation_error <= kMaxRotationError;
-
-      dynamic_map_valid = dynamic_score_valid && dynamic_translation_valid && dynamic_rotation_valid;
-
-      // LOG(INFO) << "Dynamic map validation - Score: " << dynamic_validation_score
-      //           << ", Translation error: " << dynamic_translation_error << " m"
-      //           << ", Rotation error: " << dynamic_rotation_error << " rad"
-      //           << ", Valid: " << (dynamic_map_valid ? "YES" : "NO");
-    }
-  } else {
-    LOG(INFO) << "No active submaps available, will use static map only";
-  }
-
-  // ========== 第二步：在静态地图上验证得分 ==========
-  bool static_map_valid = false;
-  double static_validation_score = 0.0;
-  transform::Rigid2d static_validation_pose = estimated_pose;
-
-  auto local_static_map = local_map_updater_->local_grid_map();
-  if (local_static_map != nullptr) {
-    // 在静态地图上进行correlative scan matching
-    static_validation_score = real_time_correlative_scan_matcher_.Match(
-        estimated_pose, 
-        point_cloud, 
-        *local_static_map,
-        &static_validation_pose);
-
-    // 静态地图验证：仅检查得分
-    static_map_valid = static_validation_score >= kMinValidationScore;
-
-    // LOG(INFO) << "Static map validation - Score: " << static_validation_score
-    //           << ", Valid: " << (static_map_valid ? "YES" : "NO");
-  } else {
-    LOG(WARNING) << "Local static grid map not available for validation";
-  }
-
-  // ========== 综合判断 ==========
-  // 如果动态地图可用，需要同时通过动态地图和静态地图验证
-  // 如果动态地图不可用，只需要通过静态地图验证
-  if (has_dynamic_map) {
-    result.is_valid = dynamic_map_valid && static_map_valid;
-  } else {
-    result.is_valid = static_map_valid;
-  }
-  
-  // 优先使用动态地图的验证位姿和得分（因为动态地图更实时）
-  if (has_dynamic_map) {
-    result.validated_pose = dynamic_validation_pose;
-    result.validation_score = dynamic_validation_score;
-  } else {
-    result.validated_pose = static_validation_pose;
-    result.validation_score = static_validation_score;
-  }
-
-  // 记录验证信息
-  if (!result.is_valid) {
-    LOG(WARNING) << "Pose validation failed!";
-    
-    if (has_dynamic_map) {
-      LOG(WARNING) << "\n  === Dynamic Map Validation ==="
-                   << "\n    Score: " << dynamic_validation_score 
-                   << " (threshold: " << kMinValidationScore << ")"
-                   << "\n    Translation error: " << dynamic_translation_error << " m"
-                   << " (threshold: " << kMaxTranslationError << " m)"
-                   << "\n    Rotation error: " << dynamic_rotation_error << " rad"
-                   << " (threshold: " << kMaxRotationError << " rad)"
-                   << "\n    Valid: " << (dynamic_map_valid ? "YES" : "NO");
-    }
-    
-    LOG(WARNING) << "\n  === Static Map Validation ==="
-                 << "\n    Score: " << static_validation_score
-                 << " (threshold: " << kMinValidationScore << ")"
-                 << "\n    Valid: " << (static_map_valid ? "YES" : "NO")
-                 << "\n  === Poses ==="
-                 << "\n    Scan match pose: " << estimated_pose;
-    
-    if (has_dynamic_map) {
-      LOG(WARNING) << "    Dynamic validation pose: " << dynamic_validation_pose;
-    }
-    
-    LOG(WARNING) << "    Static validation pose: " << static_validation_pose;
-  }
-  
-  return result;
+  return 0.0;
 }
 
 /**
@@ -675,9 +524,8 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
         LOG(INFO) << "Local relocalization failed, trying global relocalization...";
         pose_initializer_->stop();
         
-        // 触发全局重定位
-        pose_initializer_->InitGlobalGridMap(global_grid_map_);
-        pose_initializer_->InitGlobalCloudMap(global_cloud_map_);
+        pose_initializer_->InitGlobalSubmap(global_static_submap_);
+
         pose_initializer_->TriggerGlobalRelocalization();
         pose_initializer_->start();
         
@@ -774,102 +622,78 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
   }
-  
-  const transform::Rigid3d pose_estimate =
-      transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
 
-  // 验证位姿估计质量，通过real time matcher在局部地图上匹配
-  PoseValidationResult validation_result = ValidatePoseEstimate(
-      *pose_estimate_2d, 
-      filtered_gravity_aligned_point_cloud);
+  // ========== 使用 ConsistencyChecker 进行多维度一致性检查 ==========
+  // 获取局部地图用于一致性检查
+  auto local_submap = local_map_updater_->local_submap();
+  if (!local_submap) {
+    LOG(ERROR) << "Local submap not available for consistency check";
+    return nullptr;
+  }
   
-  if (!validation_result.is_valid)
-  {
-    LOG(WARNING) << "Pose validation failed! Validation score: " 
-                 << validation_result.validation_score 
-                 << ", attempting recovery with global map...";
+  // 步骤1: 一致性检查
+  auto check_result = consistency_checker_->CheckPoseConsistency(
+      time,
+      pose_prediction,
+      *pose_estimate_2d,
+      filtered_gravity_aligned_point_cloud,
+      *local_submap);
+  
+  // 打印一致性检查结果
+  // LOG(INFO) << "Consistency Check Result:\n" << check_result.ToString();
+  
+  // 步骤2: 如果一致性检查失败，尝试验证和恢复
+  if (!check_result.is_consistent) {
+    LOG(WARNING) << "Pose consistency check failed, attempting validation and recovery...";
     
-    bool recovery_successful = false;
-    
-    // 尝试使用验证得到的位姿和全局地图进行恢复性匹配
-    transform::Rigid2d recovery_pose = validation_result.validated_pose;
-    const double recovery_score = real_time_correlative_scan_matcher_.Match(
-        validation_result.validated_pose,
+    // 步骤2a: 尝试验证位姿
+    bool validation_passed = consistency_checker_->ValidatePoseEstimate(
+        *pose_estimate_2d,
         filtered_gravity_aligned_point_cloud,
-        *global_grid_map_,
-        &recovery_pose);
+        *local_submap);
     
-    LOG(INFO) << "Recovery correlative matching score: " << recovery_score;
-    
-    // 如果恢复匹配分数足够高，尝试ceres优化
-    if (recovery_score > options_.pose_validation_min_score()) {
-      LOG(INFO) << "Recovery correlative match successful, performing ceres refinement...";
+    if (!validation_passed) {
+      LOG(WARNING) << "Pose validation also failed";
       
-      auto recovery_pose_refined = absl::make_unique<transform::Rigid2d>();
-      ceres::Solver::Summary recovery_summary;
-      
-      ceres_scan_matcher_.Match(
-          recovery_pose.translation(),
-          recovery_pose,
+      // 步骤2b: 验证失败，尝试从局部地图恢复
+      auto recovery_pose = consistency_checker_->RecoverFromLocalMap(
+          time,
+          *pose_estimate_2d,  // 使用当前估计位姿作为验证位姿
           filtered_gravity_aligned_point_cloud,
           merged_data.merged_highlight_cloud,
-          *global_grid_map_,
-          *local_map_updater_->local_cloud_map_ikdtree(),
-          *global_highlight_cloud_ikdtree_,
-          recovery_pose_refined.get(),
-          &recovery_summary);
+          local_submap);
       
-      // 检查恢复的位姿是否可用
-      if (recovery_summary.IsSolutionUsable() && 
-          recovery_summary.final_cost != -1 &&
-          !std::isinf(recovery_summary.final_cost) && 
-          !std::isnan(recovery_summary.final_cost))
-      {
-        LOG(WARNING) << "Recovery successful! Using recovered pose: " << *recovery_pose_refined;
-        
-        // 更新位姿为恢复后的位姿
-        pose_estimate_2d = std::move(recovery_pose_refined);
-        const transform::Rigid3d recovered_pose_estimate =
-            transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
-        local_pose_ = recovered_pose_estimate;
-        
-        // 清空active_submaps，使用恢复后的位姿重新开始
-        active_submaps_.clear();
-        
-        recovery_successful = true;
-        LOG(INFO) << "Cleared active submaps, continuing with recovered pose";
-      } else {
-        LOG(ERROR) << "Recovery ceres optimization failed (cost: " << recovery_summary.final_cost << ")";
-      }
-    } else {
-      LOG(ERROR) << "Recovery correlative match score too low: " << recovery_score;
-    }
-    
-    // 统一处理恢复失败的情况：触发重定位
-    if (!recovery_successful) {
-      LOG(WARNING) << "Recovery failed, triggering relocalization with validation pose...";
-      
-      const transform::Rigid3d relocalization_initial_pose = 
-          transform::Embed3D(validation_result.validated_pose);
-      
-      if (SetInitialPose(relocalization_initial_pose)) {
-        LOG(WARNING) << "Triggered relocalization with validation pose: " 
-                     << validation_result.validated_pose;
-        return nullptr;  // 等待重定位完成
-      } else {
-        LOG(ERROR) << "Failed to trigger relocalization! Localization lost.";
+      // 步骤2c: 如果恢复失败，返回错误
+      if (!recovery_pose) {
+        LOG(ERROR) << "All recovery attempts failed! Localization lost.";
         loc_state_ = LocalizationState::LOCALIZATION_FAILED;
         active_submaps_.clear();
         return nullptr;
       }
+      
+      // 恢复成功（已经过一致性检查），更新位姿
+      pose_estimate_2d = std::move(recovery_pose);
+      
+      LOG(INFO) << "Successfully recovered from localization failure!"
+                << "\n  Recovered pose: " << *pose_estimate_2d
+                << "\n  Cleared active submaps, restarting mapping";
+      
+      // 清空active_submaps重新开始
+      active_submaps_.clear();
+    } else {
+      // 验证成功，继续使用当前估计位姿
+      LOG(INFO) << "Pose validation successful, using estimated pose";
     }
   }
 
+  const transform::Rigid3d pose_estimate =
+      transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
   local_pose_ = pose_estimate;
 
   // 位姿估计成功后，更新用于计算delta pose的基准里程计数据
   UpdateLastOdomForDelta(time);
 
+  // ========== 更新机器人位姿到局部地图 ==========
   local_map_updater_->UpdateRobotPose(*pose_estimate_2d);
 
   sensor::RangeData range_data_in_local =
@@ -1014,7 +838,15 @@ PoseEstimator2D::InsertIntoSubmap(
                                   tracked_lines_in_local,
                                   merged_data.merged_reflector_data);
 
-  // 7. 返回插入结果
+  // 4. 将数据插入到global_dynamic_submap_，实现全局地图的增量更新
+  if (local_map_updater_) {
+    local_map_updater_->UpdateDynamicMap(all_range_data_to_insert,
+                                          cloud_in_local,
+                                          highlight_cloud_in_local,
+                                          tracked_lines_in_local);
+  }
+
+  // 5. 返回插入结果
   return absl::make_unique<InsertionResult>(InsertionResult{
       std::make_shared<const mapping::TrajectoryNode::Data>(mapping::TrajectoryNode::Data{
           time,

@@ -53,6 +53,11 @@ options = {
   -- [地图保存参数]
   mapping_occ_thresh = 0.6,
   mapping_free_thresh = 0.2,
+  -- [导航地图配置]
+  save_origin_map = false,  -- 是否保存原始地图（噪声剔除前）
+  navigation_map_filter_mode = "normal",  -- 滤波强度: "normal", "high", "super"
+  save_debug_map = false,  -- 是否保存调试图片（mask、连通域等中间结果）
+  save_map_pcd = false,  -- 是否保存地图点云（.pcd）
 
   publish_tracked_pose = true,
   save_tracked_pose = true,
@@ -65,7 +70,7 @@ MAP_BUILDER.use_trajectory_builder_2d = true
 
 TRAJECTORY_BUILDER_2D.data_preprocessor.min_range = 0.2
 TRAJECTORY_BUILDER_2D.data_preprocessor.max_range = 15.
-TRAJECTORY_BUILDER_2D.data_preprocessor.missing_data_ray_length = 5.
+TRAJECTORY_BUILDER_2D.data_preprocessor.missing_data_ray_length = 10.
 TRAJECTORY_BUILDER_2D.data_preprocessor.use_deskew = true
 TRAJECTORY_BUILDER_2D.data_preprocessor.enable_feature_detection = true
 

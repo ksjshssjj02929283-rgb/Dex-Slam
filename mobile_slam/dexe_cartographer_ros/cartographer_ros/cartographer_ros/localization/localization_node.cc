@@ -65,8 +65,8 @@
 
 #include "cartographer_ros/localization/localization_node.h"
 
-#include "file_manager.hpp"
-#include "pose_save_tool.hpp"
+#include "cartographer/utility/include/file_manager.hpp"
+#include "cartographer/utility/include/pose_save_tool.hpp"
 
 namespace cartographer_ros
 {
@@ -235,17 +235,17 @@ LocalizationNode::LocalizationNode(
       100ms, std::bind(&LocalizationNode::PublishLocalizationState, this));
 
   // TODO: linfeng.guo 按需保存跟踪位姿
-  if (node_options_.save_tracked_pose) {
-    if (!boost::filesystem::is_directory(node_options_.tracked_pose_directory)) {
-      dcm::utility::FileManager::InitDirectory(
-          node_options_.tracked_pose_directory, "tracked_pose of cartographer");
-    }
-    std::string file_path =
-        node_options_.tracked_pose_directory + node_options_.tracked_pose_filename;
-    dcm::utility::FileManager::RemoveFile(file_path);
-    carto_pose_tool_ = std::make_shared<dcm::utility::PoseSaveTool>(
-        file_path, node_options_.tracked_pose_format);
-  }
+  // if (node_options_.save_tracked_pose) {
+  //   if (!boost::filesystem::is_directory(node_options_.tracked_pose_directory)) {
+  //     cartographer::utility::FileManager::InitDirectory(
+  //         node_options_.tracked_pose_directory, "tracked_pose of cartographer");
+  //   }
+  //   std::string file_path =
+  //       node_options_.tracked_pose_directory + node_options_.tracked_pose_filename;
+  //   cartographer::utility::FileManager::RemoveFile(file_path);
+  //   carto_pose_tool_ = std::make_shared<cartographer::utility::PoseSaveTool>(
+  //       file_path, node_options_.tracked_pose_format);
+  // }
 }
 
 // 这里后续放service
@@ -592,8 +592,11 @@ void LocalizationNode::PublishLocalTrajectoryData()
 bool LocalizationNode::SaveMap(
   const std::string & map_filename, const double resolution)
 {
-  return false;
-  // return localization_updater_bridge_.SaveMap(map_filename, resolution);
+  absl::MutexLock lock(&localization_updater_mutex_);
+  return localization_updater_bridge_.SaveMap(
+      map_filename,
+      static_cast<float>(node_options_.mapping_occ_thresh),
+      static_cast<float>(node_options_.mapping_free_thresh));
 }
 
 
@@ -1348,13 +1351,6 @@ void LocalizationNode::LoadState(const std::string& state_filename,
 {
   absl::MutexLock lock(&localization_updater_mutex_);
   localization_updater_bridge_.LoadState(state_filename, load_frozen_state);
-}
-
-
-void LocalizationNode::LoadMapData(const std::string& map_filename)
-{
-  absl::MutexLock lock(&localization_updater_mutex_);
-  localization_updater_bridge_.LoadMapData(map_filename);
 }
 
 

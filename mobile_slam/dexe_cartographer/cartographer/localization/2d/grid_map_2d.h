@@ -32,6 +32,15 @@ class GridMap2D : public mapping::ProbabilityGrid
 public:
   GridMap2D(
     const mapping::MapLimits & limits);
+  
+  // 从ProbabilityGrid拷贝构造（直接复制grid数据，避免Proto序列化开销）
+  GridMap2D(const mapping::ProbabilityGrid& source_grid);
+  
+  // 从Proto构造，用于完整复制grid数据
+  GridMap2D(
+    const mapping::proto::Grid2D& proto,
+    mapping::ValueConversionTables* conversion_tables);
+  
   ~GridMap2D();
 
   static mapping::ValueConversionTables conversion_tables_;

@@ -18,6 +18,7 @@
 #include "cartographer_ros/options/localization_node_options.h"
 
 #include <errno.h>
+#include <cstdlib>
 #include <string>
 #ifndef WIN32
 #include <sys/resource.h>
@@ -154,8 +155,8 @@ void RunLocOfflineNode(const LocalizationUpdaterFactory& localization_updater_fa
   if (pos != std::string::npos) {
     map_yaml_path.replace(pos, std::string("/map.pbstream").length(), "/map.yaml");
   }
-  LOG(INFO) << "Loading map data from: " << map_yaml_path;
-  node.LoadMapData(map_yaml_path);
+  // LOG(INFO) << "Loading map data from: " << map_yaml_path;
+  // node.LoadMapData(map_yaml_path);
   
   rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_publisher =
       loc_offline_node->create_publisher<tf2_msgs::msg::TFMessage>(
@@ -368,6 +369,43 @@ void RunLocOfflineNode(const LocalizationUpdaterFactory& localization_updater_fa
         clock_publisher->publish(clock);
       });
   
+  // 保存 pbstream 和地图图像
+  // 注意：必须在 FinishAllTrajectories 之前调用，以确保 PoseEstimator 数据仍然可用
+  if (!FLAGS_map_filestream.empty()) {
+    // 1. 保存 pbstream（保留定位轨迹和动态地图更新）
+    LOG(INFO) << "=== Saving updated pbstream ===";
+    try {
+      node.SerializeState(FLAGS_map_filestream, true /* include_unfinished_submaps */);
+      LOG(INFO) << "Successfully saved updated pbstream to: " << FLAGS_map_filestream;
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to save pbstream: " << e.what();
+    }
+
+    // 2. 保存地图图像（map.png + map.yaml）
+    // 从 pbstream 路径推导出地图文件前缀
+    // 例如：/path/to/map.pbstream → /path/to/map
+    std::string map_fileprefix = FLAGS_map_filestream;
+    const std::string pbstream_suffix = ".pbstream";
+    if (map_fileprefix.size() > pbstream_suffix.size() &&
+        map_fileprefix.substr(map_fileprefix.size() - pbstream_suffix.size()) == pbstream_suffix) {
+      map_fileprefix = map_fileprefix.substr(0, map_fileprefix.size() - pbstream_suffix.size());
+    }
+    LOG(INFO) << "=== Saving map image to: " << map_fileprefix << ".png ===";
+    try {
+      bool save_map_success = node.SaveMap(map_fileprefix, 0.05 /* resolution, unused in localization mode */);
+      if (save_map_success) {
+        LOG(INFO) << "Successfully saved map image: " << map_fileprefix << ".png/.yaml";
+      } else {
+        LOG(WARNING) << "SaveMap returned false for " << map_fileprefix
+                     << " (global submap may not be available in this localization mode)";
+      }
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to save map image: " << e.what();
+    }
+  } else {
+    LOG(WARNING) << "map_filestream not specified, skipping pbstream/png save";
+  }
+
   node.FinishAllTrajectories();
   
   const std::chrono::time_point<std::chrono::steady_clock> end_time =

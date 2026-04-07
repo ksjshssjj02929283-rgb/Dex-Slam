@@ -16,7 +16,8 @@
 
 #include "cartographer_ros/localization/localization_updater_bridge.h"
 #include <fstream>
-#include <filesystem>
+
+#include <opencv2/highgui.hpp>
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_types.h>
@@ -25,12 +26,18 @@
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 #include "cartographer/io/color.h"
+#include "cartographer/io/image.h"
+#include "cartographer/io/file_writer.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
+#include "cartographer/mapping/probability_values.h"
+#include "cartographer/localization/2d/local_map_updater_2d.h"
+#include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer_ros/conversion/msg_conversion.h"
 #include "cartographer_ros/conversion/time_conversion.h"
@@ -144,35 +151,6 @@ void LocalizationUpdaterBridge::LoadState(const std::string& state_filename,
   localization_updater_->LoadState(&stream, load_frozen_state);
 }
 
-void LocalizationUpdaterBridge::LoadMapData(const std::string& map_filename)
-{
-  carto::localization::MapDataInfo map_data_info;
-  map_loader_.LoadMapDataInfo(map_filename, map_data_info);
-
-  std::shared_ptr<carto::localization::GridMap2D> grid_map;
-  map_loader_.LoadGridMap(map_data_info, grid_map);
-
-  std::shared_ptr<carto::sensor::LineMapData> line_map;
-  map_loader_.LoadLaneLineMap(map_data_info.line_filename, line_map);
-
-  std::shared_ptr<carto::localization::CloudMap2D> cloud_map;
-  map_loader_.LoadCloudMap(map_data_info.cloud_filename, cloud_map);
-
-  std::shared_ptr<carto::localization::CloudMap2D> highlight_cloud_map;
-  if (!map_data_info.highlight_cloud_filename.empty()) {
-    if (std::filesystem::exists(map_data_info.highlight_cloud_filename)) {
-      map_loader_.LoadCloudMap(map_data_info.highlight_cloud_filename, highlight_cloud_map);
-    } else {
-      LOG(WARNING) << "Highlight cloud file does not exist: " << map_data_info.highlight_cloud_filename;
-    }
-  }
-
-  localization_updater_->InitGlobalGridMap(grid_map);
-  localization_updater_->InitGlobalLineMap(line_map);
-  localization_updater_->InitGlobalCloudMap(cloud_map, highlight_cloud_map);
-}
-
-
 bool LocalizationUpdaterBridge::SetInitialPose(const carto::transform::Rigid3d &initial_pose)
 {
   return localization_updater_->SetInitialPose(initial_pose);
@@ -246,42 +224,6 @@ void LocalizationUpdaterBridge::FinishTrajectory(const int trajectory_id)
   sensor_bridges_.erase(trajectory_id);
 }
 
-
-// bool LocalizationUpdaterBridge::SaveCloudMap(
-//   const std::string& map_filename, const double resolution)
-// {
-//   // 1. 先获取node信息
-//   cartographer::mapping::MapById<
-//     cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
-//   nodes = localization_updater_->pose_graph()->GetTrajectoryNodes();
-//   // 2. 将点云转换到global坐标系下
-//   cartographer::sensor::PointCloud cloud_map;
-//   for (const auto& node : nodes) {
-//     // LOG(ERROR) << "node id: " << node.id << " pose global_pose: " << node.data.global_pose;
-
-//     auto transformed_cloud = cartographer::sensor::TransformPointCloud(
-//                                 node.data.constant_data->filtered_gravity_aligned_point_cloud,
-//                                 node.data.global_pose.cast<float>());
-//     cloud_map.InsertCloud(transformed_cloud);
-//   }
-//   auto poses = 
-//       localization_updater_->pose_graph()->GetTrajectoryNodePoses();
-
-//   cartographer::sensor::PointCloud filtered_cloud_map;
-//   filtered_cloud_map = cartographer::sensor::VoxelFilter(cloud_map, resolution );
-//   // 3. 保存点云
-//   pcl::PointCloud<pcl::PointXYZ> pcl_cloud_map;
-//   for (const auto& point : filtered_cloud_map.points()) {
-//     pcl_cloud_map.push_back(
-//       pcl::PointXYZ(point.position.x(), point.position.y(), point.position.z()));
-//   }
-//   std::string pcd_filename = map_filename + ".pcd";
-//   pcl::io::savePCDFileBinary(pcd_filename, pcl_cloud_map);
-//   // LOG(ERROR) << filtered_cloud_map.size();
-//   return true;
-// }
-
-
 /**
  * @brief 获取指定id的submap的texture（内容信息）
  * 
@@ -317,6 +259,361 @@ LocalizationUpdaterBridge::FetchSubmapTextures(
 bool LocalizationUpdaterBridge::SerializeState(const std::string& filename,
                                                const bool include_unfinished_submaps) {
   return localization_updater_->SerializeStateToFile(include_unfinished_submaps, filename);
+}
+
+bool LocalizationUpdaterBridge::SaveMap(const std::string& map_filename,
+                                        const float occ_thresh,
+                                        const float free_thresh,
+                                        bool is_from_pose_graph) {
+  LOG(INFO) << "LocalizationUpdaterBridge::SaveMap - saving to: " << map_filename
+            << " (source: " << (is_from_pose_graph ? "pose_graph" : "global_submap") << ")";
+
+  if (is_from_pose_graph) {
+    return SaveMapFromPoseGraph(map_filename, occ_thresh, free_thresh);
+  } else {
+    return SaveMapFromGlobalSubmap(map_filename, occ_thresh, free_thresh);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: save submap cloud data to PCD files
+// ---------------------------------------------------------------------------
+static void SaveSubmapCloudToPcd(
+    const std::string& map_filename,
+    const std::shared_ptr<cartographer::mapping::Submap2D>& submap,
+    const double resolution) {
+  const auto& cloud_ptr = submap->cloud();
+  if (cloud_ptr && !cloud_ptr->empty()) {
+    const cartographer::sensor::PointCloud filtered_cloud =
+        cartographer::sensor::VoxelFilter(*cloud_ptr, resolution);
+    const auto& pts = filtered_cloud.points();
+    pcl::PointCloud<pcl::PointXYZ> pcl_cloud;
+    pcl_cloud.resize(pts.size());
+    for (size_t i = 0; i < pts.size(); ++i) {
+      pcl_cloud.points[i].x = pts[i].position.x();
+      pcl_cloud.points[i].y = pts[i].position.y();
+      pcl_cloud.points[i].z = pts[i].position.z();
+    }
+    const std::string pcd_file = map_filename + ".pcd";
+    pcl::io::savePCDFileBinary(pcd_file, pcl_cloud);
+    LOG(INFO) << "SaveSubmapCloudToPcd: cloud saved to " << pcd_file
+              << " (" << pts.size() << " points)";
+  } else {
+    LOG(WARNING) << "SaveSubmapCloudToPcd: cloud map is empty, skipping PCD save";
+  }
+
+  const auto& highlight_ptr = submap->highlight_cloud();
+  if (highlight_ptr && !highlight_ptr->empty()) {
+    const cartographer::sensor::PointCloud filtered_highlight =
+        cartographer::sensor::VoxelFilter(*highlight_ptr, resolution);
+    const auto& hpts = filtered_highlight.points();
+    pcl::PointCloud<pcl::PointXYZ> pcl_highlight;
+    pcl_highlight.resize(hpts.size());
+    for (size_t i = 0; i < hpts.size(); ++i) {
+      pcl_highlight.points[i].x = hpts[i].position.x();
+      pcl_highlight.points[i].y = hpts[i].position.y();
+      pcl_highlight.points[i].z = hpts[i].position.z();
+    }
+    const std::string highlight_pcd_file = map_filename + "_highlight.pcd";
+    pcl::io::savePCDFileBinary(highlight_pcd_file, pcl_highlight);
+    LOG(INFO) << "SaveSubmapCloudToPcd: highlight cloud saved to " << highlight_pcd_file
+              << " (" << hpts.size() << " points)";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: render a Submap2D (with cropped limits) into PNG + YAML
+// ---------------------------------------------------------------------------
+static bool RenderSubmapToFiles(
+    const std::string& map_filename,
+    const std::shared_ptr<cartographer::mapping::Submap2D>& submap,
+    const float occ_thresh,
+    const float free_thresh,
+    const bool save_origin_map,
+    const std::string& navigation_map_filter_mode,
+    const bool save_debug_map,
+    const bool save_map_pcd) {
+  const cartographer::mapping::Grid2D* grid = submap->grid();
+  if (!grid) {
+    LOG(ERROR) << "RenderSubmapToFiles: Grid is null";
+    return false;
+  }
+
+  const cartographer::mapping::ProbabilityGrid* probability_grid =
+      static_cast<const cartographer::mapping::ProbabilityGrid*>(grid);
+
+  // 裁剪空白边缘
+  Eigen::Array2i offset;
+  cartographer::mapping::CellLimits cropped_cell_limits;
+  probability_grid->ComputeCroppedLimits(&offset, &cropped_cell_limits);
+
+  const cartographer::mapping::MapLimits& limits = probability_grid->limits();
+  const double resolution = limits.resolution();
+  const int width = cropped_cell_limits.num_x_cells;
+  const int height = cropped_cell_limits.num_y_cells;
+
+  LOG(INFO) << "RenderSubmapToFiles: cropped grid " << width << "x" << height
+            << " (original " << limits.cell_limits().num_x_cells << "x"
+            << limits.cell_limits().num_y_cells << ")"
+            << ", resolution=" << resolution;
+
+  std::vector<char> intensity_data;
+  std::vector<char> alpha_data;
+  intensity_data.reserve(width * height);
+  alpha_data.reserve(width * height);
+
+  for (int i = 0; i < height; ++i) {
+    for (int j = 0; j < width; ++j) {
+      const Eigen::Array2i cell_index(j + offset.x(), i + offset.y());
+      if (!probability_grid->IsKnown(cell_index)) {
+        intensity_data.push_back(0);
+        alpha_data.push_back(0);
+      } else {
+        const float probability = probability_grid->GetProbability(cell_index);
+        const int log_odds_integer =
+            ::cartographer::mapping::ProbabilityToLogOddsInteger(probability);
+        const int delta = 128 - log_odds_integer;
+        const uint8_t alpha_value = delta > 0 ? 0 : static_cast<uint8_t>(-delta);
+        const uint8_t value = delta > 0 ? static_cast<uint8_t>(delta) : 0;
+        intensity_data.push_back(static_cast<char>(value));
+        alpha_data.push_back(static_cast<char>((value || alpha_value) ? alpha_value : 1));
+      }
+    }
+  }
+
+  const double max_x = limits.max().x() - resolution * offset.y();
+  const double max_y = limits.max().y() - resolution * offset.x();
+  const auto local_pose = submap->local_pose();
+  const auto slice_pose = local_pose.inverse() *
+      cartographer::transform::Rigid3d::Translation(Eigen::Vector3d(max_x, max_y, 0.));
+
+  std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice> submap_slices;
+  const ::cartographer::mapping::SubmapId virtual_id{0, 0};
+  ::cartographer::io::SubmapSlice& submap_slice = submap_slices[virtual_id];
+  submap_slice.pose = local_pose;
+  submap_slice.width = width;
+  submap_slice.height = height;
+  submap_slice.resolution = resolution;
+  submap_slice.slice_pose = slice_pose;
+  submap_slice.cairo_data.clear();
+  submap_slice.surface = cartographer::io::DrawTexture(
+      intensity_data, alpha_data, width, height, &submap_slice.cairo_data);
+
+  auto result = ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
+  ::cartographer::io::Image image(std::move(result.surface));
+
+  const Eigen::Vector2d map_origin(
+      -result.origin.x() * resolution,
+      (result.origin.y() - image.height()) * resolution);
+
+  // 提取地图目录路径
+  std::string map_dir;
+  const size_t last_slash = map_filename.find_last_of("/");
+  map_dir = (last_slash != std::string::npos) ?
+      map_filename.substr(0, last_slash + 1) : "./";
+
+  // 1. 内存生成原始地图的 cv::Mat（不写入磁盘）
+  cv::Mat origin_mat = ::cartographer_ros::GeneratePngMat(image, occ_thresh, free_thresh);
+
+  // 2. 生成 navigation map 作为默认输出 map.png
+  WriteNavigationMap(origin_mat,
+                     map_filename + ".png",
+                     navigation_map_filter_mode,
+                     save_debug_map,
+                     map_dir);
+
+  // 3. 写入 map.yaml（引用 navigation map = map.png）
+  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
+  WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh, free_thresh);
+
+  LOG(INFO) << "RenderSubmapToFiles: saved " << map_filename << ".png/.yaml (navigation map)"
+            << " (" << image.width() << "x" << image.height() << " pixels)";
+
+  // 4. 只有需要保存原始地图时，才将 origin_mat 写入磁盘
+  if (save_origin_map) {
+    const std::string origin_png = map_filename + "_origin.png";
+    cv::imwrite(origin_png, origin_mat);
+    LOG(INFO) << "RenderSubmapToFiles: origin map saved to " << origin_png;
+  }
+
+  // 5. 若需要保存点云，将 submap 的点云数据写入 PCD 文件
+  if (save_map_pcd) {
+    SaveSubmapCloudToPcd(map_filename, submap, resolution);
+  }
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Path A: generate map from the current global submap (original logic)
+// ---------------------------------------------------------------------------
+bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
+    const std::string& map_filename,
+    const float occ_thresh,
+    const float free_thresh) {
+  auto* pose_estimator = localization_updater_->GetPoseEstimator2D();
+  if (!pose_estimator) {
+    LOG(ERROR) << "SaveMapFromGlobalSubmap: PoseEstimator2D is null";
+    return false;
+  }
+
+  auto* local_map_updater = pose_estimator->GetLocalMapUpdater();
+  std::shared_ptr<cartographer::mapping::Submap2D> submap;
+  if (local_map_updater) {
+    submap = local_map_updater->GetGlobalSubmap();
+  }
+  if (!submap) {
+    submap = pose_estimator->GetGlobalStaticSubmap();
+    if (!submap) {
+      LOG(ERROR) << "SaveMapFromGlobalSubmap: Global submap is null";
+      return false;
+    }
+  }
+
+  return RenderSubmapToFiles(map_filename, submap, occ_thresh, free_thresh,
+                             node_options_.save_origin_map,
+                             node_options_.navigation_map_filter_mode,
+                             node_options_.save_debug_map,
+                             node_options_.save_map_pcd);
+}
+
+// ---------------------------------------------------------------------------
+// Path B: rebuild map from all pose graph trajectory nodes (like MapBuilderBridge)
+// ---------------------------------------------------------------------------
+bool LocalizationUpdaterBridge::SaveMapFromPoseGraph(
+    const std::string& map_filename,
+    const float occ_thresh,
+    const float free_thresh) {
+  // 1. 获取所有轨迹节点
+  const auto nodes =
+      localization_updater_->pose_graph()->GetTrajectoryNodes();
+  if (nodes.empty()) {
+    LOG(WARNING) << "SaveMapFromPoseGraph: No trajectory nodes found";
+    return false;
+  }
+  LOG(INFO) << "SaveMapFromPoseGraph: " << nodes.size() << " trajectory nodes";
+
+  // 2. 获取配置参数（使用第一条轨迹的参数）
+  const auto& all_options = localization_updater_->GetAllTrajectoryBuilderOptions();
+  if (all_options.empty()) {
+    LOG(ERROR) << "SaveMapFromPoseGraph: No trajectory builder options available";
+    return false;
+  }
+  const auto& traj_options =
+      all_options.front().trajectory_builder_options();
+  const auto& submaps_options =
+      traj_options.trajectory_builder_2d_options().submaps_options();
+  const auto& rdi_options =
+      submaps_options.range_data_inserter_options();
+  const auto& line_matcher_options =
+      traj_options.trajectory_builder_2d_options().line_matcher_options();
+
+  // 3. 确定分辨率和原点
+  constexpr double kDefaultResolution = 0.05;
+  const double resolution = kDefaultResolution;
+  const Eigen::Vector2f origin =
+      nodes.begin()->data.global_pose.translation().head<2>().cast<float>();
+
+  // 4. 创建大尺寸 ProbabilityGrid
+  cartographer::mapping::ValueConversionTables conversion_tables;
+  constexpr int kLargeSubmapSize = 2000;
+  auto final_submap = std::make_shared<cartographer::mapping::Submap2D>(
+      origin,
+      std::unique_ptr<cartographer::mapping::Grid2D>(
+          static_cast<cartographer::mapping::Grid2D*>(
+              absl::make_unique<cartographer::mapping::ProbabilityGrid>(
+                  cartographer::mapping::MapLimits(
+                      resolution,
+                      origin.cast<double>(),
+                      cartographer::mapping::CellLimits(kLargeSubmapSize, kLargeSubmapSize)),
+                  &conversion_tables)
+                  .release())),
+      &conversion_tables,
+      std::make_unique<cartographer::sensor::PointCloud>(),
+      std::make_unique<cartographer::sensor::PointCloud>(),
+      0, std::map<int, cartographer::mapping::MapLine2D>{});
+
+  final_submap->SetCloudCullingProb(submaps_options.cloud_culling_prob());
+  final_submap->SetLineCullingParam(
+      submaps_options.min_line_length(),
+      submaps_options.max_line_length(),
+      submaps_options.line_culling_obs());
+
+  // 5. 配置 range data 插入器
+  ::cartographer::mapping::proto::ProbabilityGridRangeDataInserterOptions2D pg_options;
+  if (rdi_options.range_data_inserter_type() ==
+      ::cartographer::mapping::proto::RangeDataInserterOptions::
+          PROBABILITY_GRID_INSERTER_2D) {
+    const auto& p = rdi_options.probability_grid_range_data_inserter_options_2d();
+    pg_options.set_hit_probability(p.hit_probability());
+    pg_options.set_miss_probability(p.miss_probability());
+    pg_options.set_insert_free_space(p.insert_free_space());
+  } else {
+    pg_options.set_hit_probability(0.65);
+    pg_options.set_miss_probability(0.48);
+    pg_options.set_insert_free_space(true);
+  }
+  auto range_data_inserter =
+      absl::make_unique<cartographer::mapping::ProbabilityGridRangeDataInserter2D>(pg_options);
+
+  // 6. 创建 LineMatcher
+  auto line_matcher =
+      std::make_unique<cartographer::mapping::scan_matching::LineMatcher2D>(line_matcher_options);
+
+  // 7. 逐节点插入数据
+  for (const auto& node : nodes) {
+    // range data → probability grid
+    for (const auto& range_data : node.data.constant_data->range_datas) {
+      cartographer::sensor::RangeData global_range_data;
+      global_range_data.origin =
+          (node.data.global_pose * range_data.origin.cast<double>()).cast<float>();
+      global_range_data.returns = cartographer::sensor::TransformPointCloud(
+          range_data.returns, node.data.global_pose.cast<float>());
+      global_range_data.misses = cartographer::sensor::TransformPointCloud(
+          range_data.misses, node.data.global_pose.cast<float>());
+      final_submap->InsertRangeData(global_range_data, range_data_inserter.get());
+    }
+
+    // 点云
+    final_submap->InsertCloudData(
+        cartographer::sensor::TransformPointCloud(
+            node.data.constant_data->filtered_gravity_aligned_point_cloud,
+            node.data.global_pose.cast<float>()),
+        cartographer::sensor::TransformPointCloud(
+            node.data.constant_data->highlight_point_cloud,
+            node.data.global_pose.cast<float>()));
+
+    // 线特征
+    const auto& lines = node.data.constant_data->lines;
+    if (!lines.empty()) {
+      const cartographer::transform::Rigid2d global_pose_2d =
+          cartographer::transform::Project2D(node.data.global_pose);
+      std::map<int, std::vector<cartographer::sensor::LineData>> tracked_lines;
+      line_matcher->TrackLineFromMap(global_pose_2d, lines,
+                                     *final_submap->line_map_2d_list(),
+                                     tracked_lines);
+      std::map<int, std::vector<cartographer::sensor::LineData>> global_lines;
+      for (const auto& cat : tracked_lines) {
+        for (const auto& line : cat.second) {
+          global_lines[cat.first].push_back(
+              cartographer::sensor::TransformLineData(global_pose_2d, line));
+        }
+      }
+      if (!global_lines.empty()) {
+        final_submap->InsertLineData(global_lines);
+      }
+    }
+  }
+
+  final_submap->Finish();
+  LOG(INFO) << "SaveMapFromPoseGraph: submap built with "
+            << final_submap->line_map_2d_list()->size() << " line features";
+
+  return RenderSubmapToFiles(map_filename, final_submap, occ_thresh, free_thresh,
+                             node_options_.save_origin_map,
+                             node_options_.navigation_map_filter_mode,
+                             node_options_.save_debug_map,
+                             node_options_.save_map_pcd);
 }
 
 /**

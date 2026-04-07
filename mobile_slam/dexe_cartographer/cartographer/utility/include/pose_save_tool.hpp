@@ -1,4 +1,4 @@
-// Copyright (c) 2021 dcm360 Inc
+// Copyright (c) 2026 dexforce Inc
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@
 #include "file_manager.hpp"
 #include "converter.hpp"
 
-namespace dcm
+namespace cartographer
 {
 
 namespace utility
@@ -83,6 +83,6 @@ private:
 
 }  // namespace utility
 
-}  // namespace dcm
+}  // namespace cartographer
 
 #endif  // POSE_SAVE_TOOL_HPP_

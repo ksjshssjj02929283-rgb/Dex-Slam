@@ -1,12 +1,4 @@
 /*
- * @Author: Buddy_X guo_linfeng@foxmail.com
- * @Date: 2023-05-19 17:50:12
- * @LastEditors: Buddy_X guo_linfeng@foxmail.com
- * @LastEditTime: 2023-05-26 18:46:35
- * @FilePath: /0_dcm_ws/src/cartographer_ros/cartographer_ros/options/mapping_node_options.h
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
- */
-/*
  * Copyright 2016 The Cartographer Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,6 +51,12 @@ struct LocalizationNodeOptions {
 
   float mapping_occ_thresh = 0.65;
   float mapping_free_thresh = 0.196;
+
+  // Navigation map options
+  bool save_origin_map = false;           // save original (pre-filter) map as *_origin.png
+  std::string navigation_map_filter_mode = "normal";  // "normal", "high", "super"
+  bool save_debug_map = false;
+  bool save_map_pcd = false;              // save map point cloud as *.pcd
 };
 
 LocalizationNodeOptions CreateLocalizationNodeOptions(

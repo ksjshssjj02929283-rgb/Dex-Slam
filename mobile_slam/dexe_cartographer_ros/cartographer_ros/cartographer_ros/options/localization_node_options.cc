@@ -1,12 +1,4 @@
 /*
- * @Author: Buddy_X guo_linfeng@foxmail.com
- * @Date: 2023-05-19 17:50:12
- * @LastEditors: Buddy_X guo_linfeng@foxmail.com
- * @LastEditTime: 2023-05-26 16:13:46
- * @FilePath: /0_dcm_ws/src/cartographer_ros/cartographer_ros/node_options.cc
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
- */
-/*
  * Copyright 2016 The Cartographer Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -78,6 +70,19 @@ LocalizationNodeOptions CreateLocalizationNodeOptions(
   }
   if (lua_parameter_dictionary->HasKey("mapping_free_thresh")) {
     options.mapping_free_thresh = lua_parameter_dictionary->GetDouble("mapping_free_thresh");
+  }
+
+  if (lua_parameter_dictionary->HasKey("save_origin_map")) {
+    options.save_origin_map = lua_parameter_dictionary->GetBool("save_origin_map");
+  }
+  if (lua_parameter_dictionary->HasKey("navigation_map_filter_mode")) {
+    options.navigation_map_filter_mode = lua_parameter_dictionary->GetString("navigation_map_filter_mode");
+  }
+  if (lua_parameter_dictionary->HasKey("save_debug_map")) {
+    options.save_debug_map = lua_parameter_dictionary->GetBool("save_debug_map");
+  }
+  if (lua_parameter_dictionary->HasKey("save_map_pcd")) {
+    options.save_map_pcd = lua_parameter_dictionary->GetBool("save_map_pcd");
   }
 
   return options;

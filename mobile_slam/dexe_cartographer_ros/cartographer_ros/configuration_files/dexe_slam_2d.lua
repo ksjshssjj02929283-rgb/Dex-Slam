@@ -1,11 +1,3 @@
---[[
-Author: Buddy_X guo_linfeng@foxmail.com
-Date: 2023-05-19 17:50:12
-LastEditors: Buddy_X guo_linfeng@foxmail.com
-LastEditTime: 2023-06-02 15:46:12
-FilePath: /0_dcm_ws/src/cartographer_ros/configuration_files/dcm_slam_2d.lua
-Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
---]]
 -- Copyright 2016 The Cartographer Authors
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +45,11 @@ options = {
   -- [地图保存参数]
   mapping_occ_thresh = 0.6,
   mapping_free_thresh = 0.2,
+  -- [导航地图配置]
+  save_origin_map = false,  -- 是否保存原始地图（噪声剔除前）
+  navigation_map_filter_mode = "normal",  -- 滤波强度: "normal", "high", "super"
+  save_debug_map = false,  -- 是否保存调试图片（mask、连通域等中间结果）
+  save_map_pcd = false,  -- 是否保存地图点云（.pcd）
 
   publish_tracked_pose = true,
   save_tracked_pose = false,

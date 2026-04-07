@@ -1,0 +1,67 @@
+# Copyright 2026 dexforce Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "converter",
+    srcs = ["src/converter.cc"],
+    hdrs = ["include/converter.hpp"],
+    includes = ["include"],
+    deps = [
+        "@com_google_absl//absl/strings",
+        "@eigen",
+    ],
+)
+
+cc_library(
+    name = "file_manager",
+    srcs = ["src/file_manager.cc"],
+    hdrs = ["include/file_manager.hpp"],
+    includes = ["include"],
+    deps = [
+        "@boost//:filesystem",
+        "@boost//:system",
+        "@com_github_google_glog//:glog",
+    ],
+)
+
+cc_library(
+    name = "pose_save_tool",
+    srcs = ["src/pose_save_tool.cc"],
+    hdrs = ["include/pose_save_tool.hpp"],
+    includes = ["include"],
+    deps = [
+        ":converter",
+        ":file_manager",
+        "@com_github_google_glog//:glog",
+        "@eigen",
+    ],
+)
+
+cc_library(
+    name = "tic_toc",
+    hdrs = ["include/tic_toc.h"],
+    includes = ["include"],
+)
+
+cc_library(
+    name = "utility",
+    deps = [
+        ":converter",
+        ":file_manager",
+        ":pose_save_tool",
+        ":tic_toc",
+    ],
+)

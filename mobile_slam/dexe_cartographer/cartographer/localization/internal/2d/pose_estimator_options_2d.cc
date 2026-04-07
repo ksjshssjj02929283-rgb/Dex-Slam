@@ -27,6 +27,7 @@
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer/localization/internal/2d/pose_initializer_options_2d.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
+#include "cartographer/localization/internal/2d/consistency_checker_options.h"
 
 namespace cartographer {
 namespace localization {
@@ -86,15 +87,10 @@ proto::PoseEstimatorOptions2D CreatePoseEstimatorOptions2D(
   options.set_auto_trigger_global_relocalization(
     parameter_dictionary->GetBool("auto_trigger_global_relocalization"));
   
-  // 读取位姿验证参数
-  options.set_enable_pose_validation(
-    parameter_dictionary->GetBool("enable_pose_validation"));
-  options.set_pose_validation_min_score(
-    parameter_dictionary->GetDouble("pose_validation_min_score"));
-  options.set_pose_validation_max_translation_error(
-    parameter_dictionary->GetDouble("pose_validation_max_translation_error"));
-  options.set_pose_validation_max_rotation_error(
-    parameter_dictionary->GetDouble("pose_validation_max_rotation_error"));
+  // 读取一致性检查器参数
+  *options.mutable_consistency_checker_options() =
+    CreateConsistencyCheckerOptions(
+      parameter_dictionary->GetDictionary("consistency_checker").get());
   
   return options;
 }

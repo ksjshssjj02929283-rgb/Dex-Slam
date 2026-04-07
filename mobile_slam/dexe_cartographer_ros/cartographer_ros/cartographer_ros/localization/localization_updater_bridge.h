@@ -99,8 +99,6 @@ class LocalizationUpdaterBridge {
   // 状态/地图加载与控制
   void LoadState(const std::string& state_filename, bool load_frozen_state);
 
-  void LoadMapData(const std::string& map_filename);
-
   bool SetInitialPose(const ::cartographer::transform::Rigid3d& initial_pose);
 
   std::optional<::cartographer::localization::LocalizationState> GetLocalizationState() const;
@@ -111,6 +109,15 @@ class LocalizationUpdaterBridge {
   void FinishTrajectory(int trajectory_id);
   bool SerializeState(const std::string& filename,
                       const bool include_unfinished_submaps);
+
+  // 保存地图（map.png + map.yaml）
+  // map_filename 为不含后缀的路径前缀，例如 "/path/to/map"
+  // is_from_pose_graph = true : 从 pose graph 所有轨迹节点重建地图（类似建图时的 SaveMap）
+  // is_from_pose_graph = false: 从当前全局 submap（global_dynamic_submap 或 global_static_submap）生成
+  bool SaveMap(const std::string& map_filename,
+               const float occ_thresh,
+               const float free_thresh,
+               bool is_from_pose_graph = false);
 
   std::unique_ptr<::cartographer::io::SubmapTextures>
   FetchSubmapTextures(
@@ -161,6 +168,14 @@ class LocalizationUpdaterBridge {
       std::map<int, std::vector<::cartographer::sensor::LineData>> line_data_in_local,
       std::shared_ptr<::cartographer::mapping::LineMap2DList> line_map_2d_list)
     LOCKS_EXCLUDED(mutex_);
+
+  // SaveMap 的两条路径
+  bool SaveMapFromGlobalSubmap(const std::string& map_filename,
+                               float occ_thresh,
+                               float free_thresh);
+  bool SaveMapFromPoseGraph(const std::string& map_filename,
+                            float occ_thresh,
+                            float free_thresh);
 
  private:
   mutable absl::Mutex mutex_;
