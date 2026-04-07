@@ -102,6 +102,7 @@ class LocalizationUpdaterBridge {
   bool SetInitialPose(const ::cartographer::transform::Rigid3d& initial_pose);
 
   std::optional<::cartographer::localization::LocalizationState> GetLocalizationState() const;
+  double GetLocalizationConfidence() const;
 
   int AddTrajectory(
       const std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>& expected_sensor_ids,

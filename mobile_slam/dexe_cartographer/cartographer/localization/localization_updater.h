@@ -56,6 +56,7 @@ public:
   // 进行重定位
   bool SetInitialPose(const transform::Rigid3d &initial_pose);
   std::optional<LocalizationState> GetLocalizationState();
+  double GetLocalizationConfidence() const;
 
   int AddTrajectoryBuilder(
       const std::set<SensorId> &expected_sensor_ids,

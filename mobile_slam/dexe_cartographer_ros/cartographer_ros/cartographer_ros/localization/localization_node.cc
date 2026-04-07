@@ -370,7 +370,10 @@ void LocalizationNode::PublishLocalizationState()
   }
   
   last_localization_status_ = loc_state_msg.status;
-  
+
+  float raw_confidence = localization_updater_bridge_.GetLocalizationConfidence();
+  loc_state_msg.score = std::min(raw_confidence / 0.8f * 100.0f, 100.0f);  // 将置信度映射到0-100范围，假设0.8以上为满分
+
   localization_state_publisher_->publish(loc_state_msg);
 }
 

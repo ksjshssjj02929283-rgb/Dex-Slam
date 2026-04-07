@@ -122,6 +122,9 @@ class PoseEstimator2D {
 
   static void RegisterMetrics(metrics::FamilyFactory* family_factory);
 
+  // 获取当前定位置信度
+  double GetLocalizationConfidence() const;
+
  private:
   // 使用MergedData进行位姿估计和地图更新的重载版本
   std::unique_ptr<MatchingResult> ProcessDataAndEstimatePose(
@@ -167,9 +170,6 @@ class PoseEstimator2D {
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data);
-
-  // 获取当前定位置信度
-  double GetLocalizationConfidence() const;
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();

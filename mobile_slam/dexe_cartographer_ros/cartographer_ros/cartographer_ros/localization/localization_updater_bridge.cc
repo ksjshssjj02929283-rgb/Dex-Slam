@@ -162,6 +162,11 @@ LocalizationUpdaterBridge::GetLocalizationState() const
   return localization_updater_->GetLocalizationState();
 }
 
+double LocalizationUpdaterBridge::GetLocalizationConfidence() const
+{
+  return localization_updater_->GetLocalizationConfidence();
+}
+
 /**
  * @brief 根据传感器id和配置文件，创建位姿优化器
  * 
