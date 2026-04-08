@@ -77,6 +77,9 @@ class SlamSystem {
     /// 实时模式下的spin
     void Spin();
 
+    /// 获取内部 ROS2 节点（仅在 online_mode_ 下有效）
+    rclcpp::Node::SharedPtr GetNode() const { return node_; }
+
    private:
     /// ros端保存地图的实现
     void SaveMap(const SaveMapService::Request::SharedPtr request, SaveMapService::Response::SharedPtr response);

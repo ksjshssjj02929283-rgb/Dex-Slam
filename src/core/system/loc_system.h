@@ -27,6 +27,7 @@ class RVizPublisher;
 class LocSystem {
    public:
     struct Options {
+        bool online_mode_ = true; // true=在线订阅传感器，false=离线由外部驱动
         bool pub_tf_ = true;  // 是否发布tf
         bool with_rviz_ = true;  // 是否启用RViz可视化
     };
@@ -34,11 +35,20 @@ class LocSystem {
     explicit LocSystem(Options options);
     ~LocSystem();
 
-    /// 初始化，地图路径在yaml里配置
-    bool Init(const std::string& yaml_path);
+    /// 初始化，地图路径由外部参数（gflags/launch）传入
+    bool Init(const std::string& yaml_path, const std::string& map_path);
 
     /// 设置初始化位姿
     void SetInitPose(const SE3& pose);
+
+    /// 开始/停止定位（控制是否处理传感器输入）
+    void StartLocalization();
+    void StopLocalization();
+
+    /// 状态与节点句柄
+    bool IsMapLoaded() const { return map_loaded_; }
+    bool IsLocalizationStarted() const { return loc_started_; }
+    rclcpp::Node::SharedPtr GetNode() const { return node_; }
 
     /// 处理IMU
     void ProcessIMU(const lightning::IMUPtr& imu);

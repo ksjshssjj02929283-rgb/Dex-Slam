@@ -1,9 +1,16 @@
 //
 // Created by xiang on 25-3-18.
 //
+// 离线建图主程序 - 参考 Cartographer 的 mapping offline node 设计
+//
 
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+
+#include <filesystem>
+#include <thread>
+
+#include <rclcpp/rclcpp.hpp>
 
 #include "core/system/slam.h"
 #include "ui/pangolin_window.h"
@@ -13,22 +20,36 @@
 
 #include "io/yaml_io.h"
 
-DEFINE_string(input_bag, "", "输入数据包");
-DEFINE_string(config, "./config/default.yaml", "配置文件");
+DEFINE_string(input_bag, "", "输入 ROS2 bag 文件路径");
+DEFINE_string(config, "./config/default.yaml", "配置文件路径");
+DEFINE_string(map_folder, "./data", "地图存储根目录");
+DEFINE_string(map_name, "offline_map", "地图名称");
 
-/// 运行一个LIO前端，带可视化
+/// 运行离线建图，支持 Pangolin 可视化
 int main(int argc, char** argv) {
+    rclcpp::init(argc, argv);
+
     google::InitGoogleLogging(argv[0]);
     FLAGS_colorlogtostderr = true;
     FLAGS_stderrthreshold = google::INFO;
 
     google::ParseCommandLineFlags(&argc, &argv, true);
     if (FLAGS_input_bag.empty()) {
-        LOG(ERROR) << "未指定输入数据";
+        LOG(ERROR) << "未指定输入数据包，使用 --input_bag <bag_path>";
         return -1;
     }
 
     using namespace lightning;
+
+    // 验证并创建地图目录
+    const std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name + "/";
+    try {
+        std::filesystem::create_directories(map_dir);
+        LOG(INFO) << "Map directory: " << map_dir;
+    } catch (const std::exception& e) {
+        LOG(ERROR) << "Failed to create map directory: " << e.what();
+        return -1;
+    }
 
     RosbagIO rosbag(FLAGS_input_bag);
 
@@ -37,14 +58,17 @@ int main(int argc, char** argv) {
 
     SlamSystem slam(options);
 
-    /// 实时模式好像掉帧掉的比较厉害？
-
     if (!slam.Init(FLAGS_config)) {
         LOG(ERROR) << "failed to init slam";
         return -1;
     }
 
-    slam.StartSLAM("new_map");
+    slam.StartSLAM(FLAGS_map_name);
+
+    // 启动 spin 线程，使 TF / RViz 发布正常工作
+    auto executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    executor->add_node(slam.GetNode());
+    std::thread spin_thread([&executor]() { executor->spin(); });
 
     lightning::YAML_IO yaml(FLAGS_config);
     std::string lidar_topic = yaml.GetValue<std::string>("common", "lidar_topic");
@@ -72,10 +96,14 @@ int main(int argc, char** argv) {
                              })
         .Go();
 
-    slam.SaveMap("");
+    slam.SaveMap(map_dir);
     Timer::PrintAll();
 
-    LOG(INFO) << "done";
+    executor->cancel();
+    spin_thread.join();
+    rclcpp::shutdown();
+
+    LOG(INFO) << "Offline SLAM completed. Map saved to: " << map_dir;
 
     return 0;
 }
