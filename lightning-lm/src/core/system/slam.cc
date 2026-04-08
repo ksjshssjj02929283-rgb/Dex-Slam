@@ -71,26 +71,13 @@ bool SlamSystem::Init(const std::string& yaml_path) {
             lc_->SetLoopClosedCB([this]() { g2p5_->RedrawGlobalMapBackend(); });
         }
 
-        if (options_.with_2dvisualization_) {
-            g2p5_->SetMapUpdateCallback([this](g2p5::G2P5MapPtr map) {
-                cv::Mat image = map->ToCV();
-                cv::imshow("map", image);
-
-                if (options_.step_on_kf_) {
-                    cv::waitKey(0);
-
-                } else {
-                    cv::waitKey(10);
-                }
-            });
-        }
     }
 
-    if (options_.online_mode_) {
-        LOG(INFO) << "online mode, creating ros2 node ... ";
+    // 创建 ROS2 节点（online/offline 均需要，用于 TF 时间戳和 RViz 发布）
+    node_ = std::make_shared<rclcpp::Node>("lightning_slam");
 
-        /// subscribers
-        node_ = std::make_shared<rclcpp::Node>("lightning_slam");
+    if (options_.online_mode_) {
+        LOG(INFO) << "online mode, creating subscribers ... ";
 
         imu_topic_ = yaml["common"]["imu_topic"].as<std::string>();
         cloud_topic_ = yaml["common"]["lidar_topic"].as<std::string>();
@@ -125,25 +112,41 @@ bool SlamSystem::Init(const std::string& yaml_path) {
             "lightning/save_map", [this](const SaveMapService::Request::SharedPtr& req,
                                          SaveMapService::Response::SharedPtr res) { SaveMap(req, res); });
 
-        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
-
-        if (options_.with_rviz_) {
-            LOG(INFO) << "slam with RViz visualization";
-            RVizPublisher::Options rviz_opt;
-            if (yaml["rviz"]) {
-                rviz_opt.pub_current_scan = yaml["rviz"]["pub_current_scan"].as<bool>(true);
-                rviz_opt.pub_local_map = yaml["rviz"]["pub_local_map"].as<bool>(true);
-                rviz_opt.pub_trajectory = yaml["rviz"]["pub_trajectory"].as<bool>(true);
-                rviz_opt.pub_keyframes = yaml["rviz"]["pub_keyframes"].as<bool>(true);
-                rviz_opt.pub_loop_edges = yaml["rviz"]["pub_loop_edges"].as<bool>(true);
-                rviz_opt.pub_voxel_map = yaml["rviz"]["pub_voxel_map"].as<bool>(true);
-                rviz_opt.local_map_downsample = yaml["rviz"]["local_map_downsample"].as<int>(5);
-            }
-            rviz_pub_ = std::make_shared<RVizPublisher>(node_, rviz_opt);
-            lio_->SetRVizPublisher(rviz_pub_);
-        }
-
         LOG(INFO) << "online slam node has been created.";
+    }
+
+    // TF broadcaster（online/offline 均发布）
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
+
+    // RViz publisher（online/offline 均支持）
+    if (options_.with_rviz_) {
+        LOG(INFO) << "slam with RViz visualization";
+        RVizPublisher::Options rviz_opt;
+        if (yaml["rviz"]) {
+            rviz_opt.pub_current_scan = yaml["rviz"]["pub_current_scan"].as<bool>(true);
+            rviz_opt.pub_local_map = yaml["rviz"]["pub_local_map"].as<bool>(true);
+            rviz_opt.pub_trajectory = yaml["rviz"]["pub_trajectory"].as<bool>(true);
+            rviz_opt.pub_keyframes = yaml["rviz"]["pub_keyframes"].as<bool>(true);
+            rviz_opt.pub_loop_edges = yaml["rviz"]["pub_loop_edges"].as<bool>(true);
+            rviz_opt.pub_voxel_map = yaml["rviz"]["pub_voxel_map"].as<bool>(true);
+            rviz_opt.local_map_downsample = yaml["rviz"]["local_map_downsample"].as<int>(5);
+        }
+        rviz_pub_ = std::make_shared<RVizPublisher>(node_, rviz_opt);
+        lio_->SetRVizPublisher(rviz_pub_);
+    }
+
+    // 设置 g2p5 地图更新回调（合并 2D UI 和 ROS 发布）
+    if (options_.with_gridmap_ && g2p5_) {
+        g2p5_->SetMapUpdateCallback([this](g2p5::G2P5MapPtr map) {
+            if (options_.with_2dvisualization_) {
+                cv::Mat image = map->ToCV();
+                cv::imshow("map", image);
+                cv::waitKey(options_.step_on_kf_ ? 0 : 10);
+            }
+            if (rviz_pub_) {
+                rviz_pub_->UpdateGridMap(map->ToROS());
+            }
+        });
     }
 
     return true;

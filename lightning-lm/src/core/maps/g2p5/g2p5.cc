@@ -355,6 +355,8 @@ void G2P5::SaveGridMap(const std::string& save_path) {
         emitter << YAML::Key << "negate"           << YAML::Value << 0;
         emitter << YAML::Key << "occupied_thresh"  << YAML::Value << 0.65;
         emitter << YAML::Key << "free_thresh"      << YAML::Value << 0.25;
+        emitter << YAML::Key << "type"              << YAML::Value << "lidar_3d";
+        emitter << YAML::Key << "slam_backend"      << YAML::Value << "slam_3d";
         emitter << YAML::EndMap;
         yaml_file << emitter.c_str();
         yaml_file.close();

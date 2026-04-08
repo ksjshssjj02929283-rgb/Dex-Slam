@@ -67,6 +67,11 @@ RVizPublisher::RVizPublisher(rclcpp::Node::SharedPtr node, Options options)
             "/lightning/voxel_map/planes", 10);
     }
 
+    if (options_.pub_gridmap) {
+        grid_map_pub_ = node_->create_publisher<nav_msgs::msg::OccupancyGrid>(
+            "/lightning/grid_map", rclcpp::QoS(1).transient_local());
+    }
+
     timer_ = node_->create_wall_timer(
         std::chrono::milliseconds(100),
         std::bind(&RVizPublisher::PublishTimerCallback, this));
@@ -512,6 +517,21 @@ void RVizPublisher::PublishTimerCallback() {
         voxel_map_pub_->publish(marker_array);
         voxel_map_updated_ = false;
     }
+
+    // 发布 2D 栅格地图（OccupancyGrid）
+    if (options_.pub_gridmap && gridmap_updated_ && grid_map_pub_) {
+        std::lock_guard<std::mutex> lock(mtx_gridmap_);
+        grid_map_.header.stamp = now;
+        grid_map_pub_->publish(grid_map_);
+        gridmap_updated_ = false;
+    }
+}
+
+void RVizPublisher::UpdateGridMap(nav_msgs::msg::OccupancyGrid grid) {
+    std::lock_guard<std::mutex> lock(mtx_gridmap_);
+    grid_map_ = std::move(grid);
+    grid_map_.header.frame_id = "map";
+    gridmap_updated_ = true;
 }
 
 void RVizPublisher::UpdateVoxelMap(const std::vector<voxel_map::PlaneVis>& planes) {

@@ -15,48 +15,59 @@ LocSystem::LocSystem(LocSystem::Options options) : options_(options) {
     signal(SIGINT, lightning::debug::SigHandle);
 }
 
-LocSystem::~LocSystem() { loc_->Finish(); }
+LocSystem::~LocSystem() {
+    if (loc_) {
+        loc_->Finish();
+    }
+}
 
-bool LocSystem::Init(const std::string &yaml_path) {
+bool LocSystem::Init(const std::string &yaml_path, const std::string &map_path) {
     loc::Localization::Options opt;
-    opt.online_mode_ = true;
+    opt.online_mode_ = options_.online_mode_;
     loc_ = std::make_shared<loc::Localization>(opt);
 
     YAML_IO yaml(yaml_path);
 
-    std::string map_path = yaml.GetValue<std::string>("system", "map_path");
+    if (map_path.empty()) {
+        LOG(ERROR) << "LocSystem::Init failed: empty map_path from gflags/launch";
+        return false;
+    }
 
-    LOG(INFO) << "online mode, creating ros2 node ... ";
-
-    /// subscribers
+    // 创建 ROS2 节点（online/offline 均需要，用于 TF 时间戳和 RViz 发布）
     node_ = std::make_shared<rclcpp::Node>("lightning_slam");
 
-    imu_topic_ = yaml.GetValue<std::string>("common", "imu_topic");
-    cloud_topic_ = yaml.GetValue<std::string>("common", "lidar_topic");
-    livox_topic_ = yaml.GetValue<std::string>("common", "livox_lidar_topic");
+    if (options_.online_mode_) {
+        LOG(INFO) << "online mode, creating subscribers ... ";
 
-    rclcpp::QoS qos(10);
+        imu_topic_ = yaml.GetValue<std::string>("common", "imu_topic");
+        cloud_topic_ = yaml.GetValue<std::string>("common", "lidar_topic");
+        livox_topic_ = yaml.GetValue<std::string>("common", "livox_lidar_topic");
 
-    imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
-        imu_topic_, qos, [this](sensor_msgs::msg::Imu::SharedPtr msg) {
-            IMUPtr imu = std::make_shared<IMU>();
-            imu->timestamp = ToSec(msg->header.stamp);
-            imu->linear_acceleration =
-                Vec3d(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
-            imu->angular_velocity = Vec3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
+        rclcpp::QoS qos(10);
 
-            ProcessIMU(imu);
-        });
+        imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
+            imu_topic_, qos, [this](sensor_msgs::msg::Imu::SharedPtr msg) {
+                IMUPtr imu = std::make_shared<IMU>();
+                imu->timestamp = ToSec(msg->header.stamp);
+                imu->linear_acceleration =
+                    Vec3d(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
+                imu->angular_velocity = Vec3d(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
 
-    cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
-        cloud_topic_, qos, [this](sensor_msgs::msg::PointCloud2::SharedPtr cloud) {
-            Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
-        });
+                ProcessIMU(imu);
+            });
 
-    livox_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
-        livox_topic_, qos, [this](livox_ros_driver2::msg::CustomMsg ::SharedPtr cloud) {
-            Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
-        });
+        cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
+            cloud_topic_, qos, [this](sensor_msgs::msg::PointCloud2::SharedPtr cloud) {
+                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
+            });
+
+        livox_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+            livox_topic_, qos, [this](livox_ros_driver2::msg::CustomMsg ::SharedPtr cloud) {
+                Timer::Evaluate([&]() { ProcessLidar(cloud); }, "Proc Lidar", true);
+            });
+
+        LOG(INFO) << "online loc node has been created.";
+    }
 
     if (options_.pub_tf_) {
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
@@ -67,7 +78,6 @@ bool LocSystem::Init(const std::string &yaml_path) {
     if (options_.with_rviz_) {
         LOG(INFO) << "loc with RViz visualization";
         RVizPublisher::Options rviz_opt;
-        // 定位模式下也按配置发布静态全局图和动态图，和 UI 的地图更新保持一致。
         rviz_opt.pub_current_scan = yaml.GetValue<bool>("rviz", "pub_current_scan");
         rviz_opt.pub_local_map = yaml.GetValue<bool>("rviz", "pub_local_map");
         rviz_opt.pub_global_map = yaml.GetValue<bool>("rviz", "pub_global_map");
@@ -83,11 +93,16 @@ bool LocSystem::Init(const std::string &yaml_path) {
     bool ret = loc_->Init(yaml_path, map_path);
     if (ret) {
         LOG(INFO) << "online loc node has been created.";
+        map_loaded_ = true;
+        loc_started_ = false;
         
         // 将 RViz Publisher 传递给 Localization
         if (rviz_pub_) {
             loc_->SetRVizPublisher(rviz_pub_);
         }
+    } else {
+        map_loaded_ = false;
+        loc_started_ = false;
     }
 
     return ret;
@@ -98,8 +113,15 @@ void LocSystem::SetInitPose(const SE3 &pose) {
               << pose.unit_quaternion().coeffs().transpose();
 
     loc_->SetExternalPose(pose.unit_quaternion(), pose.translation());
-    loc_started_ = true;
 }
+
+void LocSystem::StartLocalization() {
+    if (map_loaded_) {
+        loc_started_ = true;
+    }
+}
+
+void LocSystem::StopLocalization() { loc_started_ = false; }
 
 void LocSystem::ProcessIMU(const IMUPtr &imu) {
     if (loc_started_) {

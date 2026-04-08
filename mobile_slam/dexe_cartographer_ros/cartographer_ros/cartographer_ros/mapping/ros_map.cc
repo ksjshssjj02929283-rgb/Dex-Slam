@@ -78,7 +78,9 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
       "highlight_cloud_map: ", highlight_cloud_map_filename, "\n",
       "resolution: ", resolution, "\n",
       "origin: [", origin.x(), ", ", origin.y(),
-      ", 0.0]\nnegate: 0\noccupied_thresh: ", occ_thresh, "\nfree_thresh: ", free_thresh, "\n");
+        ", 0.0]\nnegate: 0\noccupied_thresh: ", occ_thresh, "\nfree_thresh: ", free_thresh, "\n",
+        "type: lidar_2d\n",
+        "slam_backend: slam_2d\n");
   file_writer->Write(output.data(), output.size());
 }
 

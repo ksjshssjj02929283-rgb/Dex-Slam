@@ -34,6 +34,13 @@ target_link_libraries(run_slam_online
         ${third_party_libs}
 )
 
+ament_target_dependencies(run_slam_online
+    "rclcpp"
+    "std_msgs"
+    "std_srvs"
+    "nav_interfaces"
+)
+
 add_executable(run_loc_offline
         run_loc_offline.cc
 )
@@ -50,6 +57,13 @@ add_executable(run_loc_online
 target_link_libraries(run_loc_online
         ${PROJECT_NAME}.libs
         ${third_party_libs}
+)
+
+ament_target_dependencies(run_loc_online
+    "rclcpp"
+    "std_msgs"
+    "std_srvs"
+    "nav_interfaces"
 )
 
 add_executable(test_ui

@@ -83,7 +83,6 @@ system:
   evaluation: false
   lidar_loc_skip_num: 4
   lidar_odom_skip_num: 2
-  map_path: ./data/new_map/
   pub_tf: true
 
 rviz:
