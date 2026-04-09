@@ -77,6 +77,12 @@ install(DIRECTORY launch
         DESTINATION share/${PROJECT_NAME}/
 )
 
+install(PROGRAMS
+        scripts/debug/monitor_lightning_resources.sh
+        scripts/debug/visualize_lightning_resources.py
+        DESTINATION lib/${PROJECT_NAME}
+)
+
 add_subdirectory(thirdparty/livox_ros_driver)
 
 add_subdirectory(src)
