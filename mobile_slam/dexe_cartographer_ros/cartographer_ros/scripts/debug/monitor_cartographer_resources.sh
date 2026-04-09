@@ -13,6 +13,9 @@ OUTPUT_FILE="$OUTPUT_DIR/localization_resources.csv"
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
+# CPU tick frequency (Hz), used for instantaneous CPU calculation
+CLK_TCK=$(getconf CLK_TCK 2>/dev/null || echo 100)
+
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
@@ -63,6 +66,11 @@ cleanup() {
 # Trap Ctrl+C and other termination signals
 trap cleanup SIGINT SIGTERM
 
+# Read cumulative CPU ticks (utime + stime) from /proc/[pid]/stat
+get_cpu_ticks() {
+    awk '{print $14+$15}' /proc/$1/stat 2>/dev/null || echo 0
+}
+
 # Find the target process
 find_pid() {
     # Find all processes matching the pattern, excluding this script and grep itself
@@ -87,6 +95,10 @@ find_pid() {
 # Initial PID search
 find_pid
 
+# Initialize tick baseline for first interval measurement
+TICKS_PREV=$(get_cpu_ticks "$PID")
+TIME_PREV_MS=$(date +%s%3N)
+
 # Write CSV header
 echo "timestamp,time,cpu_percent,rss_mb,mem_percent" > "$OUTPUT_FILE"
 echo ""
@@ -108,32 +120,40 @@ COUNT=0
 
 # Main monitoring loop
 while true; do
+    sleep "$INTERVAL"
+
     # Check if process is still running
     if ! ps -p "$PID" > /dev/null 2>&1; then
         echo "Warning: Process $PID has exited. Searching for new process..."
         find_pid
+        TICKS_PREV=$(get_cpu_ticks "$PID")
+        TIME_PREV_MS=$(date +%s%3N)
+        continue
     fi
-    
+
     # Get current timestamp
     TIMESTAMP=$(date +%s)
     TIME=$(date +%H:%M:%S)
-    
-    # Get CPU and memory stats
-    read -r CPU RSS MEM < <(ps -p "$PID" -o %cpu=,rss=,%mem= 2>/dev/null | awk '{printf "%.2f %.2f %.2f",$1,$2/1024,$3}')
-    
+
+    # --- Instantaneous CPU (same algorithm as htop) ---
+    TICKS_NOW=$(get_cpu_ticks "$PID")
+    TIME_NOW_MS=$(date +%s%3N)
+    DELTA_TICKS=$((TICKS_NOW - TICKS_PREV))
+    DELTA_MS=$((TIME_NOW_MS - TIME_PREV_MS))
+    CPU=$(awk "BEGIN {printf \"%.2f\", ($DELTA_TICKS / ($DELTA_MS / 1000.0 * $CLK_TCK)) * 100}")
+    TICKS_PREV=$TICKS_NOW
+    TIME_PREV_MS=$TIME_NOW_MS
+
+    # --- RSS and MEM (instantaneous, from ps) ---
+    read -r RSS MEM < <(ps -p "$PID" -o rss=,%mem= 2>/dev/null \
+        | awk '{printf "%.2f %.2f", $1/1024, $2}')
+
     # Check if we got valid data
-    if [ -n "$CPU" ]; then
-        # Print to console
+    if [ -n "$CPU" ] && [ -n "$RSS" ]; then
         printf "%-20s %-12s %-10s %-12s %-12s\n" "$TIMESTAMP" "$TIME" "$CPU" "$RSS" "$MEM"
-        
-        # Write to CSV file
         echo "$TIMESTAMP,$TIME,$CPU,$RSS,$MEM" >> "$OUTPUT_FILE"
-        
         COUNT=$((COUNT + 1))
     else
         echo "Warning: Failed to get resource data for PID $PID"
     fi
-    
-    # Sleep for specified interval
-    sleep "$INTERVAL"
 done
