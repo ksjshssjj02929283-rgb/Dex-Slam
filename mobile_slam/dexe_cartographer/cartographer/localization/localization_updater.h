@@ -55,6 +55,7 @@ public:
 
   // 进行重定位
   bool SetInitialPose(const transform::Rigid3d &initial_pose);
+  void TriggerGlobalRelocalization();
   std::optional<LocalizationState> GetLocalizationState();
   double GetLocalizationConfidence() const;
 

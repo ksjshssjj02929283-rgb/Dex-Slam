@@ -346,25 +346,27 @@ void LocalizationNode::PublishLocalizationState()
     }
   }
 
-  // 检测定位失败状态并调用 stop filter
+  // 检测定位失败状态并调用 stop filter + 触发全局重定位
   if (loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_FAILED || 
       loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_INIT_FAILED) {
     
-    // 只在状态改变时调用 stop filter，避免重复调用
+    // 只在状态改变时调用，避免重复调用
     if (last_localization_status_ != loc_state_msg.status && !filter_stopped_) {
       RCLCPP_ERROR(node_->get_logger(), 
-                   "Localization failed with status %d, calling stop_filter service",
+                   "Localization failed with status %d, stopping filter and triggering global relocalization",
                    loc_state_msg.status);
       StopFilter();
+      localization_updater_bridge_.TriggerGlobalRelocalization();
     }
   } else {
-    // 如果状态恢复正常，重置 filter_stopped_ 标志
+    // 定位恢复成功，重新启动 filter
     if (filter_stopped_ && 
         (loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_SUCCESS ||
          loc_state_msg.status == nav_interfaces::msg::LocalizationState::LOC_INITIALIZED)) {
       RCLCPP_INFO(node_->get_logger(), 
-                  "Localization status recovered to %d, resetting filter_stopped flag",
+                  "Localization status recovered to %d, restarting filter",
                   loc_state_msg.status);
+      StartFilter();
       filter_stopped_ = false;
     }
   }
@@ -1164,6 +1166,63 @@ bool LocalizationNode::StopFilter()
     
   } catch (const std::exception& e) {
     RCLCPP_ERROR(node_->get_logger(), "Exception while calling stop_filter: %s", e.what());
+    return false;
+  }
+}
+
+bool LocalizationNode::StartFilter()
+{
+  RCLCPP_INFO(node_->get_logger(), "Starting robot localization filter");
+  
+  try {
+    auto temp_node = std::make_shared<rclcpp::Node>(
+        "temp_start_filter_client",
+        rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
+    
+    auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(
+        "/robot_localization/start_filter");
+    
+    if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
+      RCLCPP_WARN(node_->get_logger(), "Timed out waiting for start_filter service");
+      return false;
+    }
+    
+    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+    auto future = temp_client->async_send_request(request);
+    
+    rclcpp::executors::SingleThreadedExecutor temp_executor;
+    temp_executor.add_node(temp_node);
+    
+    auto timeout = std::chrono::seconds(5);
+    auto start_time = std::chrono::steady_clock::now();
+    
+    while (rclcpp::ok() && 
+           future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+      temp_executor.spin_some();
+      
+      if (std::chrono::steady_clock::now() - start_time > timeout) {
+        RCLCPP_ERROR(node_->get_logger(), "Failed to call service start_filter - timeout");
+        return false;
+      }
+    }
+    
+    auto result = future.get();
+    if (!result) {
+      RCLCPP_ERROR(node_->get_logger(), "Failed to call service start_filter - no response");
+      return false;
+    }
+    
+    if (result->success) {
+      RCLCPP_INFO(node_->get_logger(), "StartFilter service called successfully");
+    } else {
+      RCLCPP_ERROR(node_->get_logger(), "StartFilter service returned failure: %s", 
+                   result->message.c_str());
+    }
+    
+    return result->success;
+    
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(node_->get_logger(), "Exception while calling start_filter: %s", e.what());
     return false;
   }
 }

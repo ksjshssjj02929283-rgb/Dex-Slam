@@ -190,6 +190,12 @@ bool LocalizationUpdater::SetInitialPose(const transform::Rigid3d &initial_pose)
   return trajectory_builders_[last_trajectory_id]->SetInitialPose(initial_pose);
 }
 
+void LocalizationUpdater::TriggerGlobalRelocalization()
+{
+  if (!pose_estimator_2d_) { return; }
+  pose_estimator_2d_->TriggerGlobalRelocalization();
+}
+
 std::optional<LocalizationState> LocalizationUpdater::GetLocalizationState()
 {
   const int last_trajectory_id = num_trajectory_builders() - 1;

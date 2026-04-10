@@ -100,6 +100,7 @@ class LocalizationUpdaterBridge {
   void LoadState(const std::string& state_filename, bool load_frozen_state);
 
   bool SetInitialPose(const ::cartographer::transform::Rigid3d& initial_pose);
+  void TriggerGlobalRelocalization();
 
   std::optional<::cartographer::localization::LocalizationState> GetLocalizationState() const;
   double GetLocalizationConfidence() const;
