@@ -359,6 +359,36 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetGlobalSubmap() const
   return global_dynamic_submap_;
 }
 
+void LocalMapUpdater2D::RebuildLocalSubmapAt(const transform::Rigid2d& pose)
+{
+  std::shared_ptr<mapping::Submap2D> source_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    if (!global_dynamic_submap_) {
+      LOG(ERROR) << "RebuildLocalSubmapAt: global_dynamic_submap_ is not initialized.";
+      return;
+    }
+    source_snapshot = global_dynamic_submap_;
+  }
+
+  // 纯计算，无需持锁
+  common::TicToc t;
+  auto new_submap = BuildLocalSubmap(source_snapshot, pose);
+  if (!new_submap) {
+    LOG(ERROR) << "RebuildLocalSubmapAt: BuildLocalSubmap returned nullptr.";
+    return;
+  }
+  LOG(INFO) << "RebuildLocalSubmapAt done in " << t.toc() << " ms at ("
+            << pose.translation().x() << ", " << pose.translation().y() << ")";
+
+  // 就地替换内部 local_submap_ 和 local_map_origin_
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    local_submap_ = std::move(new_submap);
+    local_map_origin_ = std::make_shared<transform::Rigid2d>(pose);
+  }
+}
+
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::local_submap()
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
