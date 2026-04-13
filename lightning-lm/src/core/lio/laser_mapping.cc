@@ -130,8 +130,8 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
 
         use_aa_ = yaml["fasterlio"]["use_aa"].as<bool>();
 
-        skip_lidar_num_ = yaml["fasterlio"]["skip_lidar_num"].as<int>();
-        enable_skip_lidar_ = skip_lidar_num_ > 0;
+        lidar_process_interval_ = yaml["fasterlio"]["lidar_process_interval"].as<int>();
+        enable_skip_lidar_ = lidar_process_interval_ > 1;  // 1=逐帧处理，N>1=每N帧处理一次
 
         options_.kf_dis_th_ = yaml["fasterlio"]["kf_dis_th"].as<double>();
         options_.kf_angle_th_ = yaml["fasterlio"]["kf_angle_th"].as<double>() * M_PI / 180.0;
@@ -192,7 +192,7 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
         LOG(WARNING) << "imu loop back, clear buffer";
         imu_buffer_.clear();
     }
-    // livox的重力加速度的单位为G
+    // livox和airy的重力加速度的单位都为G
     if (lidar_type_ == 1 || lidar_type_ == 4) {
         imu_refined->linear_acceleration *= G_m_s2;
     }
@@ -295,7 +295,7 @@ bool LaserMapping::Run() {
 
     if (enable_skip_lidar_) {
         skip_lidar_cnt_++;
-        skip_lidar_cnt_ = skip_lidar_cnt_ % skip_lidar_num_;
+        skip_lidar_cnt_ = skip_lidar_cnt_ % lidar_process_interval_;
 
         if (skip_lidar_cnt_ != 0) {
             /// 更新UI中的内容

@@ -12,11 +12,11 @@ fasterlio:
   blind: 0.5                # 盲区，小于盲区距离的不会处理
   time_scale: 1e-3             # 兼容不同数据集的时间单位，仅对Velodyne LiDAR(lidar_type=2)生效
 
-  skip_lidar_num: 0 # 点云的跳帧情况
+  lidar_process_interval: 2 # 每隔 N 帧处理一次（1=逐帧处理，N=每N帧处理1帧）
   kf_dis_th: 2.0    # 关键帧距离阈值（米），超过此值才建立新关键帧
   kf_angle_th: 15.0 # 关键帧角度阈值（度），超过此值才建立新关键帧
   point_filter_num: 4 # 点云采样参数（降低可提升建图密度，但增加 CPU 负载）
-  max_iteration: 6 # 最大迭代次数
+  max_iteration: 4 # 最大迭代次数
   filter_size_scan: 0.2 # 对scan进行的降采样（越小越密集，建议 0.1~0.3）
   filter_size_map: 0.2
 
@@ -38,8 +38,8 @@ fasterlio:
 
   # IVox 参数（与 VoxelMap 共同用于点面匹配定位）
   use_ivox: true                   # 是否启用 IVox 约束（前段）
-  ivox_grid_resolution: 0.5
-  ivox_nearby_type: 18
+  ivox_grid_resolution: 0.4
+  ivox_nearby_type: 6
   ivox_range_delete: false           # 是否删除超出距离的 grid
   ivox_max_range: 100.0              # 保留 grid 的最大距离（米）
 
@@ -109,9 +109,9 @@ loop_closing:
   height_noise: 1.0
   # LIO-SAM 风格候选检测参数
   history_search_time_diff: 30.0   # 时间差过滤阈值（秒），对应 LIO-SAM historyKeyframeSearchTimeDiff
-  max_candidates_per_check: 3      # 每次触发最多处理的候选帧数（KD-Tree 按距离排序，取最近的）
+  max_candidates_per_check: 2      # 每次触发最多处理的候选帧数（KD-Tree 按距离排序，取最近的）
   # LIO-SAM 风格子地图构建参数
-  history_keyframe_search_num: 25  # 历史子地图前后各取帧数（共 2N+1 帧），对应 LIO-SAM historyKeyframeSearchNum
+  history_keyframe_search_num: 15  # 历史子地图前后各取帧数（共 2N+1 帧），对应 LIO-SAM historyKeyframeSearchNum
   icp_filter_size: 0.4             # 子地图 VoxelGrid 叶大小（米），对应 LIO-SAM mappingSurfLeafSize
   min_cur_cloud_size: 300          # 当前帧（source）最小点数，不足则放弃配准
   min_prev_cloud_size: 1000        # 历史子地图（target）最小点数，不足则放弃配准
