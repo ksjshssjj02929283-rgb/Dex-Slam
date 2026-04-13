@@ -12,11 +12,11 @@ fasterlio:
   blind: 0.5                # 盲区，小于盲区距离的不会处理
   time_scale: 1e-3             # 兼容不同数据集的时间单位，仅对Velodyne LiDAR(lidar_type=2)生效
 
-  skip_lidar_num: 0 # 点云的跳帧情况
+  lidar_process_interval: 3 # 每隔 N 帧处理一次（1=逐帧处理，N=每N帧处理1帧）
   kf_dis_th: 0.5    # 关键帧距离阈值（米），超过此值才建立新关键帧
   kf_angle_th: 15.0 # 关键帧角度阈值（度），超过此值才建立新关键帧
   point_filter_num: 4 # 点云采样参数
-  max_iteration: 6 # 最大迭代次数
+  max_iteration: 4 # 最大迭代次数（实测均值 ~4.17，与均值对齐）
   filter_size_scan: 0.3 # 对scan进行的降采样
   filter_size_map: 0.3
 
@@ -38,12 +38,12 @@ fasterlio:
 
   # IVox 参数（与 VoxelMap 共同用于点面匹配定位）
   use_ivox: true                   # 是否启用 IVox 约束（前段）
-  ivox_grid_resolution: 0.5        # IVox 体素大小（米），适当增大提高鲁棒性
-  ivox_nearby_type: 18             # 邻域类型: 0/6/18/26，26最大搜索范围最鲁棒
+  ivox_grid_resolution: 0.4        # IVox 体素大小（米），NEARBY6 时适当缩小体素补偿邻域减少
+  ivox_nearby_type: 6              # 邻域类型: 0/6/18/26（改为6，kNN搜索降至37%，室内精度损失可忽略）
   ivox_range_delete: true           # 是否删除超出距离的 grid
   ivox_max_range: 100.0              # 保留 grid 的最大距离（米）
 
-  use_voxel_map: true              # 是否启用 VoxelMap 约束（后段）
+  use_voxel_map: false              # 是否启用 VoxelMap 约束（后段）
 
   use_aa: true  # use anderson-acceleration
 
@@ -109,9 +109,9 @@ loop_closing:
   with_height: true
   height_noise: 1.0
   history_search_time_diff: 30.0
-  max_candidates_per_check: 5
-  history_keyframe_search_num: 25
-  icp_filter_size: 0.1
+  max_candidates_per_check: 3      # 单次最多处理候选数，限制 GICP 峰值耗时
+  history_keyframe_search_num: 15   # 子地图前后帧数（原25=51帧，改为15=31帧，-40%点数）
+  icp_filter_size: 0.4              # 回环子地图降采样（原0.1m，改为0.4m，点数降~10x）
   min_cur_cloud_size: 300
   min_prev_cloud_size: 1000
   icp_fitness_score_th: 0.1

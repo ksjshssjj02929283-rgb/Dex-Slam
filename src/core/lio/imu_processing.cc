@@ -71,23 +71,25 @@ Mat3d ImuProcess::AlignGravity(const Vec3d &gravity_vector, Vec3d &aligned_gravi
     // 归一化重力向量
     Vec3d n0 = gravity_vector / gravity_vector.norm();
     
-    // 目标重力方向（世界坐标系z轴）
-    Vec3d n1(0, 0, 1);
-    if (n0[2] < 0) {
-        n1[2] = -1;  // 如果重力向上，则目标方向也向上
-    }
+    // 目标重力方向：固定为 z-up 世界坐标系（重力指向 -z），
+    // 与传感器的微小前后倾斜无关，避免 z 分量符号随机翻转世界系。
+    Vec3d n1(0, 0, -1);
     
     // 计算旋转轴和角度
     Vec3d rotvec = n0.cross(n1);
     double rnorm = rotvec.norm();
+    double cos_a = n0.dot(n1);
     
     Mat3d rot = Mat3d::Identity();
     if (rnorm > 1e-6) {  // 避免除零
         rotvec = rotvec / rnorm;
-        Eigen::AngleAxisd angaxis(std::asin(rnorm), rotvec);
+        // atan2(sin, cos) 对所有角度（包括 > 90°）均正确，
+        // 而 asin(rnorm) 在 angle > 90° 时会给出 180°-angle（错误）。
+        double angle = std::atan2(rnorm, cos_a);
+        Eigen::AngleAxisd angaxis(angle, rotvec);
         rot = ProjectToSO3(angaxis.matrix());
         
-        std::cout << "Gravity alignment: rotation angle = " << std::asin(rnorm) * 180.0 / M_PI 
+        std::cout << "Gravity alignment: rotation angle = " << angle * 180.0 / M_PI
                   << " deg, axis = " << rotvec.transpose() << std::endl;
     } else {
         std::cout << "Gravity already aligned, no rotation needed" << std::endl;

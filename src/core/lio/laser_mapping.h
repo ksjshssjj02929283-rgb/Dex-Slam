@@ -205,8 +205,8 @@ class LaserMapping {
     double first_lidar_time_ = 0.0;
     bool lidar_pushed_ = false;
 
-    bool enable_skip_lidar_ = true;  // 雷达是否需要跳帧
-    int skip_lidar_num_ = 5;         // 每隔多少帧跳一个雷达
+    bool enable_skip_lidar_ = false;  // 雷达是否需要跳帧（interval > 1 时启用）
+    int lidar_process_interval_ = 1;   // 每隔 N 帧处理一次（1=逐帧处理，N=每N帧处理1帧）
     int skip_lidar_cnt_ = 0;
 
     /// statistics and flags ///
