@@ -235,16 +235,37 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
     lio_->ProcessPointCloud2(cloud);
     lio_->Run();
 
+    auto state = lio_->GetState();
+    auto scan = lio_->GetScanUndist();
+
     // 发布实时 scan 和 pose（每帧都发布）
-    if (rviz_pub_) {
-        auto state = lio_->GetState();
-        auto scan = lio_->GetScanUndist();
-        if (scan && scan->size() > 0) {
-            rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
-            rviz_pub_->UpdateCurrentPose(state.GetPose());
-            rviz_pub_->UpdateNavState(state);
-            rviz_pub_->UpdateFrontendPath(state.GetPose());
-        }
+    if (rviz_pub_ && scan && scan->size() > 0) {
+        rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
+        rviz_pub_->UpdateCurrentPose(state.GetPose());
+        rviz_pub_->UpdateNavState(state);
+        rviz_pub_->UpdateFrontendPath(state.GetPose());
+    }
+
+    // 发布 TF（每帧，使用当前 ESKF 实时位姿）
+    if (tf_broadcaster_ != nullptr && scan && scan->size() > 0) {
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp = node_->now();
+        tf_msg.header.frame_id = "map";
+        tf_msg.child_frame_id = "base_link";
+
+        auto pose = state.GetPose();
+        auto t = pose.translation();
+        auto q = pose.unit_quaternion();
+
+        tf_msg.transform.translation.x = t.x();
+        tf_msg.transform.translation.y = t.y();
+        tf_msg.transform.translation.z = t.z();
+        tf_msg.transform.rotation.w = q.w();
+        tf_msg.transform.rotation.x = q.x();
+        tf_msg.transform.rotation.y = q.y();
+        tf_msg.transform.rotation.z = q.z();
+
+        tf_broadcaster_->sendTransform(tf_msg);
     }
 
     auto kf = lio_->GetKeyframe();
@@ -318,28 +339,6 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
             }
             rviz_pub_->UpdateLocalMap(local_map);
         }
-    }
-
-    // 发布 TF
-    if (tf_broadcaster_ != nullptr) {
-        geometry_msgs::msg::TransformStamped tf_msg;
-        tf_msg.header.stamp = node_->now();
-        tf_msg.header.frame_id = "map";
-        tf_msg.child_frame_id = "base_link";
-
-        auto pose = cur_kf_->GetLIOPose();
-        auto t = pose.translation();
-        auto q = pose.unit_quaternion();
-
-        tf_msg.transform.translation.x = t.x();
-        tf_msg.transform.translation.y = t.y();
-        tf_msg.transform.translation.z = t.z();
-        tf_msg.transform.rotation.w = q.w();
-        tf_msg.transform.rotation.x = q.x();
-        tf_msg.transform.rotation.y = q.y();
-        tf_msg.transform.rotation.z = q.z();
-
-        tf_broadcaster_->sendTransform(tf_msg);
     }
 }
 
@@ -351,16 +350,37 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
     lio_->ProcessPointCloud2(cloud);
     lio_->Run();
 
+    auto state = lio_->GetState();
+    auto scan = lio_->GetScanUndist();
+
     // 发布实时 scan 和 pose（每帧都发布）
-    if (rviz_pub_) {
-        auto state = lio_->GetState();
-        auto scan = lio_->GetScanUndist();
-        if (scan && scan->size() > 0) {
-            rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
-            rviz_pub_->UpdateCurrentPose(state.GetPose());
-            rviz_pub_->UpdateNavState(state);
-            rviz_pub_->UpdateFrontendPath(state.GetPose());
-        }
+    if (rviz_pub_ && scan && scan->size() > 0) {
+        rviz_pub_->UpdateCurrentScan(scan, state.GetPose());
+        rviz_pub_->UpdateCurrentPose(state.GetPose());
+        rviz_pub_->UpdateNavState(state);
+        rviz_pub_->UpdateFrontendPath(state.GetPose());
+    }
+
+    // 发布 TF（每帧，使用当前 ESKF 实时位姿）
+    if (tf_broadcaster_ != nullptr && scan && scan->size() > 0) {
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp = node_->now();
+        tf_msg.header.frame_id = "map";
+        tf_msg.child_frame_id = "base_link";
+
+        auto pose = state.GetPose();
+        auto t = pose.translation();
+        auto q = pose.unit_quaternion();
+
+        tf_msg.transform.translation.x = t.x();
+        tf_msg.transform.translation.y = t.y();
+        tf_msg.transform.translation.z = t.z();
+        tf_msg.transform.rotation.w = q.w();
+        tf_msg.transform.rotation.x = q.x();
+        tf_msg.transform.rotation.y = q.y();
+        tf_msg.transform.rotation.z = q.z();
+
+        tf_broadcaster_->sendTransform(tf_msg);
     }
 
     auto kf = lio_->GetKeyframe();
@@ -436,27 +456,6 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
         }
     }
 
-    // 发布 TF
-    if (tf_broadcaster_ != nullptr) {
-        geometry_msgs::msg::TransformStamped tf_msg;
-        tf_msg.header.stamp = node_->now();
-        tf_msg.header.frame_id = "map";
-        tf_msg.child_frame_id = "base_link";
-
-        auto pose = cur_kf_->GetLIOPose();
-        auto t = pose.translation();
-        auto q = pose.unit_quaternion();
-
-        tf_msg.transform.translation.x = t.x();
-        tf_msg.transform.translation.y = t.y();
-        tf_msg.transform.translation.z = t.z();
-        tf_msg.transform.rotation.w = q.w();
-        tf_msg.transform.rotation.x = q.x();
-        tf_msg.transform.rotation.y = q.y();
-        tf_msg.transform.rotation.z = q.z();
-
-        tf_broadcaster_->sendTransform(tf_msg);
-    }
 }
 
 void SlamSystem::Spin() {

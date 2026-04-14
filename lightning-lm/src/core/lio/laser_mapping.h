@@ -85,7 +85,8 @@ class LaserMapping {
     NavState GetState() const { return state_point_; }
 
     /// 获取IMU状态
-    NavState GetIMUState() const {
+    NavState GetIMUState() {
+        std::unique_lock<std::mutex> lock(mtx_buffer_);
         if (p_imu_->IsIMUInited()) {
             return kf_imu_.GetX();
         } else {
