@@ -9,6 +9,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <fstream>
+#include <string>
 
 #include "livox_ros_driver2/msg/custom_msg.hpp"
 
@@ -68,6 +70,9 @@ class LocSystem {
 
     std::atomic_bool loc_started_ = false;  // 是否开启定位
     std::atomic_bool map_loaded_ = false;   // 地图是否已载入
+
+    std::string map_name_;  // 地图名（从 map_path 提取）
+    std::ofstream loc_traj_out_;  // TUM 格式轨迹文件（定位）
 
     /// 实时模式下的ros2 node, subscribers
     rclcpp::Node::SharedPtr node_;

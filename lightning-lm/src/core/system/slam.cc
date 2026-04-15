@@ -16,6 +16,8 @@
 
 #include <yaml-cpp/yaml.h>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <opencv2/opencv.hpp>
 
 namespace lightning {
@@ -38,6 +40,9 @@ bool SlamSystem::Init(const std::string& yaml_path) {
     options_.with_2dvisualization_ = yaml["system"]["with_2dui"].as<bool>();
     options_.with_gridmap_ = yaml["system"]["with_g2p5"].as<bool>();
     options_.step_on_kf_ = yaml["system"]["step_on_kf"].as<bool>();
+    try {
+        options_.func_point_interval_ = yaml["system"]["func_point_interval"].as<double>();
+    } catch (const YAML::Exception&) {}
 
     if (yaml["rviz"] && yaml["rviz"]["enable"]) {
         options_.with_rviz_ = yaml["rviz"]["enable"].as<bool>();
@@ -161,6 +166,19 @@ SlamSystem::~SlamSystem() {
 void SlamSystem::StartSLAM(std::string map_name) {
     map_name_ = map_name;
     running_ = true;
+
+    // 创建轨迹保存目录并打开文件
+    const char* home = std::getenv("HOME");
+    if (home) {
+        std::string traj_dir = std::string(home) + "/.dexe/localization/" + map_name_ + "/";
+        std::filesystem::create_directories(traj_dir);
+        mapping_traj_out_.open(traj_dir + "mapping_trajectory.txt", std::ios::out | std::ios::trunc);
+        if (mapping_traj_out_.is_open()) {
+            LOG(INFO) << "mapping trajectory will be saved to: " << traj_dir << "mapping_trajectory.txt";
+        } else {
+            LOG(WARNING) << "failed to open mapping trajectory file: " << traj_dir << "mapping_trajectory.txt";
+        }
+    }
 }
 
 void SlamSystem::SaveMap(const SaveMapService::Request::SharedPtr request,
@@ -205,7 +223,23 @@ void SlamSystem::SaveMap(const std::string& path) {
     tm_options.map_path_ = save_path;
 
     TiledMap tm(tm_options);
-    SE3 start_pose = lio_->GetAllKeyframes().front()->GetOptPose();
+    auto all_kfs = lio_->GetAllKeyframes();
+    SE3 start_pose = all_kfs.front()->GetOptPose();
+    tm.AddFP(FunctionalPoint("start", start_pose));
+
+    // 从关键帧轨迹按间距采样功能点（使用回环优化后的位姿）
+    if (options_.func_point_interval_ > 0 && !all_kfs.empty()) {
+        Vec3d last_pos = all_kfs.front()->GetOptPose().translation();
+        int wp_idx = 0;
+        for (const auto& kf : all_kfs) {
+            Vec3d cur_pos = kf->GetOptPose().translation();
+            if ((cur_pos - last_pos).norm() >= options_.func_point_interval_) {
+                tm.AddFP(FunctionalPoint("wp_" + std::to_string(wp_idx++), kf->GetOptPose()));
+                last_pos = cur_pos;
+            }
+        }
+        LOG(INFO) << "saved " << wp_idx << " trajectory waypoints (interval=" << options_.func_point_interval_ << "m)";
+    }
     tm.ConvertFromFullPCD(global_map, start_pose, save_path);
 
     pcl::io::savePCDFileBinaryCompressed(save_path + "/global.pcd", *global_map);
@@ -237,6 +271,18 @@ void SlamSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr& cl
 
     auto state = lio_->GetState();
     auto scan = lio_->GetScanUndist();
+
+    // 写 TUM 格式轨迹（timestamp tx ty tz qx qy qz qw，无尾随空格）
+    if (mapping_traj_out_.is_open() && scan && scan->size() > 0) {
+        auto pose = state.GetPose();
+        auto t = pose.translation();
+        auto q = pose.unit_quaternion();
+        char tum_buf[256];
+        std::snprintf(tum_buf, sizeof(tum_buf),
+            "%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n",
+            state.timestamp_, t.x(), t.y(), t.z(), q.x(), q.y(), q.z(), q.w());
+        mapping_traj_out_ << tum_buf;
+    }
 
     // 发布实时 scan 和 pose（每帧都发布）
     if (rviz_pub_ && scan && scan->size() > 0) {
@@ -352,6 +398,18 @@ void SlamSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr
 
     auto state = lio_->GetState();
     auto scan = lio_->GetScanUndist();
+
+    // 写 TUM 格式轨迹（timestamp tx ty tz qx qy qz qw，无尾随空格）
+    if (mapping_traj_out_.is_open() && scan && scan->size() > 0) {
+        auto pose = state.GetPose();
+        auto t = pose.translation();
+        auto q = pose.unit_quaternion();
+        char tum_buf[256];
+        std::snprintf(tum_buf, sizeof(tum_buf),
+            "%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n",
+            state.timestamp_, t.x(), t.y(), t.z(), q.x(), q.y(), q.z(), q.w());
+        mapping_traj_out_ << tum_buf;
+    }
 
     // 发布实时 scan 和 pose（每帧都发布）
     if (rviz_pub_ && scan && scan->size() > 0) {
