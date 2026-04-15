@@ -119,7 +119,7 @@ Visualization Manager:
       Enabled: true
       Name: Keyframes
       Namespaces:
-        keyframes: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -131,7 +131,7 @@ Visualization Manager:
       Enabled: true
       Name: LoopEdge
       Namespaces:
-        loop_edges: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -238,7 +238,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 193
+      Max Intensity: 183
       Min Color: 0; 0; 0
       Min Intensity: 2
       Name: GlobalMap
@@ -312,6 +312,211 @@ Visualization Manager:
         Value: /lightning/grid_map_updates
       Use Timestamp: false
       Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: ""
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: rslidar_points
+      Position Transformer: ""
+      Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.009999999776482582
+      Style: Flat Squares
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /rslidar/points
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+        ankle:
+          Value: true
+        base_footprint:
+          Value: true
+        base_link:
+          Value: true
+        buttock:
+          Value: true
+        chassis_base_link:
+          Value: true
+        chassis_camera_front_link:
+          Value: true
+        chassis_camera_rear_link:
+          Value: true
+        chassis_depth_front_link:
+          Value: true
+        chassis_depth_rear_link:
+          Value: true
+        head_base_link:
+          Value: true
+        imu_chassis_link:
+          Value: true
+        knee:
+          Value: true
+        laser_front_link:
+          Value: true
+        laser_rear_link:
+          Value: true
+        left_arm_base:
+          Value: true
+        left_base_link:
+          Value: true
+        left_base_to_left_arm_connector:
+          Value: true
+        left_ee:
+          Value: true
+        left_j1:
+          Value: true
+        left_j2:
+          Value: true
+        left_j3:
+          Value: true
+        left_j4:
+          Value: true
+        left_j5:
+          Value: true
+        left_j6:
+          Value: true
+        left_j7:
+          Value: true
+        left_l_base_link:
+          Value: true
+        left_l_index_dist:
+          Value: true
+        left_l_index_prox:
+          Value: true
+        left_l_little_dist:
+          Value: true
+        left_l_little_prox:
+          Value: true
+        left_l_middle_dist:
+          Value: true
+        left_l_middle_prox:
+          Value: true
+        left_l_ring_dist:
+          Value: true
+        left_l_ring_prox:
+          Value: true
+        left_l_thumb_dist:
+          Value: true
+        left_l_thumb_prox:
+          Value: true
+        map:
+          Value: true
+        neck1:
+          Value: true
+        neck2:
+          Value: true
+        neck_base:
+          Value: true
+        odom:
+          Value: true
+        right_arm_base:
+          Value: true
+        right_base_link:
+          Value: true
+        right_base_to_right_arm_connector:
+          Value: true
+        right_ee:
+          Value: true
+        right_j1:
+          Value: true
+        right_j2:
+          Value: true
+        right_j3:
+          Value: true
+        right_j4:
+          Value: true
+        right_j5:
+          Value: true
+        right_j6:
+          Value: true
+        right_j7:
+          Value: true
+        right_r_base_link:
+          Value: true
+        right_r_index_dist:
+          Value: true
+        right_r_index_prox:
+          Value: true
+        right_r_little_dist:
+          Value: true
+        right_r_little_prox:
+          Value: true
+        right_r_middle_dist:
+          Value: true
+        right_r_middle_prox:
+          Value: true
+        right_r_ring_dist:
+          Value: true
+        right_r_ring_prox:
+          Value: true
+        right_r_thumb_dist:
+          Value: true
+        right_r_thumb_prox:
+          Value: true
+        torso_base_link:
+          Value: true
+        waist:
+          Value: true
+        wheel_left:
+          Value: true
+        wheel_right:
+          Value: true
+      Marker Scale: 1
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Tree:
+        map:
+          base_link:
+            chassis_base_link:
+              torso_base_link:
+                {}
+              wheel_left:
+                {}
+              wheel_right:
+                {}
+            chassis_camera_front_link:
+              chassis_depth_front_link:
+                {}
+            chassis_camera_rear_link:
+              chassis_depth_rear_link:
+                {}
+            imu_chassis_link:
+              {}
+            laser_front_link:
+              {}
+            laser_rear_link:
+              {}
+          odom:
+            base_footprint:
+              {}
+      Update Interval: 0
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -358,16 +563,16 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 43.44758224487305
+      Distance: 39.749290466308594
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 5.369199275970459
-        Y: -2.799194812774658
-        Z: 0.5205733180046082
+        X: 19.40450668334961
+        Y: -8.542905807495117
+        Z: 0.5828719139099121
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
@@ -376,7 +581,7 @@ Visualization Manager:
       Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 4.255413055419922
+      Yaw: 5.240411758422852
     Saved: ~
 Window Geometry:
   Displays:

@@ -65,8 +65,8 @@ double pgo_smooth_factor = 0.01;                              // PGO帧平滑因
 
 // lidar_loc
 namespace lidar_loc {
-int grid_search_angle_step = 20;        // 角度网格搜索步数（关键参数）
-double grid_search_angle_range = 20.0;  // 角度搜索半径(角度制，关键参数,左右各有)
+double grid_search_angle_step = 30.0;   // 角度搜索步长（度，关键参数）
+double grid_search_angle_range = 180.0; // 角度搜索范围（度，正负各一半，关键参数）
 }  // namespace lidar_loc
 
 }  // namespace lightning

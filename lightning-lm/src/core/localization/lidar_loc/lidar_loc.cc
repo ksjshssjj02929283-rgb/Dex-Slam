@@ -80,6 +80,7 @@ bool LidarLoc::Init(const std::string& config_path) {
     try { options_.ivox_adjust_res_     = yaml.GetValue<float>("lidar_loc", "ivox_adjust_res"); } catch (...) {}
     try { options_.ivox_adjust_max_iter_= yaml.GetValue<int>("lidar_loc", "ivox_adjust_max_iter"); } catch (...) {}
     try { options_.ivox_adjust_max_dis_ = yaml.GetValue<float>("lidar_loc", "ivox_adjust_max_dis"); } catch (...) {}
+    try { options_.use_rough_ndt_for_init_ = yaml.GetValue<bool>("lidar_loc", "use_rough_ndt_for_init"); } catch (...) {}
 
     lidar_loc::grid_search_angle_step = yaml.GetValue<double>("lidar_loc", "grid_search_angle_step");
     lidar_loc::grid_search_angle_range = yaml.GetValue<double>("lidar_loc", "grid_search_angle_range");
@@ -244,9 +245,9 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
     confidence = 0;
     bool yaw_search_success = false;
 
-    int step = lidar_loc::grid_search_angle_step;
     double radius = lidar_loc::grid_search_angle_range * constant::kDEG2RAD;
-    double angle_search_step = 2 * radius / step;
+    double angle_search_step = lidar_loc::grid_search_angle_step * constant::kDEG2RAD;
+    int step = std::max(1, (int)std::round(2.0 * radius / angle_search_step));
 
     std::vector<double> searched_delta_yaw;
     std::vector<double> scores(step);
@@ -260,17 +261,19 @@ bool LidarLoc::YawSearch(SE3& pose, double& confidence, CloudPtr input, CloudPtr
     }
 
     LOG(INFO) << "init yaw: " << init_yaw << ", p: " << init_rpy.pitch << ", ro: " << init_rpy.roll
-              << ", world yaw delta search from " << searched_delta_yaw.front() << " to "
-              << searched_delta_yaw.back();
+              << ", yaw delta search from " << searched_delta_yaw.front() * 180.0 / M_PI
+              << " to " << searched_delta_yaw.back() * 180.0 / M_PI
+              << " deg, step=" << lidar_loc::grid_search_angle_step << " deg, total=" << step;
 
-    /// 粗分辨率
+    /// 角度搜索（是否使用粗分辨率由 use_rough_ndt_for_init 配置决定）
+    const bool use_rough = options_.use_rough_ndt_for_init_;
     std::for_each(index.begin(), index.end(), [&](int i) {
         double fitness_score = 0;
         const double delta_yaw = searched_delta_yaw[i];
         // 在世界坐标系施加 yaw 增量：Rz_world(delta) * R_init
         SE3 pose_esti(SO3::exp(Vec3d(0, 0, delta_yaw)) * init_pose.so3(), init_pose.translation());
 
-        Localize(pose_esti, fitness_score, input, output, true);
+        Localize(pose_esti, fitness_score, input, output, use_rough);
 
         scores[i] = fitness_score;
         pose_opti[i] = pose_esti;
@@ -831,7 +834,7 @@ bool LidarLoc::Localize(SE3& pose, double& confidence, CloudPtr input, CloudPtr 
     bool loc_success = false;
     Eigen::Matrix4f guess_pose = pose.matrix().cast<float>();
 
-    LOG(INFO) << "loc from: " << pose.translation().transpose();
+    LOG(INFO) << "loc from: " << pose.translation().transpose() << ", guess rotation: " << pose.rotationMatrix().eulerAngles(2, 1, 0).transpose();
 
     if (pcl_ndt_->getInputTarget() == nullptr) {
         LOG(INFO) << "lidar loc target is null, skip";
