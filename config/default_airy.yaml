@@ -76,6 +76,7 @@ system:
   with_2dui: false # 是否需要2D UI
   with_g2p5: true # 是否需要栅格地图
   step_on_kf: false # 是否在关键帧处暂停
+  func_point_interval: 3.0 # 轨迹功能点采样间隔（米）
 
   enable_lidar_loc_skip: false
   enable_lidar_loc_rviz: false
@@ -107,7 +108,7 @@ loop_closing:
   max_range: 10.0
   ndt_score_th: 1.0
   with_height: true
-  height_noise: 1.0
+  height_noise: 0.1
   history_search_time_diff: 30.0
   max_candidates_per_check: 3      # 单次最多处理候选数，限制 GICP 峰值耗时
   history_keyframe_search_num: 15   # 子地图前后帧数（原25=51帧，改为15=31帧，-40%点数）
@@ -139,7 +140,7 @@ lidar_loc:
   use_rough_ndt_for_init: false      # 初始化角度搜索是否用粗分辨率NDT（小场景false，大场景true）
   lidar_loc_odom_th: 0.3
   init_with_fp: true
-  min_init_confidence: 1.5
+  min_init_confidence: 2.5
   update_dynamic_cloud: true
   update_err_h: 0.2
   update_err_v: 0.2

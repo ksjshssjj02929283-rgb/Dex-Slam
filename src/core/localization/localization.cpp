@@ -352,4 +352,11 @@ void Localization::SetRVizPublisher(std::shared_ptr<RVizPublisher> rviz_pub) {
     }
 }
 
+NavState Localization::GetState() {
+    if (lidar_loc_) {
+        return lidar_loc_->GetState();
+    }
+    return NavState{};
+}
+
 }  // namespace lightning::loc

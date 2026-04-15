@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <fstream>
 #include <string>
 
 #include "lightning/srv/save_map.hpp"
@@ -50,6 +51,7 @@ class SlamSystem {
         bool with_rviz_ = true;             // 是否需要RViz可视化
 
         bool step_on_kf_ = true;  // 是否在关键帧处暂停p
+        double func_point_interval_ = 3.0;  // 轨迹功能点采样间隔（米）
     };
 
     using SaveMapService = srv::SaveMap;
@@ -90,6 +92,7 @@ class SlamSystem {
     rclcpp::Service<SaveMapService>::SharedPtr savemap_service_ = nullptr;
 
     std::string map_name_;  // 地图名
+    std::ofstream mapping_traj_out_;  // TUM 格式轨迹文件（建图）
 
     std::shared_ptr<LaserMapping> lio_ = nullptr;       // lio 前端
     std::shared_ptr<LoopClosing> lc_ = nullptr;         // 回环检测

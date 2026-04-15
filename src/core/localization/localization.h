@@ -86,6 +86,9 @@ class Localization {
     
     void SetRVizPublisher(std::shared_ptr<RVizPublisher> rviz_pub);
 
+    /// 获取当前定位状态（位姿 + 时间戳）
+    NavState GetState();
+
     // void SetPathCallback(std::function<void(const nav_msgs::msg::Path& path)>&& callback);
     // void SetPointcloudWorldCallback(std::function<void(const sensor_msgs::msg::PointCloud2& pointcloud)>&& callback);
     // void SetPointcloudBodyCallback(std::function<void(const sensor_msgs::msg::PointCloud2& pointcloud)>&& callback);

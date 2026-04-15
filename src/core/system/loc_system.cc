@@ -8,6 +8,9 @@
 #include "wrapper/ros_utils.h"
 #include "wrapper/rviz_publisher.h"
 
+#include <filesystem>
+#include <iomanip>
+
 namespace lightning {
 
 LocSystem::LocSystem(LocSystem::Options options) : options_(options) {
@@ -95,6 +98,22 @@ bool LocSystem::Init(const std::string &yaml_path, const std::string &map_path) 
         LOG(INFO) << "online loc node has been created.";
         map_loaded_ = true;
         loc_started_ = false;
+
+        // 提取地图名，打开定位轨迹文件
+        std::filesystem::path p(map_path);
+        // map_path 可能以 '/' 结尾，用 parent_path().filename() 兼容
+        map_name_ = p.filename().empty() ? p.parent_path().filename().string() : p.filename().string();
+        const char* home = std::getenv("HOME");
+        if (home && !map_name_.empty()) {
+            std::string traj_dir = std::string(home) + "/.dexe/localization/" + map_name_ + "/";
+            std::filesystem::create_directories(traj_dir);
+            loc_traj_out_.open(traj_dir + "localization_trajectory.txt", std::ios::out | std::ios::trunc);
+            if (loc_traj_out_.is_open()) {
+                LOG(INFO) << "localization trajectory will be saved to: " << traj_dir << "localization_trajectory.txt";
+            } else {
+                LOG(WARNING) << "failed to open localization trajectory file: " << traj_dir << "localization_trajectory.txt";
+            }
+        }
         
         // 将 RViz Publisher 传递给 Localization
         if (rviz_pub_) {
@@ -132,12 +151,42 @@ void LocSystem::ProcessIMU(const IMUPtr &imu) {
 void LocSystem::ProcessLidar(const sensor_msgs::msg::PointCloud2::SharedPtr &cloud) {
     if (loc_started_) {
         loc_->ProcessLidarMsg(cloud);
+
+        // 写 TUM 格式定位轨迹
+        if (loc_traj_out_.is_open()) {
+            auto state = loc_->GetState();
+            if (state.timestamp_ > 0) {
+                auto pose = state.GetPose();
+                auto t = pose.translation();
+                auto q = pose.unit_quaternion();
+                char tum_buf[256];
+                std::snprintf(tum_buf, sizeof(tum_buf),
+                    "%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n",
+                    state.timestamp_, t.x(), t.y(), t.z(), q.x(), q.y(), q.z(), q.w());
+                loc_traj_out_ << tum_buf;
+            }
+        }
     }
 }
 
 void LocSystem::ProcessLidar(const livox_ros_driver2::msg::CustomMsg::SharedPtr &cloud) {
     if (loc_started_) {
         loc_->ProcessLivoxLidarMsg(cloud);
+
+        // 写 TUM 格式定位轨迹
+        if (loc_traj_out_.is_open()) {
+            auto state = loc_->GetState();
+            if (state.timestamp_ > 0) {
+                auto pose = state.GetPose();
+                auto t = pose.translation();
+                auto q = pose.unit_quaternion();
+                char tum_buf[256];
+                std::snprintf(tum_buf, sizeof(tum_buf),
+                    "%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f\n",
+                    state.timestamp_, t.x(), t.y(), t.z(), q.x(), q.y(), q.z(), q.w());
+                loc_traj_out_ << tum_buf;
+            }
+        }
     }
 }
 

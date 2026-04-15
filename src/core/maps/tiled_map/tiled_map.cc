@@ -15,7 +15,7 @@ bool TiledMap::ConvertFromFullPCD(CloudPtr map, const SE3& start_pose, const std
     assert(map != nullptr && !map->empty());
 
     options_.map_path_ = map_path;
-    func_points_.emplace_back(FunctionalPoint("start", start_pose));
+    // func_points_.emplace_back(FunctionalPoint("start", start_pose));
 
     chunk_id_ = 0;
 

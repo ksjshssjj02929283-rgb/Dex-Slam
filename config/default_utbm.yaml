@@ -74,6 +74,7 @@ system:
   with_2dui: false # 是否需要2D UI
   with_g2p5: true # 是否需要栅格地图
   step_on_kf: false # 是否在关键帧处暂停
+  func_point_interval: 3.0 # 轨迹功能点采样间隔（米）
 
   with_lidar_loc: true
   with_lo: true
