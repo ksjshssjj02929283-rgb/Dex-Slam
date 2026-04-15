@@ -366,7 +366,9 @@ void LocalizationNode::PublishLocalizationState()
       RCLCPP_INFO(node_->get_logger(), 
                   "Localization status recovered to %d, restarting filter",
                   loc_state_msg.status);
-      StartFilter();
+      if (StartFilter()) {
+        need_set_pose_in_filter_ = true;
+      }
       filter_stopped_ = false;
     }
   }
