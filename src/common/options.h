@@ -83,8 +83,8 @@ extern float opacity;     // 点云透明度
 
 // lidar_loc
 namespace lidar_loc {
-extern int grid_search_angle_step;      // 角度网格搜索步数（关键参数）
-extern double grid_search_angle_range;  // 角度搜索半径(角度制，关键参数,左右各有)
+extern double grid_search_angle_step;   // 角度搜索步长（度，关键参数）
+extern double grid_search_angle_range;  // 角度搜索范围（度，正负各一半，关键参数）
 }  // namespace lidar_loc
 
 /// fasterlio 配置
