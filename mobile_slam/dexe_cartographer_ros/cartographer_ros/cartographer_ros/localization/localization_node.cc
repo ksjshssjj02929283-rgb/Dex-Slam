@@ -503,10 +503,8 @@ void LocalizationNode::PublishLocalTrajectoryData()
     }();
     // 当前跟踪的机器人位姿 = 局部到地图的位姿 * 跟踪到局部的位姿
     // T_map_base = T_map_local * T_local_base
-    // const Rigid3d tracking_to_map =
-    //     trajectory_data.local_to_map * tracking_to_local;
-
-    const Rigid3d tracking_to_map = tracking_to_local;
+    const Rigid3d tracking_to_map =
+        trajectory_data.local_to_map * tracking_to_local;
 
     if (trajectory_data.published_to_tracking != nullptr) {
       if (node_options_.publish_to_tf) {

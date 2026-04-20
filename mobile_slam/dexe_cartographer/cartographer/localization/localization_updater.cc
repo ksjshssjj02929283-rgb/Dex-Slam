@@ -317,6 +317,14 @@ void LocalizationUpdater::ApplyOriginTransform(const transform::Rigid3d& T) {
   if (global_static_submap_) {
     global_static_submap_->set_local_pose(T * global_static_submap_->local_pose());
   }
+
+  // 3. 同步 local map updater 内部维护的 dynamic/local submap 与运行时位姿。
+  if (pose_estimator_2d_) {
+    auto* local_map_updater = pose_estimator_2d_->GetLocalMapUpdater();
+    if (local_map_updater) {
+      local_map_updater->ApplyOriginTransform(T);
+    }
+  }
 }
 
 void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,

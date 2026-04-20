@@ -49,6 +49,9 @@ public:
   // 用于 Recovery 场景：先将 local map 对准估计位姿，再调用 local_submap() 进行搜索。
   // global_dynamic_submap_ 未初始化时为 no-op。
   void RebuildLocalSubmapAt(const transform::Rigid2d& pose);
+
+  // reset_map_origin 时同步更新内部地图和状态到新坐标系。
+  void ApplyOriginTransform(const transform::Rigid3d& T);
   
   // 获取动态地图策略
   proto::DynamicMapPolicy GetDynamicMapPolicy() const {

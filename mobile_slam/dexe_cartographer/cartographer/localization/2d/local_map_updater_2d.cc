@@ -369,6 +369,30 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetGlobalSubmap() const
   return global_dynamic_submap_;
 }
 
+void LocalMapUpdater2D::ApplyOriginTransform(const transform::Rigid3d& T)
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+
+  // dynamic map 参与保存和定位匹配，需要同步到新坐标系。
+  if (global_dynamic_submap_) {
+    global_dynamic_submap_->set_local_pose(T * global_dynamic_submap_->local_pose());
+  }
+
+  // local submap 在定位过程中也会被使用，避免 reset 后短时间内坐标不一致。
+  if (local_submap_) {
+    local_submap_->set_local_pose(T * local_submap_->local_pose());
+  }
+
+  // 运行时状态为 2D 位姿，同步应用 2D 变换。
+  const transform::Rigid2d t_2d = transform::Project2D(T);
+  if (robot_pose_) {
+    *robot_pose_ = t_2d * (*robot_pose_);
+  }
+  if (local_map_origin_) {
+    *local_map_origin_ = t_2d * (*local_map_origin_);
+  }
+}
+
 void LocalMapUpdater2D::RebuildLocalSubmapAt(const transform::Rigid2d& pose)
 {
   std::shared_ptr<mapping::Submap2D> source_snapshot;

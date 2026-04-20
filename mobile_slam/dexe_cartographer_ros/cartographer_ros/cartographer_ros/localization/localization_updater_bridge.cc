@@ -210,7 +210,8 @@ bool LocalizationUpdaterBridge::ResetMapOrigin(
   // -----------------------------------------------------------------------
   // Step 3: 保存新的地图图像 + yaml
   // -----------------------------------------------------------------------
-  const bool map_ok = SaveMap(map_base_filename, occ_thresh, free_thresh);
+  const bool map_ok = SaveMap(map_base_filename, occ_thresh, free_thresh,
+                              /*is_from_pose_graph=*/true);
   if (!map_ok) {
     LOG(ERROR) << "ResetMapOrigin: SaveMap failed for: " << map_base_filename;
     // 仍然尝试保存 pbstream，不因此提前退出
