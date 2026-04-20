@@ -156,6 +156,11 @@ bool LocalizationUpdaterBridge::SetInitialPose(const carto::transform::Rigid3d &
   return localization_updater_->SetInitialPose(initial_pose);
 }
 
+void LocalizationUpdaterBridge::TriggerGlobalRelocalization()
+{
+  localization_updater_->TriggerGlobalRelocalization();
+}
+
 std::optional<cartographer::localization::LocalizationState>
 LocalizationUpdaterBridge::GetLocalizationState() const
 {

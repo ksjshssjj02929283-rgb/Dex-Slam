@@ -159,6 +159,7 @@ private:
   // Helpers
   bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);
   bool StopFilter();
+  bool StartFilter();
 
   // Timed publishers
   void PublishSubmapList();

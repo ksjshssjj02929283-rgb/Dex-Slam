@@ -655,15 +655,25 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     if (!validation_passed) {
       LOG(WARNING) << "Pose validation also failed";
       
-      // 步骤2b: 验证失败，尝试从局部地图恢复
+      // 步骤2b: 以估计位姿为中心同步重建 local_map_updater_ 内部的 local_submap_
+      // 原因：当前 local_submap 可能以里程计位姿为中心，与 scan match 估计位置有偏差
+      // 重建后 local_submap_ 以 pose_estimate_2d 为中心，搜索范围更加合理
+      local_map_updater_->RebuildLocalSubmapAt(*pose_estimate_2d);
+      auto recovery_local_submap = local_map_updater_->local_submap();
+      if (!recovery_local_submap) {
+        LOG(WARNING) << "RebuildLocalSubmapAt returned nullptr, falling back to current local submap";
+        recovery_local_submap = local_submap;
+      }
+      
+      // 步骤2c: 在以估计位姿为中心重建的 local map 上尝试恢复
       auto recovery_pose = consistency_checker_->RecoverFromLocalMap(
           time,
-          *pose_estimate_2d,  // 使用当前估计位姿作为验证位姿
+          *pose_estimate_2d,  // 使用当前估计位姿作为初始搜索位姿
           filtered_gravity_aligned_point_cloud,
           merged_data.merged_highlight_cloud,
-          local_submap);
+          recovery_local_submap);
       
-      // 步骤2c: 如果恢复失败，返回错误
+      // 步骤2d: 如果恢复失败，返回错误
       if (!recovery_pose) {
         LOG(ERROR) << "All recovery attempts failed! Localization lost.";
         loc_state_ = LocalizationState::LOCALIZATION_FAILED;
