@@ -143,3 +143,14 @@ if (${BUILD_GRPC})
     DESTINATION lib/${PROJECT_NAME}
   )
 endif()
+
+google_binary(reset_map_origin_tool
+  SRCS
+    tools/reset_map_origin_main.cc
+)
+
+install(TARGETS reset_map_origin_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
