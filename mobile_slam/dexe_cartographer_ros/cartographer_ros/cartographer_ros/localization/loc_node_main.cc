@@ -171,6 +171,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
 
   // === Service Clients ===
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_filter_client_;
@@ -209,6 +210,11 @@ private:
     save_map_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/save_map",
         std::bind(&LocalizationManagerNode::HandleSaveMap, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    reset_map_origin_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/reset_map_origin",
+        std::bind(&LocalizationManagerNode::HandleResetMapOrigin, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // 创建服务客户端
@@ -566,6 +572,58 @@ private:
 
     response->success = success;
     response->message = success ? "Map saved successfully" : "Map save completed with errors (check logs)";
+  }
+
+  void HandleResetMapOrigin(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING) {
+      response->success = false;
+      response->message = "Localization is not running, cannot reset map origin";
+      RCLCPP_WARN(get_logger(), "reset_map_origin called but localization is not running");
+      return;
+    }
+
+    if (!localization_node_) {
+      response->success = false;
+      response->message = "Localization node is null";
+      return;
+    }
+
+    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
+      response->success = false;
+      response->message = "map_folder or map_name is not set";
+      RCLCPP_ERROR(get_logger(), "reset_map_origin: --map_folder and --map_name must be specified");
+      return;
+    }
+
+    const std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+    const std::string map_base = map_dir + "/map";
+    const std::string pbstream_path = map_dir + "/map.pbstream";
+
+    RCLCPP_INFO(get_logger(),
+                "reset_map_origin: saving to map_base=%s  pbstream=%s",
+                map_base.c_str(), pbstream_path.c_str());
+
+    const bool success =
+        localization_node_->ResetMapOriginAndSave(map_base, pbstream_path);
+
+    if (success) {
+      RCLCPP_INFO(get_logger(),
+                  "reset_map_origin: success. "
+                  "New map and pbstream saved. Restart localization to apply.");
+    } else {
+      RCLCPP_ERROR(get_logger(),
+                   "reset_map_origin: one or more save steps failed (check logs)");
+    }
+
+    response->success = success;
+    response->message = success
+        ? "Map origin reset successfully. Restart localization to use the new map."
+        : "Map origin reset completed with errors (check logs)";
   }
 
   bool ValidateMapResources() {

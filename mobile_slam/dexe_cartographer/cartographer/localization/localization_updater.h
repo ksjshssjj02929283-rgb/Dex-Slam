@@ -95,6 +95,11 @@ public:
     return pose_graph_.get();
   }
 
+  // 将所有全局位姿（轨迹节点、submap、路标）平移/旋转到以机器人当前位置为原点的新坐标系。
+  // T 为从旧坐标系到新坐标系的变换（即 T_old_in_new），通常为机器人位姿的逆。
+  // 同时更新 global_static_submap_ 的 local_pose。
+  void ApplyOriginTransform(const transform::Rigid3d& T);
+
   int num_trajectory_builders() const {
     return trajectory_builders_.size();
   }

@@ -1514,5 +1514,31 @@ void PoseGraph2D::RegisterMetrics(metrics::FamilyFactory* family_factory) {
   kDeletedSubmapsMetric = submaps->Add({{"state", "deleted"}});
 }
 
+void PoseGraph2D::ApplyTransformToAllPoses(const transform::Rigid3d& T) {
+  absl::MutexLock lock(&mutex_);
+
+  // 变换所有轨迹节点的全局位姿
+  for (const auto& node_id_data : data_.trajectory_nodes) {
+    data_.trajectory_nodes.at(node_id_data.id).global_pose =
+        T * node_id_data.data.global_pose;
+  }
+
+  // 变换所有 2D submap 的全局位姿
+  for (const auto& submap_id_data : data_.global_submap_poses_2d) {
+    const transform::Rigid3d new_pose_3d =
+        T * transform::Embed3D(submap_id_data.data.global_pose);
+    data_.global_submap_poses_2d.at(submap_id_data.id).global_pose =
+        transform::Project2D(new_pose_3d);
+  }
+
+  // 变换路标点的全局位姿
+  for (auto& landmark_kv : data_.landmark_nodes) {
+    if (landmark_kv.second.global_landmark_pose.has_value()) {
+      landmark_kv.second.global_landmark_pose =
+          T * landmark_kv.second.global_landmark_pose.value();
+    }
+  }
+}
+
 }  // namespace mapping
 }  // namespace cartographer

@@ -104,6 +104,16 @@ class LocalizationUpdaterBridge {
 
   std::optional<::cartographer::localization::LocalizationState> GetLocalizationState() const;
 
+  // 重置地图原点：以当前机器人在地图中的定位位姿作为新原点，
+  // 将 pose graph 中所有数据变换到新坐标系，然后保存新的地图文件和 pbstream。
+  // map_base_filename: 不含后缀的地图文件路径前缀（如 "/path/to/map"）
+  // pbstream_filename: pbstream 输出路径（如 "/path/to/map.pbstream"）
+  // 返回 true 表示成功
+  bool ResetMapOrigin(const std::string& map_base_filename,
+                      const std::string& pbstream_filename,
+                      float occ_thresh,
+                      float free_thresh);
+
   int AddTrajectory(
       const std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>& expected_sensor_ids,
       const TrajectoryOptions& trajectory_options);

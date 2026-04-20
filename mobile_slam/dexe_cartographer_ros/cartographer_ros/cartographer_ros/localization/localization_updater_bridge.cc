@@ -167,6 +167,70 @@ LocalizationUpdaterBridge::GetLocalizationState() const
   return localization_updater_->GetLocalizationState();
 }
 
+bool LocalizationUpdaterBridge::ResetMapOrigin(
+    const std::string& map_base_filename,
+    const std::string& pbstream_filename,
+    const float occ_thresh,
+    const float free_thresh)
+{
+  // -----------------------------------------------------------------------
+  // Step 1: 获取当前机器人在地图中的全局位姿
+  // -----------------------------------------------------------------------
+  // GetLocalTrajectoryData 内部会自行加锁，不需要在外部再持有 mutex_
+  const auto traj_data = GetLocalTrajectoryData();
+
+  if (traj_data.empty()) {
+    LOG(ERROR) << "ResetMapOrigin: no trajectory data available, aborting.";
+    return false;
+  }
+
+  const auto& latest = traj_data.begin()->second;
+  if (!latest.local_slam_data) {
+    LOG(ERROR) << "ResetMapOrigin: local_slam_data is null, aborting.";
+    return false;
+  }
+
+  // T_robot_in_map (3D) 投影到 2D 后再嵌回 3D，消除 z / roll / pitch 分量
+  const Rigid3d robot_pose_in_map =
+      latest.local_to_map * latest.local_slam_data->local_pose;
+  const Rigid3d T_reset =
+      ::cartographer::transform::Embed3D(
+          ::cartographer::transform::Project2D(robot_pose_in_map));
+  const Rigid3d T_inv = T_reset.inverse();  // 旧系 → 新系
+
+  LOG(INFO) << "ResetMapOrigin: robot pose in old map frame: "
+            << robot_pose_in_map;
+  LOG(INFO) << "ResetMapOrigin: applying inverse transform (T_inv): " << T_inv;
+
+  // -----------------------------------------------------------------------
+  // Step 2: 对 pose graph 和 global_static_submap 应用坐标变换
+  // -----------------------------------------------------------------------
+  localization_updater_->ApplyOriginTransform(T_inv);
+
+  // -----------------------------------------------------------------------
+  // Step 3: 保存新的地图图像 + yaml
+  // -----------------------------------------------------------------------
+  const bool map_ok = SaveMap(map_base_filename, occ_thresh, free_thresh);
+  if (!map_ok) {
+    LOG(ERROR) << "ResetMapOrigin: SaveMap failed for: " << map_base_filename;
+    // 仍然尝试保存 pbstream，不因此提前退出
+  }
+
+  // -----------------------------------------------------------------------
+  // Step 4: 保存新的 pbstream（含变换后的位姿）
+  // -----------------------------------------------------------------------
+  const bool pb_ok =
+      localization_updater_->SerializeStateToFile(true, pbstream_filename);
+  if (!pb_ok) {
+    LOG(ERROR) << "ResetMapOrigin: SerializeStateToFile failed for: "
+               << pbstream_filename;
+  }
+
+  LOG(INFO) << "ResetMapOrigin: done. map_ok=" << map_ok
+            << " pb_ok=" << pb_ok;
+  return map_ok && pb_ok;
+}
+
 /**
  * @brief 根据传感器id和配置文件，创建位姿优化器
  * 

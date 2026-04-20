@@ -157,6 +157,11 @@ class PoseGraphInterface {
   // problem is solved.
   virtual void SetGlobalSlamOptimizationCallback(
       GlobalSlamOptimizationCallback callback) = 0;
+
+  // Applies a rigid transform to all global poses (trajectory nodes, submaps,
+  // landmarks).  Used for map-origin reset in localization mode.
+  // Default implementation is a no-op; PoseGraph2D overrides this.
+  virtual void ApplyTransformToAllPoses(const transform::Rigid3d& /*transform*/) {}
 };
 
 }  // namespace mapping

@@ -603,6 +603,18 @@ bool LocalizationNode::SaveMap(
       static_cast<float>(node_options_.mapping_free_thresh));
 }
 
+bool LocalizationNode::ResetMapOriginAndSave(
+    const std::string& map_base_filename,
+    const std::string& pbstream_filename)
+{
+  absl::MutexLock lock(&localization_updater_mutex_);
+  return localization_updater_bridge_.ResetMapOrigin(
+      map_base_filename,
+      pbstream_filename,
+      static_cast<float>(node_options_.mapping_occ_thresh),
+      static_cast<float>(node_options_.mapping_free_thresh));
+}
+
 
 void LocalizationNode::PublishSubmapList()
 {
