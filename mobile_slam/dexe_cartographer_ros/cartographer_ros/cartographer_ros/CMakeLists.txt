@@ -154,3 +154,14 @@ install(TARGETS reset_map_origin_tool
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+google_binary(merge_maps_tool
+  SRCS
+    tools/merge_maps_main.cc
+)
+
+install(TARGETS merge_maps_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
