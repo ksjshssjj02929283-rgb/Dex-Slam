@@ -548,32 +548,31 @@ void Submap2D::InsertCloudData(const sensor::PointCloud & cloud_data,
     return;
   }
   is_dirty_cloud_ = true;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-  PointCloudToPCL(cloud_data, cloud_pcl);
 
-  if (cloud_ikdtree_->Root_Node == nullptr) {
-    float resolution = grid_->limits().resolution();
-    cloud_ikdtree_->set_downsample_param(resolution);
-    cloud_ikdtree_->Build(cloud_pcl->points);
-  } else {
-    auto add_point_size = cloud_ikdtree_->Add_Points(cloud_pcl->points, true);
-  }
-
-  if (highlight_cloud_data.size() > 0) {
-    pcl::PointCloud<pcl::PointXYZ>::Ptr highlight_cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-    PointCloudToPCL(highlight_cloud_data, highlight_cloud_pcl);
-
-    if (highlight_cloud_ikdtree_->Root_Node == nullptr) {
-      float resolution = grid_->limits().resolution();
-      highlight_cloud_ikdtree_->set_downsample_param(resolution);
-      highlight_cloud_ikdtree_->Build(highlight_cloud_pcl->points);
-    } else {
-      auto add_point_size = highlight_cloud_ikdtree_->Add_Points(highlight_cloud_pcl->points, true);
-    }
-  }
-
-  // cloud_->InsertCloud(cloud_data);
-  // highlight_cloud_->InsertCloud(highlight_cloud_data);
+  // [DISABLE_IKDTREE_TEST] 禁用 ikd-tree 插入，改为直接维护 cloud_，用于排查 CPU 随时间增长问题。
+  // 保留 ikd-tree 对象（不创建节点），所有调用方的 Root_Node==nullptr 检查可安全跳过。
+  // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+  // PointCloudToPCL(cloud_data, cloud_pcl);
+  // if (cloud_ikdtree_->Root_Node == nullptr) {
+  //   float resolution = grid_->limits().resolution();
+  //   cloud_ikdtree_->set_downsample_param(resolution);
+  //   cloud_ikdtree_->Build(cloud_pcl->points);
+  // } else {
+  //   auto add_point_size = cloud_ikdtree_->Add_Points(cloud_pcl->points, true);
+  // }
+  // if (highlight_cloud_data.size() > 0) {
+  //   pcl::PointCloud<pcl::PointXYZ>::Ptr highlight_cloud_pcl = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
+  //   PointCloudToPCL(highlight_cloud_data, highlight_cloud_pcl);
+  //   if (highlight_cloud_ikdtree_->Root_Node == nullptr) {
+  //     float resolution = grid_->limits().resolution();
+  //     highlight_cloud_ikdtree_->set_downsample_param(resolution);
+  //     highlight_cloud_ikdtree_->Build(highlight_cloud_pcl->points);
+  //   } else {
+  //     auto add_point_size = highlight_cloud_ikdtree_->Add_Points(highlight_cloud_pcl->points, true);
+  //   }
+  // }
+  cloud_->InsertCloud(cloud_data);
+  highlight_cloud_->InsertCloud(highlight_cloud_data);
 
   cloud_culling_count_++;
   // 当cloud_culling_prob = 0.1时，不进行culling操作
@@ -641,6 +640,11 @@ void Submap2D::FreshCloudData() const
   // ikd-tree 已被 DestroyIkdTrees() 销毁时，cloud_/highlight_cloud_ 已是最新数据，
   // 直接返回即可，避免空指针解引用。
   if (!cloud_ikdtree_ || !highlight_cloud_ikdtree_) {
+    is_dirty_cloud_ = false;
+    return;
+  }
+  // [DISABLE_IKDTREE_TEST] ikd-tree 为空（未插入点云），cloud_ 已由直接 InsertCloud 维护，无需同步
+  if (cloud_ikdtree_->Root_Node == nullptr) {
     is_dirty_cloud_ = false;
     return;
   }
