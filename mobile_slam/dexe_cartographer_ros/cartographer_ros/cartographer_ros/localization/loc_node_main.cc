@@ -65,10 +65,15 @@ DEFINE_string(
 // ---------------------------------------------------------------------------
 // MapPersistenceManager GFlags（可在 launch 文件的 arguments 中覆盖）
 // ---------------------------------------------------------------------------
+DEFINE_bool(
+    enable_auto_save_map, true,
+    "Enable automatic map saving during localization. When disabled, "
+    "map will only be saved manually via save_map service or on shutdown.");
 DEFINE_double(
     auto_save_interval_s, 1800.0,
     "Interval in seconds between automatic map saves (default: 1800 = 30 min). "
-    "The save is triggered only when the robot velocity is below threshold.");
+    "The save is triggered only when the robot velocity is below threshold. "
+    "Only effective when enable_auto_save_map is true.");
 DEFINE_double(
     auto_save_linear_velocity_threshold, 0.01,
     "Linear velocity threshold (m/s) below which the robot is considered static "
@@ -427,14 +432,21 @@ private:
       state_ = LocalizationState::RUNNING;
 
       // 创建地图持久化管理器（定时自动保存 + 外部调用保存）
-      map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
-          this,
-          [this]() -> localization::LocalizationNode* {
-            return localization_node_.get();
-          },
-          [this]() -> std::pair<std::string, std::string> {
-            return {FLAGS_map_folder, FLAGS_map_name};
-          });
+      // 仅在 enable_auto_save_map 为 true 时创建，否则只能通过 save_map 服务手动保存
+      if (FLAGS_enable_auto_save_map) {
+        map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
+            this,
+            [this]() -> localization::LocalizationNode* {
+              return localization_node_.get();
+            },
+            [this]() -> std::pair<std::string, std::string> {
+              return {FLAGS_map_folder, FLAGS_map_name};
+            });
+        RCLCPP_INFO(get_logger(), "Auto-save map is ENABLED (interval: %.0f s)",
+                    FLAGS_auto_save_interval_s);
+      } else {
+        RCLCPP_INFO(get_logger(), "Auto-save map is DISABLED - map will only be saved manually via save_map service");
+      }
 
       RCLCPP_INFO(get_logger(), "Localization started successfully");
       return true;
