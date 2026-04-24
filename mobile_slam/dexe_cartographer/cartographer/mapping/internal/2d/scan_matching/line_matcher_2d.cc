@@ -235,83 +235,126 @@ bool LineMatcher2D::GetNearestLaneLine(
   const std::map<int, MapLine2D> & line_map_list =
     line_map_2d.GetLineMapData2DList();
   bool have_res = false;
+  if (line_map_list.empty()) return false;
   sensor::LineData data_to_local =
     sensor::TransformLineData(pose_prediction, data);
-  // std::cout << "\033[32m data_to_local begin: " << data_to_local.begin()[0]
-  // << " " << data_to_local.begin()[1] << " end: "
-  //           << data_to_local.end()[0] << " " << data_to_local.end()[1] <<
-  //           "\033[0m" << std::endl;
-  for (auto it : line_map_list) {
-    // std::cout << "\033[36m begin: " << it.second.line_data().begin()[0] << "
-    // " << it.second.line_data().begin()[1] << " end: "
-    //           << it.second.line_data().end()[0] << " " <<
-    //           it.second.line_data().end()[1] << "\033[0m" << std::endl;
-    double delta_theta, delta_tra_parallel, delta_tra_elongation;
-    delta_theta = std::min(
-      fabs(angleDiff(data_to_local.angle(), it.second.line_data().angle())),
-      fabs(
-        angleDiff(
-          data_to_local.angle() + M_PI,
-          it.second.line_data().angle())));
-    // std::cout << "delta_theta: " << delta_theta << std::endl;
-    if (delta_theta > options_.line_delta_theta_threshold()) {
-      continue;
-    }
-    // normal
-    Eigen::Vector2d normal1 =
-      data_to_local.normal(pose_prediction.translation());
-    Eigen::Vector2d normal2 =
-      it.second.line_data().normal(pose_prediction.translation());
-    if (normal1.dot(normal2) < 0) {
-      continue;
-    }
 
-    Eigen::Vector2d contact_point_begin =
-      ComputeContactPoint(it.second.line_data(), data_to_local.begin());
-    Eigen::Vector2d contact_point_end =
-      ComputeContactPoint(it.second.line_data(), data_to_local.end());
-    // std::cout << "contact_point_begin: " << contact_point_begin[0] << " " <<
-    // contact_point_begin[1] << std::endl; std::cout << "contact_point_end: "
-    // << contact_point_end[0] << " " << contact_point_end[1] << std::endl;
-    if ((contact_point_begin[0] > std::max(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0]) &&
-      contact_point_end[0] > std::max(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0])) ||
-      (contact_point_begin[0] < std::min(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0]) &&
-      contact_point_end[0] < std::min(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0])))
-    {
-      // delta_tra_elongation = 0;
-      delta_tra_elongation = std::min(
-        std::min(
-          (contact_point_begin - it.second.line_data().begin()).norm(),
-          (contact_point_begin - it.second.line_data().end()).norm()),
-        std::min(
-          (contact_point_end - it.second.line_data().begin()).norm(),
-          (contact_point_end - it.second.line_data().end()).norm()));
-    } else {
-      delta_tra_elongation = 0;
+  // 角度分桶加速：只搜索 ±2 桶（覆盖 ±10°，等于最大角度阈值），避免 O(K) 全量遍历
+  // 若索引与 map 不一致（如通过旧路径创建）则回退到全量遍历，保证正确性
+  if (line_map_2d.is_angle_index_valid()) {
+    const int query_bucket = LineMap2DList::AngleToBucket(data_to_local.angle());
+    static constexpr int kDeltaBuckets = 2;
+    for (int db = -kDeltaBuckets; db <= kDeltaBuckets; ++db) {
+      const int b = (query_bucket + db + LineMap2DList::kAngleBuckets) %
+                    LineMap2DList::kAngleBuckets;
+      for (int id : line_map_2d.GetAngleBucket(b)) {
+        auto map_it = line_map_list.find(id);
+        if (map_it == line_map_list.end()) continue;
+        const MapLine2D & map_line = map_it->second;
+        // 距离过滤：仅匹配与机器人距离 ≤ 50m 的地图线
+        if (((map_line.line_data().begin() + map_line.line_data().end()) * 0.5 -
+             pose_prediction.translation()).norm() > 50.0) {
+          continue;
+        }
+
+        double delta_theta, delta_tra_parallel, delta_tra_elongation;
+        delta_theta = std::min(
+          fabs(angleDiff(data_to_local.angle(), map_line.line_data().angle())),
+          fabs(
+            angleDiff(
+              data_to_local.angle() + M_PI,
+              map_line.line_data().angle())));
+        if (delta_theta > options_.line_delta_theta_threshold()) {
+          continue;
+        }
+        // normal
+        Eigen::Vector2d normal1 =
+          data_to_local.normal(pose_prediction.translation());
+        Eigen::Vector2d normal2 =
+          map_line.line_data().normal(pose_prediction.translation());
+        if (normal1.dot(normal2) < 0) {
+          continue;
+        }
+
+        Eigen::Vector2d contact_point_begin =
+          ComputeContactPoint(map_line.line_data(), data_to_local.begin());
+        Eigen::Vector2d contact_point_end =
+          ComputeContactPoint(map_line.line_data(), data_to_local.end());
+        if ((contact_point_begin[0] > std::max(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0]) &&
+          contact_point_end[0] > std::max(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0])) ||
+          (contact_point_begin[0] < std::min(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0]) &&
+          contact_point_end[0] < std::min(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0])))
+        {
+          delta_tra_elongation = std::min(
+            std::min(
+              (contact_point_begin - map_line.line_data().begin()).norm(),
+              (contact_point_begin - map_line.line_data().end()).norm()),
+            std::min(
+              (contact_point_end - map_line.line_data().begin()).norm(),
+              (contact_point_end - map_line.line_data().end()).norm()));
+        } else {
+          delta_tra_elongation = 0;
+        }
+
+        if (delta_tra_elongation > options_.line_delta_tra_elongation_threshold()) {
+          continue;
+        }
+
+        delta_tra_parallel = ((data_to_local.begin() - contact_point_begin) +
+          (data_to_local.end() - contact_point_end)).norm() / 2;
+
+        if (delta_tra_parallel < min_delta_tra_parallel) {
+          min_delta_tra_parallel = delta_tra_parallel;
+          have_res = true;
+          local_id = id;
+        }
+      }
     }
-
-    // std::cout << "delta_tra_elongation: " << delta_tra_elongation <<
-    // std::endl;
-    if (delta_tra_elongation > options_.line_delta_tra_elongation_threshold()) {
-      continue;
-    }
-
-    delta_tra_parallel = ((data_to_local.begin() - contact_point_begin) +
-      (data_to_local.end() - contact_point_end)).norm() / 2;
-
-    // std::cout << "delta_tra_parallel: " << delta_tra_parallel << std::endl;
-    if (delta_tra_parallel < min_delta_tra_parallel) {
-      min_delta_tra_parallel = delta_tra_parallel;
-      have_res = true;
-      local_id = it.first;
+  } else {
+    // 回退：全量遍历（索引未就绪时保证正确性）
+    for (const auto& it : line_map_list) {
+      // 距离过滤：仅匹配与机器人距离 ≤ 50m 的地图线
+      if (((it.second.line_data().begin() + it.second.line_data().end()) * 0.5 -
+           pose_prediction.translation()).norm() > 50.0) continue;
+      double delta_theta, delta_tra_parallel, delta_tra_elongation;
+      delta_theta = std::min(
+        fabs(angleDiff(data_to_local.angle(), it.second.line_data().angle())),
+        fabs(angleDiff(data_to_local.angle() + M_PI, it.second.line_data().angle())));
+      if (delta_theta > options_.line_delta_theta_threshold()) continue;
+      Eigen::Vector2d normal1 = data_to_local.normal(pose_prediction.translation());
+      Eigen::Vector2d normal2 = it.second.line_data().normal(pose_prediction.translation());
+      if (normal1.dot(normal2) < 0) continue;
+      Eigen::Vector2d contact_point_begin = ComputeContactPoint(it.second.line_data(), data_to_local.begin());
+      Eigen::Vector2d contact_point_end   = ComputeContactPoint(it.second.line_data(), data_to_local.end());
+      if ((contact_point_begin[0] > std::max(it.second.line_data().begin()[0], it.second.line_data().end()[0]) &&
+           contact_point_end[0]   > std::max(it.second.line_data().begin()[0], it.second.line_data().end()[0])) ||
+          (contact_point_begin[0] < std::min(it.second.line_data().begin()[0], it.second.line_data().end()[0]) &&
+           contact_point_end[0]   < std::min(it.second.line_data().begin()[0], it.second.line_data().end()[0])))
+      {
+        delta_tra_elongation = std::min(
+          std::min((contact_point_begin - it.second.line_data().begin()).norm(),
+                   (contact_point_begin - it.second.line_data().end()).norm()),
+          std::min((contact_point_end   - it.second.line_data().begin()).norm(),
+                   (contact_point_end   - it.second.line_data().end()).norm()));
+      } else {
+        delta_tra_elongation = 0;
+      }
+      if (delta_tra_elongation > options_.line_delta_tra_elongation_threshold()) continue;
+      delta_tra_parallel = ((data_to_local.begin() - contact_point_begin) +
+                             (data_to_local.end()   - contact_point_end)).norm() / 2;
+      if (delta_tra_parallel < min_delta_tra_parallel) {
+        min_delta_tra_parallel = delta_tra_parallel;
+        have_res = true;
+        local_id = it.first;
+      }
     }
   }
 #ifdef TEST_DEBUG
@@ -339,91 +382,135 @@ bool LineMatcher2D::GetNearestLaneLine(
   const std::map<int, MapLine2D> & line_map_list =
     line_map_2d.GetLineMapData2DList();
   bool have_res = false;
+  if (line_map_list.empty()) return false;
   // 将LineData转换到局部坐标系下
   sensor::LineData data_to_local =
     sensor::TransformLineData(pose_prediction, data);
-  // std::cout << "\033[32m data_to_local begin: " << data_to_local.begin()[0]
-  // << " " << data_to_local.begin()[1] << " end: "
-  //           << data_to_local.end()[0] << " " << data_to_local.end()[1] <<
-  //           "\033[0m" << std::endl;
-  // 遍历line map中的每一个线段
-  for (auto it : line_map_list) {
-    // std::cout << "\033[36m begin: " << it.second.line_data().begin()[0] << "
-    // " << it.second.line_data().begin()[1] << " end: "
-    //           << it.second.line_data().end()[0] << " " <<
-    //           it.second.line_data().end()[1] << "\033[0m" << std::endl;
-    double delta_theta, delta_tra_parallel, delta_tra_elongation;
-    // 计算当前线段与line map线段的夹角
-    delta_theta = std::min(
-      fabs(angleDiff(data_to_local.angle(), it.second.line_data().angle())),
-      fabs(
-        angleDiff(
-          data_to_local.angle() + M_PI,
-          it.second.line_data().angle())));
-    // std::cout << "delta_theta: " << delta_theta << std::endl;
-    if (delta_theta > options_.line_delta_theta_threshold()) {
-      continue;
-    }
-    // 两个线段的法向量方向相反，则跳过
-    // normal
-    Eigen::Vector2d normal1 =
-      data_to_local.normal(pose_prediction.translation());
-    Eigen::Vector2d normal2 =
-      it.second.line_data().normal(pose_prediction.translation());
-    if (normal1.dot(normal2) < 0) {
-      continue;
-    }
 
-    // 当前线段在线地图中的起止点的投影, 就是contact point
-    Eigen::Vector2d contact_point_begin =
-      ComputeContactPoint(it.second.line_data(), data_to_local.begin());
-    Eigen::Vector2d contact_point_end =
-      ComputeContactPoint(it.second.line_data(), data_to_local.end());
-    // std::cout << "contact_point_begin: " << contact_point_begin[0] << " " <<
-    // contact_point_begin[1] << std::endl; std::cout << "contact_point_end: "
-    // << contact_point_end[0] << " " << contact_point_end[1] << std::endl;
-    if ((contact_point_begin[0] > std::max(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0]) &&
-      contact_point_end[0] > std::max(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0])) ||
-      (contact_point_begin[0] < std::min(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0]) &&
-      contact_point_end[0] < std::min(
-        it.second.line_data().begin()[0],
-        it.second.line_data().end()[0])))
-    {
-      // delta_tra_elongation = 0;
-      delta_tra_elongation = std::min(
-        std::min(
-          (contact_point_begin - it.second.line_data().begin()).norm(),
-          (contact_point_begin - it.second.line_data().end()).norm()),
-        std::min(
-          (contact_point_end - it.second.line_data().begin()).norm(),
-          (contact_point_end - it.second.line_data().end()).norm()));
-    } else {
-      delta_tra_elongation = 0;
+  // 角度分桶加速：只搜索 ±2 桶（覆盖 ±10°，等于最大角度阈值），避免 O(K) 全量遍历
+  // 若索引与 map 不一致（如通过旧路径创建）则回退到全量遍历，保证正确性
+  if (line_map_2d.is_angle_index_valid()) {
+    const int query_bucket = LineMap2DList::AngleToBucket(data_to_local.angle());
+    static constexpr int kDeltaBuckets = 2;
+    for (int db = -kDeltaBuckets; db <= kDeltaBuckets; ++db) {
+      const int b = (query_bucket + db + LineMap2DList::kAngleBuckets) %
+                    LineMap2DList::kAngleBuckets;
+      for (int id : line_map_2d.GetAngleBucket(b)) {
+        auto map_it = line_map_list.find(id);
+        if (map_it == line_map_list.end()) continue;
+        const MapLine2D & map_line = map_it->second;
+        // 距离过滤：仅匹配与机器人距离 ≤ 50m 的地图线
+        if (((map_line.line_data().begin() + map_line.line_data().end()) * 0.5 -
+             pose_prediction.translation()).norm() > 50.0) {
+          continue;
+        }
+
+        double delta_theta, delta_tra_parallel, delta_tra_elongation;
+        // 计算当前线段与line map线段的夹角
+        delta_theta = std::min(
+          fabs(angleDiff(data_to_local.angle(), map_line.line_data().angle())),
+          fabs(
+            angleDiff(
+              data_to_local.angle() + M_PI,
+              map_line.line_data().angle())));
+        if (delta_theta > options_.line_delta_theta_threshold()) {
+          continue;
+        }
+        // 两个线段的法向量方向相反，则跳过
+        Eigen::Vector2d normal1 =
+          data_to_local.normal(pose_prediction.translation());
+        Eigen::Vector2d normal2 =
+          map_line.line_data().normal(pose_prediction.translation());
+        if (normal1.dot(normal2) < 0) {
+          continue;
+        }
+
+        // 当前线段在线地图中的起止点的投影, 就是contact point
+        Eigen::Vector2d contact_point_begin =
+          ComputeContactPoint(map_line.line_data(), data_to_local.begin());
+        Eigen::Vector2d contact_point_end =
+          ComputeContactPoint(map_line.line_data(), data_to_local.end());
+        if ((contact_point_begin[0] > std::max(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0]) &&
+          contact_point_end[0] > std::max(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0])) ||
+          (contact_point_begin[0] < std::min(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0]) &&
+          contact_point_end[0] < std::min(
+            map_line.line_data().begin()[0],
+            map_line.line_data().end()[0])))
+        {
+          delta_tra_elongation = std::min(
+            std::min(
+              (contact_point_begin - map_line.line_data().begin()).norm(),
+              (contact_point_begin - map_line.line_data().end()).norm()),
+            std::min(
+              (contact_point_end - map_line.line_data().begin()).norm(),
+              (contact_point_end - map_line.line_data().end()).norm()));
+        } else {
+          delta_tra_elongation = 0;
+        }
+
+        if (delta_tra_elongation > options_.line_delta_tra_elongation_threshold()) {
+          continue;
+        }
+
+        delta_tra_parallel = ((data_to_local.begin() - contact_point_begin) +
+          (data_to_local.end() - contact_point_end)).norm() / 2;
+
+        if (delta_tra_parallel < min_delta_tra_parallel) {
+          min_delta_tra_parallel = delta_tra_parallel;
+          Eigen::Vector3d matching_dis = Eigen::Vector3d{
+            delta_tra_parallel, delta_tra_elongation, delta_theta};
+          new_data.SetMatchingDis(matching_dis);
+          have_res = true;
+          local_id = id;
+        }
+      }
     }
-
-    // std::cout << "delta_tra_elongation: " << delta_tra_elongation <<
-    // std::endl;
-    if (delta_tra_elongation > options_.line_delta_tra_elongation_threshold()) {
-      continue;
-    }
-
-    delta_tra_parallel = ((data_to_local.begin() - contact_point_begin) +
-      (data_to_local.end() - contact_point_end)).norm() / 2;
-
-    // std::cout << "delta_tra_parallel: " << delta_tra_parallel << std::endl;
-    if (delta_tra_parallel < min_delta_tra_parallel) {
-      min_delta_tra_parallel = delta_tra_parallel;
-      Eigen::Vector3d matching_dis = Eigen::Vector3d{
-        delta_tra_parallel, delta_tra_elongation, delta_theta};
-      new_data.SetMatchingDis(matching_dis);
-      have_res = true;
-      local_id = it.first;
+  } else {
+    // 回退：全量遍历（索引未就绪时保证正确性）
+    for (const auto& it : line_map_list) {
+      // 距离过滤：仅匹配与机器人距离 ≤ 50m 的地图线
+      if (((it.second.line_data().begin() + it.second.line_data().end()) * 0.5 -
+           pose_prediction.translation()).norm() > 50.0) continue;
+      double delta_theta, delta_tra_parallel, delta_tra_elongation;
+      delta_theta = std::min(
+        fabs(angleDiff(data_to_local.angle(), it.second.line_data().angle())),
+        fabs(angleDiff(data_to_local.angle() + M_PI, it.second.line_data().angle())));
+      if (delta_theta > options_.line_delta_theta_threshold()) continue;
+      Eigen::Vector2d normal1 = data_to_local.normal(pose_prediction.translation());
+      Eigen::Vector2d normal2 = it.second.line_data().normal(pose_prediction.translation());
+      if (normal1.dot(normal2) < 0) continue;
+      Eigen::Vector2d contact_point_begin = ComputeContactPoint(it.second.line_data(), data_to_local.begin());
+      Eigen::Vector2d contact_point_end   = ComputeContactPoint(it.second.line_data(), data_to_local.end());
+      if ((contact_point_begin[0] > std::max(it.second.line_data().begin()[0], it.second.line_data().end()[0]) &&
+           contact_point_end[0]   > std::max(it.second.line_data().begin()[0], it.second.line_data().end()[0])) ||
+          (contact_point_begin[0] < std::min(it.second.line_data().begin()[0], it.second.line_data().end()[0]) &&
+           contact_point_end[0]   < std::min(it.second.line_data().begin()[0], it.second.line_data().end()[0])))
+      {
+        delta_tra_elongation = std::min(
+          std::min((contact_point_begin - it.second.line_data().begin()).norm(),
+                   (contact_point_begin - it.second.line_data().end()).norm()),
+          std::min((contact_point_end   - it.second.line_data().begin()).norm(),
+                   (contact_point_end   - it.second.line_data().end()).norm()));
+      } else {
+        delta_tra_elongation = 0;
+      }
+      if (delta_tra_elongation > options_.line_delta_tra_elongation_threshold()) continue;
+      delta_tra_parallel = ((data_to_local.begin() - contact_point_begin) +
+                             (data_to_local.end()   - contact_point_end)).norm() / 2;
+      if (delta_tra_parallel < min_delta_tra_parallel) {
+        min_delta_tra_parallel = delta_tra_parallel;
+        Eigen::Vector3d matching_dis = Eigen::Vector3d{
+          delta_tra_parallel, delta_tra_elongation, delta_theta};
+        new_data.SetMatchingDis(matching_dis);
+        have_res = true;
+        local_id = it.first;
+      }
     }
   }
 #ifdef TEST_DEBUG

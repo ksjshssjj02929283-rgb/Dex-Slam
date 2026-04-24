@@ -52,7 +52,8 @@ void GrowAsNeeded(const sensor::RangeData& range_data,
 void CastRays(const sensor::RangeData& range_data,
               const std::vector<uint16>& hit_table,
               const std::vector<uint16>& miss_table,
-              const bool insert_free_space, ProbabilityGrid* probability_grid) {
+              const bool insert_free_space, ProbabilityGrid* probability_grid,
+              const bool skip_saturated_free_cells = false) {
   // 增长地图边界
   GrowAsNeeded(range_data, probability_grid);
   // 获取增加地图边界后的地图limits
@@ -81,6 +82,12 @@ void CastRays(const sensor::RangeData& range_data,
     std::vector<Eigen::Array2i> ray =
         RayToPixelMask(begin, end, kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {
+      // 跳过已饱和 free 格子：ApplyLookupTable 结果不会改变其值，属数学等价跳过
+      if (skip_saturated_free_cells &&
+          probability_grid->GetCorrespondenceCost(cell_index) <=
+              probability_grid->GetMinCorrespondenceCost()) {
+        continue;
+      }
       probability_grid->ApplyLookupTable(cell_index, miss_table);
     }
   }
@@ -91,6 +98,11 @@ void CastRays(const sensor::RangeData& range_data,
         begin, superscaled_limits.GetCellIndex(missing_echo.position.head<2>()),
         kSubpixelScale);
     for (const Eigen::Array2i& cell_index : ray) {
+      if (skip_saturated_free_cells &&
+          probability_grid->GetCorrespondenceCost(cell_index) <=
+              probability_grid->GetMinCorrespondenceCost()) {
+        continue;
+      }
       probability_grid->ApplyLookupTable(cell_index, miss_table);
     }
   }
@@ -129,7 +141,7 @@ void ProbabilityGridRangeDataInserter2D::Insert(
   // By not finishing the update after hits are inserted, we give hits priority
   // (i.e. no hits will be ignored because of a miss in the same cell).
   CastRays(range_data, hit_table_, miss_table_, options_.insert_free_space(),
-           probability_grid);
+           probability_grid, skip_saturated_free_cells_);
   probability_grid->FinishUpdate();
 }
 

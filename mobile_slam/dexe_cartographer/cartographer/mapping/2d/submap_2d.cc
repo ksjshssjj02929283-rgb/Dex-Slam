@@ -955,6 +955,7 @@ ActiveSubmaps2D::CreateRangeDataInserter() {
               .tsdf_range_data_inserter_options_2d());
     default:
       LOG(FATAL) << "Unknown RangeDataInserterType.";
+      return nullptr;
   }
 }
 
@@ -987,6 +988,7 @@ std::unique_ptr<GridInterface> ActiveSubmaps2D::CreateGrid(
           &conversion_tables_);
     default:
       LOG(FATAL) << "Unknown GridType.";
+      return nullptr;
   }
 }
 

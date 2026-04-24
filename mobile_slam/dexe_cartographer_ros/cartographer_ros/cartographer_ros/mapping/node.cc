@@ -662,18 +662,18 @@ void Node::PublishLocalTrajectoryData() {
       }
 
         // TODO: linfeng.guo: 根据需要，判断是否需要保存位姿
-      // if (node_options_.save_tracked_pose &&
-      //   trajectory_data.trajectory_options.trajectory_builder_options.has_pure_localization_trimmer())
-      // {
-      //   Eigen::Vector3d t = tracking_to_map.translation();
-      //   Eigen::Quaterniond q = tracking_to_map.rotation();
-      //   double time = stamped_transform.header.stamp.toSec();
-      //   if (!carto_pose_tool_) {
-      //     LOG(INFO) << "carto_pose_tool_ is nullptr\n";
-      //   } else {
-      //     carto_pose_tool_->AddPoseData(t, q, time);
-      //   }
-      // }
+      if (node_options_.save_tracked_pose &&
+        trajectory_data.trajectory_options.trajectory_builder_options.has_pure_localization_trimmer())
+      {
+        Eigen::Vector3d t = tracking_to_map.translation();
+        Eigen::Quaterniond q = tracking_to_map.rotation();
+        double time = cartographer_ros::ToRos(trajectory_data.local_slam_data->time).seconds();
+        if (!carto_pose_tool_) {
+          LOG(INFO) << "carto_pose_tool_ is nullptr\n";
+        } else {
+          carto_pose_tool_->AddPoseData(t, q, time);
+        }
+      }
     }
   }
 }

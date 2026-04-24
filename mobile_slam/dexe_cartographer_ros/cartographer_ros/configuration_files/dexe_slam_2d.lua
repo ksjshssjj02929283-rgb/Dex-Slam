@@ -93,10 +93,10 @@ TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 10
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.line_weight = 60
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.point_weight = 60
 
-TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_distance_meters = 0.2
+TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_distance_meters = 0.25
 TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_time_seconds = 2
 TRAJECTORY_BUILDER_2D.keyframe_motion_filter.max_angle_radians = math.rad(15.)
-TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_distance_meters = 0.2
+TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_distance_meters = 0.25
 TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_time_seconds = 30
 TRAJECTORY_BUILDER_2D.map_insertion_motion_filter.max_angle_radians = math.rad(45.)
 
@@ -107,7 +107,7 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.04
 
 -- [[回环检测参数]]
 POSE_GRAPH.constraint_builder.min_score = 0.55
-POSE_GRAPH.constraint_builder.max_constraint_distance = 10.
+POSE_GRAPH.constraint_builder.max_constraint_distance = 20.
 POSE_GRAPH.optimize_every_n_nodes = 50
 POSE_GRAPH.optimization_problem.local_slam_pose_translation_weight = 1e5
 POSE_GRAPH.optimization_problem.local_slam_pose_rotation_weight = 1e5
