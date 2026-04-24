@@ -601,7 +601,9 @@ void Submap2D::CloudDataCulling()
   }
 
   const MapLimits& limits = grid_->limits();
-  // 需要先调用flatten函数，更新PCL_Storage
+  // 修复：flatten 只追加（append）不清空，每次 flatten 前必须先清空 PCL_Storage。
+  // 否则每次调用都累积一遍全树点云，迭代量随调用次数线性增长，导致 CPU 随时间飙升。
+  ikd_tree::iKdTree<pcl::PointXYZ>::PointVector().swap(cloud_ikdtree_->PCL_Storage);
   cloud_ikdtree_->flatten(cloud_ikdtree_->Root_Node,
                           cloud_ikdtree_->PCL_Storage,
                           ikd_tree::NOT_RECORD);
@@ -619,6 +621,8 @@ void Submap2D::CloudDataCulling()
 
   points_to_delete.clear();
 
+  // 同样修复 highlight_cloud_ikdtree_ 的 PCL_Storage 累积问题
+  ikd_tree::iKdTree<pcl::PointXYZ>::PointVector().swap(highlight_cloud_ikdtree_->PCL_Storage);
   highlight_cloud_ikdtree_->flatten(highlight_cloud_ikdtree_->Root_Node,
                                     highlight_cloud_ikdtree_->PCL_Storage,
                                     ikd_tree::NOT_RECORD);
@@ -951,6 +955,7 @@ ActiveSubmaps2D::CreateRangeDataInserter() {
               .tsdf_range_data_inserter_options_2d());
     default:
       LOG(FATAL) << "Unknown RangeDataInserterType.";
+      return nullptr;
   }
 }
 
@@ -983,6 +988,7 @@ std::unique_ptr<GridInterface> ActiveSubmaps2D::CreateGrid(
           &conversion_tables_);
     default:
       LOG(FATAL) << "Unknown GridType.";
+      return nullptr;
   }
 }
 

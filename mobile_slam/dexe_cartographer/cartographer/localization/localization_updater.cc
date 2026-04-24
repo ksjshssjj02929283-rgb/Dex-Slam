@@ -309,6 +309,24 @@ std::string LocalizationUpdater::SubmapToProto(
   return "";
 }
 
+void LocalizationUpdater::ApplyOriginTransform(const transform::Rigid3d& T) {
+  // 1. 变换 pose graph 中所有节点、submap、路标的全局位姿
+  pose_graph_->ApplyTransformToAllPoses(T);
+
+  // 2. 变换 global_static_submap 的 local_pose（它本质上是该 submap 在全局坐标系中的位置）
+  if (global_static_submap_) {
+    global_static_submap_->set_local_pose(T * global_static_submap_->local_pose());
+  }
+
+  // 3. 同步 local map updater 内部维护的 dynamic/local submap 与运行时位姿。
+  if (pose_estimator_2d_) {
+    auto* local_map_updater = pose_estimator_2d_->GetLocalMapUpdater();
+    if (local_map_updater) {
+      local_map_updater->ApplyOriginTransform(T);
+    }
+  }
+}
+
 void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
                                 io::ProtoStreamWriterInterface* const writer) {
   // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存

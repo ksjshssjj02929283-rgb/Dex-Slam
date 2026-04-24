@@ -73,6 +73,11 @@ class Submap {
   // Pose of this submap in the local map frame.
   transform::Rigid3d local_pose() const { return local_pose_; }
 
+  // Update the local pose (e.g. for coordinate origin reset).
+  void set_local_pose(const transform::Rigid3d& local_pose) {
+    local_pose_ = local_pose;
+  }
+
   // Number of RangeData inserted.
   int num_range_data() const { return num_range_data_; }
   void set_num_range_data(const int num_range_data) {
@@ -85,7 +90,7 @@ class Submap {
   }
 
  private:
-  const transform::Rigid3d local_pose_;
+  transform::Rigid3d local_pose_;
   int num_range_data_ = 0;
   bool insertion_finished_ = false;
 };

@@ -235,17 +235,17 @@ LocalizationNode::LocalizationNode(
       100ms, std::bind(&LocalizationNode::PublishLocalizationState, this));
 
   // TODO: linfeng.guo 按需保存跟踪位姿
-  // if (node_options_.save_tracked_pose) {
-  //   if (!boost::filesystem::is_directory(node_options_.tracked_pose_directory)) {
-  //     cartographer::utility::FileManager::InitDirectory(
-  //         node_options_.tracked_pose_directory, "tracked_pose of cartographer");
-  //   }
-  //   std::string file_path =
-  //       node_options_.tracked_pose_directory + node_options_.tracked_pose_filename;
-  //   cartographer::utility::FileManager::RemoveFile(file_path);
-  //   carto_pose_tool_ = std::make_shared<cartographer::utility::PoseSaveTool>(
-  //       file_path, node_options_.tracked_pose_format);
-  // }
+  if (node_options_.save_tracked_pose) {
+    if (!boost::filesystem::is_directory(node_options_.tracked_pose_directory)) {
+      cartographer::utility::FileManager::InitDirectory(
+          node_options_.tracked_pose_directory, "tracked_pose of cartographer");
+    }
+    std::string file_path =
+        node_options_.tracked_pose_directory + node_options_.tracked_pose_filename;
+    cartographer::utility::FileManager::RemoveFile(file_path);
+    carto_pose_tool_ = std::make_shared<cartographer::utility::PoseSaveTool>(
+        file_path, node_options_.tracked_pose_format);
+  }
 }
 
 // 这里后续放service
@@ -503,10 +503,8 @@ void LocalizationNode::PublishLocalTrajectoryData()
     }();
     // 当前跟踪的机器人位姿 = 局部到地图的位姿 * 跟踪到局部的位姿
     // T_map_base = T_map_local * T_local_base
-    // const Rigid3d tracking_to_map =
-    //     trajectory_data.local_to_map * tracking_to_local;
-
-    const Rigid3d tracking_to_map = tracking_to_local;
+    const Rigid3d tracking_to_map =
+        trajectory_data.local_to_map * tracking_to_local;
 
     if (trajectory_data.published_to_tracking != nullptr) {
       if (node_options_.publish_to_tf) {
@@ -582,7 +580,7 @@ void LocalizationNode::PublishLocalTrajectoryData()
       {
         Eigen::Vector3d t = tracking_to_map.translation();
         Eigen::Quaterniond q = tracking_to_map.rotation();
-        const double time_sec = rclcpp::Time(stamped_transform.header.stamp).seconds();
+        const double time_sec = cartographer_ros::ToRos(trajectory_data.local_slam_data->time).seconds();
         if (!carto_pose_tool_) {
           LOG(INFO) << "carto_pose_tool_ is nullptr";
         } else {
@@ -599,6 +597,18 @@ bool LocalizationNode::SaveMap(
   absl::MutexLock lock(&localization_updater_mutex_);
   return localization_updater_bridge_.SaveMap(
       map_filename,
+      static_cast<float>(node_options_.mapping_occ_thresh),
+      static_cast<float>(node_options_.mapping_free_thresh));
+}
+
+bool LocalizationNode::ResetMapOriginAndSave(
+    const std::string& map_base_filename,
+    const std::string& pbstream_filename)
+{
+  absl::MutexLock lock(&localization_updater_mutex_);
+  return localization_updater_bridge_.ResetMapOrigin(
+      map_base_filename,
+      pbstream_filename,
       static_cast<float>(node_options_.mapping_occ_thresh),
       static_cast<float>(node_options_.mapping_free_thresh));
 }

@@ -32,8 +32,9 @@
 
 // ---------------------------------------------------------------------------
 // GFlag 声明（定义位于 loc_node_main.cc）
-// 其他编译单元若需使用，只需 DECLARE_double。
+// 其他编译单元若需使用，只需 DECLARE_bool/DECLARE_double。
 // ---------------------------------------------------------------------------
+DECLARE_bool(enable_auto_save_map);
 DECLARE_double(auto_save_interval_s);
 DECLARE_double(auto_save_linear_velocity_threshold);
 DECLARE_double(auto_save_angular_velocity_threshold);

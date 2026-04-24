@@ -65,10 +65,15 @@ DEFINE_string(
 // ---------------------------------------------------------------------------
 // MapPersistenceManager GFlags（可在 launch 文件的 arguments 中覆盖）
 // ---------------------------------------------------------------------------
+DEFINE_bool(
+    enable_auto_save_map, true,
+    "Enable automatic map saving during localization. When disabled, "
+    "map will only be saved manually via save_map service or on shutdown.");
 DEFINE_double(
     auto_save_interval_s, 1800.0,
     "Interval in seconds between automatic map saves (default: 1800 = 30 min). "
-    "The save is triggered only when the robot velocity is below threshold.");
+    "The save is triggered only when the robot velocity is below threshold. "
+    "Only effective when enable_auto_save_map is true.");
 DEFINE_double(
     auto_save_linear_velocity_threshold, 0.01,
     "Linear velocity threshold (m/s) below which the robot is considered static "
@@ -171,6 +176,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
 
   // === Service Clients ===
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_filter_client_;
@@ -209,6 +215,11 @@ private:
     save_map_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/save_map",
         std::bind(&LocalizationManagerNode::HandleSaveMap, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    reset_map_origin_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/reset_map_origin",
+        std::bind(&LocalizationManagerNode::HandleResetMapOrigin, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // 创建服务客户端
@@ -421,14 +432,21 @@ private:
       state_ = LocalizationState::RUNNING;
 
       // 创建地图持久化管理器（定时自动保存 + 外部调用保存）
-      map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
-          this,
-          [this]() -> localization::LocalizationNode* {
-            return localization_node_.get();
-          },
-          [this]() -> std::pair<std::string, std::string> {
-            return {FLAGS_map_folder, FLAGS_map_name};
-          });
+      // 仅在 enable_auto_save_map 为 true 时创建，否则只能通过 save_map 服务手动保存
+      if (FLAGS_enable_auto_save_map) {
+        map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
+            this,
+            [this]() -> localization::LocalizationNode* {
+              return localization_node_.get();
+            },
+            [this]() -> std::pair<std::string, std::string> {
+              return {FLAGS_map_folder, FLAGS_map_name};
+            });
+        RCLCPP_INFO(get_logger(), "Auto-save map is ENABLED (interval: %.0f s)",
+                    FLAGS_auto_save_interval_s);
+      } else {
+        RCLCPP_INFO(get_logger(), "Auto-save map is DISABLED - map will only be saved manually via save_map service");
+      }
 
       RCLCPP_INFO(get_logger(), "Localization started successfully");
       return true;
@@ -566,6 +584,58 @@ private:
 
     response->success = success;
     response->message = success ? "Map saved successfully" : "Map save completed with errors (check logs)";
+  }
+
+  void HandleResetMapOrigin(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING) {
+      response->success = false;
+      response->message = "Localization is not running, cannot reset map origin";
+      RCLCPP_WARN(get_logger(), "reset_map_origin called but localization is not running");
+      return;
+    }
+
+    if (!localization_node_) {
+      response->success = false;
+      response->message = "Localization node is null";
+      return;
+    }
+
+    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
+      response->success = false;
+      response->message = "map_folder or map_name is not set";
+      RCLCPP_ERROR(get_logger(), "reset_map_origin: --map_folder and --map_name must be specified");
+      return;
+    }
+
+    const std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+    const std::string map_base = map_dir + "/map";
+    const std::string pbstream_path = map_dir + "/map.pbstream";
+
+    RCLCPP_INFO(get_logger(),
+                "reset_map_origin: saving to map_base=%s  pbstream=%s",
+                map_base.c_str(), pbstream_path.c_str());
+
+    const bool success =
+        localization_node_->ResetMapOriginAndSave(map_base, pbstream_path);
+
+    if (success) {
+      RCLCPP_INFO(get_logger(),
+                  "reset_map_origin: success. "
+                  "New map and pbstream saved. Restart localization to apply.");
+    } else {
+      RCLCPP_ERROR(get_logger(),
+                   "reset_map_origin: one or more save steps failed (check logs)");
+    }
+
+    response->success = success;
+    response->message = success
+        ? "Map origin reset successfully. Restart localization to use the new map."
+        : "Map origin reset completed with errors (check logs)";
   }
 
   bool ValidateMapResources() {
