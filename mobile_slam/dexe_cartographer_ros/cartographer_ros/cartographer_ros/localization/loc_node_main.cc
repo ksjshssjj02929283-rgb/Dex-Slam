@@ -66,6 +66,11 @@ DEFINE_string(
 // MapPersistenceManager GFlags（可在 launch 文件的 arguments 中覆盖）
 // ---------------------------------------------------------------------------
 DEFINE_bool(
+    auto_load_map, false,
+    "If true, automatically load the map specified by --map_folder/--map_name on startup. "
+    "If false, skip map loading at startup and wait for the set_map_changed service to trigger.");
+
+DEFINE_bool(
     enable_auto_save_map, true,
     "Enable automatic map saving during localization. When disabled, "
     "map will only be saved manually via save_map service or on shutdown.");
@@ -107,17 +112,23 @@ public:
     
     RCLCPP_INFO(get_logger(), "LocalizationManager Node initialized successfully");
     
-    // 自动启动定位（延迟一小段时间以确保所有组件就绪）
+    // 自动启动（延迟一小段时间确保所有组件就绪）
     auto_start_timer_ = create_wall_timer(
         std::chrono::milliseconds(500),
         [this]() {
           auto_start_timer_->cancel();  // 只执行一次
-          RCLCPP_INFO(get_logger(), "Auto-starting localization...");
           std::lock_guard<std::mutex> lock(state_mutex_);
-          if (StartFilter() && StartLocalization()) {
-            RCLCPP_INFO(get_logger(), "Localization auto-started successfully");
+          if (FLAGS_auto_load_map) {
+            RCLCPP_INFO(get_logger(), "auto_load_map=true: auto-starting localization with map...");
+            if (StartFilter() && StartLocalization()) {
+              RCLCPP_INFO(get_logger(), "Localization auto-started successfully");
+            } else {
+              RCLCPP_ERROR(get_logger(), "Failed to auto-start localization");
+            }
           } else {
-            RCLCPP_ERROR(get_logger(), "Failed to auto-start localization");
+            RCLCPP_INFO(get_logger(),
+                        "auto_load_map=false: skipping map load at startup, "
+                        "waiting for ~/set_map_changed service to trigger");
           }
         });
   }
