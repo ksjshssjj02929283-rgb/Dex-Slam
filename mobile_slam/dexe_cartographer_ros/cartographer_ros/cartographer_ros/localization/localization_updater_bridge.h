@@ -123,8 +123,12 @@ class LocalizationUpdaterBridge {
 
   // 保存地图（map.png + map.yaml）
   // map_filename 为不含后缀的路径前缀，例如 "/path/to/map"
-  // is_from_pose_graph = true : 从 pose graph 所有轨迹节点重建地图（类似建图时的 SaveMap）
-  // is_from_pose_graph = false: 从当前全局 submap（global_dynamic_submap 或 global_static_submap）生成
+  // is_from_pose_graph = true : 遍历 pose graph 中所有 submap，按其当前 global pose
+  //                              组装 SubmapSlice，再用 PaintSubmapSlices 拼成单图
+  //                              （与离线工具 reset_map_origin_tool / merge_maps_tool 一致，
+  //                              支持任意大小地图，重置原点后产物正确）
+  // is_from_pose_graph = false: 从当前全局 submap（global_dynamic_submap 或 global_static_submap）
+  //                              单独渲染（save_map 服务的常规路径）
   bool SaveMap(const std::string& map_filename,
                const float occ_thresh,
                const float free_thresh,
