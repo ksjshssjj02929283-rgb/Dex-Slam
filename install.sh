@@ -19,3 +19,22 @@ rm -rf "$CURDIR/install/cartographer*"
 
 find "$CURDIR/install" -maxdepth 1 -type f -exec cp {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/$PACKAGE_NAME/" \;
 find "$CURDIR/install" -maxdepth 1 -mindepth 1 -type d -exec cp -r {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/install/" \;
+
+# --- 自动生成 postinst:整棵 /home/dexforce/w1 chown 回 dexforce ---
+DEBIAN_DIR="$CURDIR/debian/$PACKAGE_NAME/DEBIAN"
+mkdir -p "$DEBIAN_DIR"
+cat > "$DEBIAN_DIR/postinst" <<'EOF'
+#!/bin/sh
+set -e
+chown -R dexforce:dexforce /home/dexforce/w1
+EOF
+chmod 0755 "$DEBIAN_DIR/postinst"
+
+# --- 自动生成 control:固定版本号 ---
+cat > "$DEBIAN_DIR/control" <<EOF
+Package: $PACKAGE_NAME
+Version: 0.3.1
+Architecture: arm64
+Maintainer: Dexforce <dexforce@dexforce.com>
+Description: $PACKAGE_NAME
+EOF
