@@ -313,16 +313,37 @@ void LocalizationUpdater::ApplyOriginTransform(const transform::Rigid3d& T) {
   // 1. 变换 pose graph 中所有节点、submap、路标的全局位姿
   pose_graph_->ApplyTransformToAllPoses(T);
 
-  // 2. 变换 global_static_submap 的 local_pose（它本质上是该 submap 在全局坐标系中的位置）
   if (global_static_submap_) {
-    global_static_submap_->set_local_pose(T * global_static_submap_->local_pose());
+    const double resolution =
+        global_static_submap_->grid()->limits().resolution();
+
+    // 2. 从已变换的 pose graph 节点重建完整的 global_static_submap_
+    //    （grid + cloud + line 全部从节点数据重新生成，确保三者在同一坐标系下对齐）
+    auto fresh = GenerateGlobalStaticSubmap(resolution);
+
+    if (fresh) {
+      LOG(INFO) << "ApplyOriginTransform: rebuilt global_static_submap from "
+                << pose_graph_->GetTrajectoryNodes().size()
+                << " transformed nodes (grid + cloud + line in new frame)";
+      global_static_submap_ = fresh;
+    } else {
+      LOG(WARNING) << "ApplyOriginTransform: GenerateGlobalStaticSubmap returned "
+                      "null (no nodes?), falling back to set_local_pose only";
+      global_static_submap_->set_local_pose(
+          T * global_static_submap_->local_pose());
+    }
   }
 
-  // 3. 同步 local map updater 内部维护的 dynamic/local submap 与运行时位姿。
+  // 3. 同步 LocalMapUpdater2D
   if (pose_estimator_2d_) {
     auto* local_map_updater = pose_estimator_2d_->GetLocalMapUpdater();
     if (local_map_updater) {
-      local_map_updater->ApplyOriginTransform(T);
+      if (global_static_submap_) {
+        local_map_updater->SetGlobalSubmap(global_static_submap_);
+        local_map_updater->UpdateRobotPose(transform::Rigid2d::Identity());
+      } else {
+        local_map_updater->ApplyOriginTransform(T);
+      }
     }
   }
 }
@@ -629,12 +650,11 @@ std::shared_ptr<mapping::Submap2D> LocalizationUpdater::GenerateGlobalStaticSubm
     }
   }
   
-  // 8. 完成 submap 构建（执行 LineDataCulling）
+  // 8. 完成 submap 构建（FreshCloudData + FinishIkdTrees 在 Finish() 内部完成）
+  // Finish() 已将 ikd-tree 同步到 cloud_ 并转为 PCL KdTreeFLANN 只读后端，
+  // PCL 后端支持 Nearest_Search，足够 scan matching 使用，无需再 RebuildIkdTrees。
   global_submap->Finish();
-  
-  // 9. 重建 ikd-tree
-  global_submap->RebuildIkdTrees();
-  
+
   LOG(INFO) << "=== Fallback Global Static Submap Generation Statistics ===";
   LOG(INFO) << "Trajectory nodes processed: " << nodes.size();
   LOG(INFO) << "  - Nodes with real range data: " << nodes_with_real_range_data;

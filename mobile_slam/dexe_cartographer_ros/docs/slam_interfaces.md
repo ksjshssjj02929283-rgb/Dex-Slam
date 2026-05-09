@@ -132,7 +132,7 @@ ros2 service call /mapping_node/finish_mapping std_srvs/srv/Trigger
 | 重置定位 | `/localization_node/reset_localization` | `std_srvs/srv/Trigger` | 停止后重新启动定位（保持当前地图） | `ros2 service call /localization_node/reset_localization std_srvs/srv/Trigger` |
 | 地图已变更（触发换图+重定位） | `/localization_node/set_map_changed` | `std_srvs/srv/Trigger` | 从 `map_manager` 获取新地图路径，自动停止旧定位、加载新地图、启动新定位 | `ros2 service call /localization_node/set_map_changed std_srvs/srv/Trigger` |
 | 立即保存地图 | `/localization_node/save_map` | `std_srvs/srv/Trigger` | 保存 pbstream + map.png/yaml | `ros2 service call /localization_node/save_map std_srvs/srv/Trigger` |
-| 重置地图原点 | `/localization_node/reset_map_origin` | `std_srvs/srv/Trigger` | 以当前机器人位置为新原点，更新地图坐标系，需重启定位生效 | `ros2 service call /localization_node/reset_map_origin std_srvs/srv/Trigger` |
+| 重置地图原点 | `/localization_node/reset_map_origin` | `std_srvs/srv/Trigger` | 以当前机器人位置为新原点，**重新生成 global_static_submap**（grid 由所有 trajectory node 的 cloud 在新坐标系下重插，cloud / line 跟随 pose 变换），同步重建 dynamic / local submap，写出 `map.png` / `map.yaml` / `map.pbstream`，需重启定位生效。逻辑与离线工具 `reset_map_origin_tool` 完全一致 | `ros2 service call /localization_node/reset_map_origin std_srvs/srv/Trigger` |
 
 ### 2.4 重定位服务（LocalizationNode 核心层）
 

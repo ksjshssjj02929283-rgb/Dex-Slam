@@ -613,6 +613,16 @@ bool LocalizationNode::ResetMapOriginAndSave(
       static_cast<float>(node_options_.mapping_free_thresh));
 }
 
+bool LocalizationNode::TriggerGlobalRelocalization()
+{
+  absl::MutexLock lock(&localization_updater_mutex_);
+  const auto identity = cartographer::transform::Rigid3d::Identity();
+  RCLCPP_INFO(node_->get_logger(),
+              "TriggerGlobalRelocalization: setting initial pose to map origin (identity)");
+  need_set_pose_in_filter_ = true;
+  return localization_updater_bridge_.SetInitialPose(identity);
+}
+
 
 void LocalizationNode::PublishSubmapList()
 {

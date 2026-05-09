@@ -202,15 +202,25 @@ bool LocalizationUpdaterBridge::ResetMapOrigin(
   LOG(INFO) << "ResetMapOrigin: applying inverse transform (T_inv): " << T_inv;
 
   // -----------------------------------------------------------------------
-  // Step 2: 对 pose graph 和 global_static_submap 应用坐标变换
+  // Step 2: 应用坐标变换。LocalizationUpdater::ApplyOriginTransform 现在会：
+  //   - 变换 pose graph 全局位姿（submap / node / landmark）
+  //   - 从已变换的 pose graph 节点**重新生成** global_static_submap_
+  //     （cloud + line + grid 都在新坐标系下，通过 node 的 cloud 重插得到）
+  //   - 用新的 static 重建 LocalMapUpdater2D 的 dynamic + local submap
+  //   - robot_pose_ 重置为 identity（reset 后机器人在新坐标系原点）
+  // 这与 reset_map_origin_tool 的离线流程**对齐**，避免拼接 trajectory submap
+  // 切片产生的重影。
   // -----------------------------------------------------------------------
   localization_updater_->ApplyOriginTransform(T_inv);
 
   // -----------------------------------------------------------------------
-  // Step 3: 保存新的地图图像 + yaml
+  // Step 3: 渲染地图 + 写 PNG / YAML。
+  //   走 SaveMapFromGlobalSubmap（is_from_pose_graph = false）：
+  //   渲染单个 global_dynamic_submap_（已是新坐标系下的合并 submap），
+  //   与 reset_map_origin_tool 的 RenderSingleStaticSubmap 等价。
   // -----------------------------------------------------------------------
   const bool map_ok = SaveMap(map_base_filename, occ_thresh, free_thresh,
-                              /*is_from_pose_graph=*/true);
+                              /*is_from_pose_graph=*/false);
   if (!map_ok) {
     LOG(ERROR) << "ResetMapOrigin: SaveMap failed for: " << map_base_filename;
     // 仍然尝试保存 pbstream，不因此提前退出

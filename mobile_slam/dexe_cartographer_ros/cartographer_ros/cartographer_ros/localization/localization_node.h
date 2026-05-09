@@ -101,6 +101,10 @@ public:
   bool ResetMapOriginAndSave(const std::string& map_base_filename,
                               const std::string& pbstream_filename);
 
+  // 触发全局重定位：将初始位姿设为地图原点（identity），
+  // 用于重置地图原点并重启定位后，将机器人定位到新地图原点处。
+  bool TriggerGlobalRelocalization();
+
   // Public methods for offline processing (similar to mapping::Node)
   std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>
   ComputeExpectedSensorIds(const TrajectoryOptions& options) const;
