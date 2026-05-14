@@ -117,7 +117,6 @@ Node::Node(
   std::vector<std::string> topic_names;
   std::string scan_topics;
   
-  // Get scan topics parameter
   node_handle_->declare_parameter("scan_topics", std::string(""));
   node_handle_->get_parameter("scan_topics", scan_topics);
   
@@ -367,26 +366,29 @@ void Node::PublishTargetTF()
   }
   target_map_pub->publish(target_map_msg);
 
-  auto target = target_poses.pre_point_msg.target_msgs[0];
-  nav_interfaces::msg::DockingInfo docking_info;
-  if (target.target_name == "ChargeStation") {
-    docking_info.model_type = nav_interfaces::msg::DockingInfo::CHARGE_STATION;
-  } else {
-    docking_info.model_type = nav_interfaces::msg::DockingInfo::CHARGE_STATION;
+  // DockingInfo 仅在存在预设点目标时发布（避免 reflector / vmark 非空但 pre_point 空时越界访问）
+  if (!target_poses.pre_point_msg.target_msgs.empty()) {
+    const auto & target = target_poses.pre_point_msg.target_msgs[0];
+    nav_interfaces::msg::DockingInfo docking_info;
+    if (target.target_name == "ChargeStation") {
+      docking_info.model_type = nav_interfaces::msg::DockingInfo::CHARGE_STATION;
+    } else {
+      // 其它类型暂统一归为 CHARGE_STATION，后续按 nav_interfaces 枚举扩展
+      docking_info.model_type = nav_interfaces::msg::DockingInfo::CHARGE_STATION;
+    }
+
+    docking_info.pose.header.stamp = node_handle_->now();
+    docking_info.pose.header.frame_id = "map";
+    docking_info.pose.pose.position.x = target.x;
+    docking_info.pose.pose.position.y = target.y;
+    docking_info.pose.pose.position.z = 0.0;
+
+    tf2::Quaternion quat;
+    quat.setRPY(0, 0, target.theta);
+    docking_info.pose.pose.orientation = tf2::toMsg(quat);
+
+    docking_info_pub_->publish(docking_info);
   }
-
-  docking_info.pose.header.stamp = node_handle_->now();
-  docking_info.pose.header.frame_id = "map";
-  docking_info.pose.pose.position.x = target.x;
-  docking_info.pose.pose.position.y = target.y;
-  docking_info.pose.pose.position.z = 0.0;
-  
-  // Create quaternion from yaw
-  tf2::Quaternion quat;
-  quat.setRPY(0, 0, target.theta);
-  docking_info.pose.pose.orientation = tf2::toMsg(quat);
-
-  docking_info_pub_->publish(docking_info);
 }
 
 void Node::StartRecoginizeWithDefaultTopics(const NodeOptions & node_options)
@@ -436,8 +438,8 @@ void Node::LaunchSubscribers(const PerceptionTopics & topics, const NodeOptions 
 {
   std::vector<std::string> topic_names;
   std::string scan_topics;  // = "/sensor/lidar/front,/sensor/lidar/back";
-  // ROS2: Get parameter from node
-  scan_topics = node_handle_->declare_parameter<std::string>("scan_topics", "");
+  // scan_topics 已在构造函数 declare，这里仅取值
+  node_handle_->get_parameter("scan_topics", scan_topics);
   topic_names = SpliteStr(scan_topics);
   if (topic_names.empty()) {
     LOG(INFO) << "scan topics from remap";
@@ -478,10 +480,8 @@ Node::ComputeExpectedSensorIds(
   std::set<SensorId> expected_topics;
   std::vector<std::string> topic_names;
   std::string scan_topics;  // = "/sensor/lidar/front,/sensor/lidar/back";
-  // ROS2: Use already declared parameter
-  if(node_handle_->has_parameter("scan_topics")) {
-    scan_topics = node_handle_->get_parameter("scan_topics").as_string();
-  }
+  // scan_topics 在构造函数已 declare，这里直接取值
+  node_handle_->get_parameter("scan_topics", scan_topics);
   topic_names = SpliteStr(scan_topics);
   if (topic_names.empty()) {
     LOG(INFO) << "scan topics from remap";

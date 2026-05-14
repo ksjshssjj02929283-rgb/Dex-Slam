@@ -35,7 +35,7 @@ struct NodeOptions
   perception_2d::PerceptionOptions perception_options;
   // perception_2d::Config config;
   bool use_odometry;
-  bool num_laser_scans;
+  int num_laser_scans;            // 激光数量；> 1 时配合 scan_topics 列出全部 topic
   double lookup_transform_timeout_sec;
 };
 

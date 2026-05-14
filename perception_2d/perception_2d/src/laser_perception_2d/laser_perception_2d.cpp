@@ -21,29 +21,54 @@
 namespace perception_2d
 {
 
+// 从 Lua 读取算法层默认值
+// Lua key 与 perception_2d_ros2/params/params_perception_2d.yaml 保持一致
+// node_main.cpp::InitParams 通过 declare_parameter(name, lua_default) 注入 ROS2 参数体系
 Config CreateLaserPerception2DOption(
   common::LuaParameterDictionary * const
   lua_parameter_dictionary,
   const std::string & model_file_path)
 {
   Config config;
+  // 检测器开关
   config.predict_rec = lua_parameter_dictionary->GetBool("predict_rec");
   config.reflect_rec = lua_parameter_dictionary->GetBool("reflect_rec");
   config.line_rec = lua_parameter_dictionary->GetBool("line_rec");
   config.shape_rec = lua_parameter_dictionary->GetBool("shape_rec");
   config.vmark_rec = lua_parameter_dictionary->GetBool("vmark_rec");
+  config.angle_rec = lua_parameter_dictionary->GetBool("angle_rec");
+
+  // 数据预处理
   config.intensity_threshold = lua_parameter_dictionary->GetInt("intensities_min");
+  config.connect_threshold = lua_parameter_dictionary->GetDouble("connect_threshold");
+  config.range_max = lua_parameter_dictionary->GetDouble("range_max");
+  config.range_min = lua_parameter_dictionary->GetDouble("range_min");
+  config.min_cluster_points = lua_parameter_dictionary->GetInt("min_cluster_points");
+
+  // 匹配阈值
   config.search_distance = lua_parameter_dictionary->GetDouble("search_distance");
   config.max_ang_error = lua_parameter_dictionary->GetDouble("search_angle");
   config.max_dis_error = lua_parameter_dictionary->GetDouble("max_error");
+  config.start_rec_dis = lua_parameter_dictionary->GetDouble("start_rec_dis");
   config.min_select_points = lua_parameter_dictionary->GetInt("min_select_points");
-  config.min_cluster_points = lua_parameter_dictionary->GetInt("min_cluster_points");
+
+  // 反光板
   config.reflector_error = lua_parameter_dictionary->GetDouble("reflector_error");
   config.reflector_radius = lua_parameter_dictionary->GetDouble("reflector_radius");
-  config.range_max = lua_parameter_dictionary->GetDouble("range_max");
-  config.range_min = lua_parameter_dictionary->GetDouble("range_min");
-  config.start_rec_dis = lua_parameter_dictionary->GetDouble("start_rec_dis");
-  config.model_file = model_file_path;
+
+  // 直线检测
+  config.min_line_length = lua_parameter_dictionary->GetDouble("min_line_length");
+
+  // 形状匹配（shape_rec=true 时生效）
+  config.shape_match_score = lua_parameter_dictionary->GetDouble("shape_match_score");
+  config.shape_match_close_degree =
+    lua_parameter_dictionary->GetDouble("shape_match_close_degree");
+  config.shape_dis_to_robot_center =
+    lua_parameter_dictionary->GetDouble("shape_dis_to_robot_center");
+
+  // 模型文件：优先 launch 的 -model_basename gflag；Lua model_file 为备用
+  const std::string lua_model_file = lua_parameter_dictionary->GetString("model_file");
+  config.model_file = lua_model_file.empty() ? model_file_path : lua_model_file;
   LOG(INFO) << "config.model_file = " << config.model_file;
   return config;
 }

@@ -1,3 +1,16 @@
+# perception_2d 目标模型库
+# ModelManager 支持的 4 个顶层 key：
+#   chargingStation：充电桩（elements + components 完整结构）
+#   shelf          ：货架（简化字段：type / rack_length / rack_width / rack_leg_length / rack_leg_width）
+#   reflector      ：反光板（radius / radian），通常无需配置，靠 yaml 参数 intensities_min + reflector_radius 识别
+#   shapeStruct    ：通用形状（人腿 / 玻璃 / 障碍物等，与 chargingStation 同结构）
+#
+# 坐标系：模型本地坐标系（X 前 / Y 左 / Z 上），单位 m / rad。
+# elements.points 是 polygon 顶点序列（首尾不闭合，多边形闭合由 ModelCloudGenerator 处理）。
+# components 表示元素在模型坐标系中的实例（x/y/theta 偏移 + 元素 id 关联）。
+#
+# ⚠️ 下方 shelf / shapeStruct 中的尺寸为占位值，**必须按实测尺寸修改**。
+
 chargingStation:
   - name: chargeStation
     elements:
@@ -5,16 +18,101 @@ chargingStation:
         points:
           - x: 0.03564
             y: 0.135
-
           - x: 0.0
             y: 0.0
-
           - x: 0.03564
             y: -0.135
-
     components:
       - x: 0.0
         y: 0.0
         theta: 3.1415
         type: 1
+        elementId: 0
+
+# === 货架（W1 PRO 适用，待实测确认） ===
+# type：货架类型枚举，1=方形腿，2=圆形腿（与 Component.type 一致）
+# rack_length / rack_width：货架整体外轮廓尺寸（m）
+# rack_leg_length / rack_leg_width：货架腿（柱）截面尺寸（m）
+shelf:
+  - name: standard_rack
+    type: 1
+    rack_length: 1.20            # ⚠️ 占位值，请按实物测量
+    rack_width: 0.80             # ⚠️ 占位
+    rack_leg_length: 0.05        # ⚠️ 占位
+    rack_leg_width: 0.05         # ⚠️ 占位
+
+# === 反光板（一般无需配置；如启用 reflect_rec 且要明确模型，可取消注释） ===
+# reflector:
+#   radius: 0.055                # 反光板半径（m），与 yaml 参数 reflector_radius 一致
+#   radian: 1.57                 # 弧度范围（已知半圆即 π/2）
+
+# === 通用形状（人腿 / 玻璃 / 障碍物等） ===
+# elements 定义多边形顶点（机器人本地视角下的目标轮廓）
+# components 指定该 element 在模型坐标系中的位置 + 朝向 + 类型
+shapeStruct:
+  # —— 人腿（双腿对，假定圆截面直径 0.10m，两腿间距 0.25m） ——
+  - name: human_leg
+    elements:
+      - id: 0
+        # 单腿近似为正方形（边长 0.10m）；shape 匹配按多边形处理
+        points:
+          - x:  0.05
+            y:  0.05
+          - x: -0.05
+            y:  0.05
+          - x: -0.05
+            y: -0.05
+          - x:  0.05
+            y: -0.05
+          - x:  0.05
+            y:  0.05            # 闭合
+    components:
+      - x: 0.0
+        y:  0.125                # 左腿（实测请修正间距）
+        theta: 0.0
+        type: 3                  # 自定义：3=人腿
+        elementId: 0
+      - x: 0.0
+        y: -0.125                # 右腿
+        theta: 0.0
+        type: 3
+        elementId: 0
+
+  # —— 玻璃边界（仅一段直线段，长 1.0m，用于识别玻璃边缘） ——
+  - name: glass_segment
+    elements:
+      - id: 0
+        # 一段直线（两端点）
+        points:
+          - x: 0.0
+            y:  0.5
+          - x: 0.0
+            y: -0.5
+    components:
+      - x: 0.0
+        y: 0.0
+        theta: 0.0
+        type: 4                  # 自定义：4=玻璃
+        elementId: 0
+
+  # —— 障碍物（通用矩形 0.30 x 0.30m，可作为未知障碍物轮廓） ——
+  - name: generic_obstacle
+    elements:
+      - id: 0
+        points:
+          - x:  0.15
+            y:  0.15
+          - x: -0.15
+            y:  0.15
+          - x: -0.15
+            y: -0.15
+          - x:  0.15
+            y: -0.15
+          - x:  0.15
+            y:  0.15            # 闭合
+    components:
+      - x: 0.0
+        y: 0.0
+        theta: 0.0
+        type: 5                  # 自定义：5=障碍物
         elementId: 0

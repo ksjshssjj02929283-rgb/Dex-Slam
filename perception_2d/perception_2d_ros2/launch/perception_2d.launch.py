@@ -61,8 +61,9 @@ def generate_launch_description():
             '-model_directory', model_directory,
             '-model_basename', model_basename
         ],
+        # 双雷达：scan_topics 在 params yaml 中显式列出 /scan_front,/scan_rear，
+        # 节点直接订阅这两个绝对话题名，不需要 scan 的 remap。
         remappings=[
-            ('scan', '/scan'),
             ('odom', '/odom')
         ]
     )

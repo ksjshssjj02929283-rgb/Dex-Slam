@@ -1,24 +1,46 @@
 perception_2d_node:
-    scan_topics: /scan
+    # === 拓扑 ===
+    # 双雷达：前 /scan_front + 后 /scan_rear（base_link 下分别有 laser_front_link / laser_rear_link 帧）
+    scan_topics: /scan_front,/scan_rear      # 多激光逗号分隔；空串走 launch remap
     use_odometry: True
-    num_laser_scans: 1
+    num_laser_scans: 2                       # 激光数量（int）；与 scan_topics 中 topic 数一致
     num_subdivisions_per_laser_scan: 1
     tracking_frame: base_link
     lookup_transform_timeout_sec: 0.1
-    predict_rec: True
-    reflect_rec: True
-    line_rec: True
-    shape_rec: False
-    vmark_rec: False
-    intensities_min: 900
+
+    # === 检测器开关 ===
+    predict_rec: True                        # 预设点识别（充电桩 / 角点）
+    reflect_rec: True                        # 反光板识别
+    line_rec: True                           # 直线检测（墙体 / 玻璃边缘）
+    shape_rec: False                         # 形状匹配（货架 / 人腿 / 障碍物）；打开需 model.yaml 模型
+    vmark_rec: False                         # visual marker（vmarker.yaml）
+    angle_rec: False                         # 角点识别（保留字段，未连入主流程）
+
+    # === 数据预处理 ===
+    intensities_min: 900                     # 反光板强度阈值
+    connect_threshold: 0.05                  # 聚类连接距离
     range_max: 20.0
     range_min: 0.1
+    min_cluster_points: 2
+
+    # === 匹配阈值 ===
     search_distance: 0.4
     search_angle: 0.2
     max_error: 0.04
+    start_rec_dis: 4.0
     min_select_points: 10
-    min_cluster_points: 2
+
+    # === 反光板 ===
     reflector_error: 0.02
     reflector_radius: 0.055
-    start_rec_dis: 4.0
+
+    # === 直线检测 ===
     min_line_length: 0.35
+
+    # === 形状匹配（shape_rec=True 时生效） ===
+    shape_match_score: 0.7                   # 匹配得分阈值 [0,1]
+    shape_match_close_degree: 0.05           # 形状闭合度
+    shape_dis_to_robot_center: 0.335         # 形状到机器人中心距离
+
+    # === 备用模型文件路径（留空走 launch 的 target_file_path） ===
+    model_file: ""

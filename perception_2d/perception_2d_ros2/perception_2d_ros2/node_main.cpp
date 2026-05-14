@@ -44,72 +44,77 @@ namespace perception_ros2
 {
 
 
+// declare_parameter(name, default) 把 Lua 默认值注入 ROS2 参数体系；
+// yaml 列出了相同 key 时，get_parameter 拿到的是 yaml 值（覆盖 Lua 默认）。
+// 顺序与 params_perception_2d.yaml 对齐。
+//
+// 一个小工具：declare + get 同名参数，避免重复字段拼写
+namespace {
+template <typename T>
+void DeclareAndGet(
+  const std::shared_ptr<rclcpp::Node> & node,
+  const std::string & name,
+  T & value)
+{
+  node->declare_parameter(name, value);
+  node->get_parameter(name, value);
+}
+}  // namespace
+
 void InitParams(const std::shared_ptr<rclcpp::Node>& node, NodeOptions& node_options)
 {
-  node->declare_parameter("use_odometry", node_options.use_odometry);
-  node->get_parameter("use_odometry", node_options.use_odometry);
-  
-  node->declare_parameter("num_laser_scans", node_options.num_laser_scans);
-  node->get_parameter("num_laser_scans", node_options.num_laser_scans);
-  
-  node->declare_parameter("lookup_transform_timeout_sec", node_options.lookup_transform_timeout_sec);
-  node->get_parameter("lookup_transform_timeout_sec", node_options.lookup_transform_timeout_sec);
-  
-  node->declare_parameter("num_subdivisions_per_laser_scan", 
-    node_options.sensor_bridge_options.num_subdivisions_per_laser_scan);
-  node->get_parameter("num_subdivisions_per_laser_scan", 
-    node_options.sensor_bridge_options.num_subdivisions_per_laser_scan);
-  
-  node->declare_parameter("tracking_frame", node_options.sensor_bridge_options.tracking_frame);
-  node->get_parameter("tracking_frame", node_options.sensor_bridge_options.tracking_frame);
-  
-  node->declare_parameter("predict_rec", node_options.perception_options.config.predict_rec);
-  node->get_parameter("predict_rec", node_options.perception_options.config.predict_rec);
-  
-  node->declare_parameter("line_rec", node_options.perception_options.config.line_rec);
-  node->get_parameter("line_rec", node_options.perception_options.config.line_rec);
-  
-  node->declare_parameter("shape_rec", node_options.perception_options.config.shape_rec);
-  node->get_parameter("shape_rec", node_options.perception_options.config.shape_rec);
-  
-  node->declare_parameter("vmark_rec", node_options.perception_options.config.vmark_rec);
-  node->get_parameter("vmark_rec", node_options.perception_options.config.vmark_rec);
-  
-  node->declare_parameter("intensities_min", node_options.perception_options.config.intensity_threshold);
-  node->get_parameter("intensities_min", node_options.perception_options.config.intensity_threshold);
-  
-  node->declare_parameter("range_max", node_options.perception_options.config.range_max);
-  node->get_parameter("range_max", node_options.perception_options.config.range_max);
-  
-  node->declare_parameter("range_min", node_options.perception_options.config.range_min);
-  node->get_parameter("range_min", node_options.perception_options.config.range_min);
-  
-  node->declare_parameter("search_distance", node_options.perception_options.config.search_distance);
-  node->get_parameter("search_distance", node_options.perception_options.config.search_distance);
-  
-  node->declare_parameter("search_angle", node_options.perception_options.config.max_ang_error);
-  node->get_parameter("search_angle", node_options.perception_options.config.max_ang_error);
-  
-  node->declare_parameter("max_error", node_options.perception_options.config.max_dis_error);
-  node->get_parameter("max_error", node_options.perception_options.config.max_dis_error);
-  
-  node->declare_parameter("min_select_points", node_options.perception_options.config.min_select_points);
-  node->get_parameter("min_select_points", node_options.perception_options.config.min_select_points);
-  
-  node->declare_parameter("reflector_error", node_options.perception_options.config.reflector_error);
-  node->get_parameter("reflector_error", node_options.perception_options.config.reflector_error);
-  
-  node->declare_parameter("min_cluster_points", node_options.perception_options.config.min_cluster_points);
-  node->get_parameter("min_cluster_points", node_options.perception_options.config.min_cluster_points);
-  
-  node->declare_parameter("reflector_radius", node_options.perception_options.config.reflector_radius);
-  node->get_parameter("reflector_radius", node_options.perception_options.config.reflector_radius);
-  
-  node->declare_parameter("start_rec_dis", node_options.perception_options.config.start_rec_dis);
-  node->get_parameter("start_rec_dis", node_options.perception_options.config.start_rec_dis);
-  
-  node->declare_parameter("min_line_length", node_options.perception_options.config.min_line_length);
-  node->get_parameter("min_line_length", node_options.perception_options.config.min_line_length);
+  auto & cfg = node_options.perception_options.config;
+  auto & sbo = node_options.sensor_bridge_options;
+
+  // === 拓扑 ===
+  DeclareAndGet(node, "use_odometry", node_options.use_odometry);
+  DeclareAndGet(node, "num_laser_scans", node_options.num_laser_scans);
+  DeclareAndGet(node, "num_subdivisions_per_laser_scan", sbo.num_subdivisions_per_laser_scan);
+  DeclareAndGet(node, "tracking_frame", sbo.tracking_frame);
+  DeclareAndGet(node, "lookup_transform_timeout_sec", node_options.lookup_transform_timeout_sec);
+
+  // === 检测器开关 ===
+  DeclareAndGet(node, "predict_rec", cfg.predict_rec);
+  DeclareAndGet(node, "reflect_rec", cfg.reflect_rec);
+  DeclareAndGet(node, "line_rec",    cfg.line_rec);
+  DeclareAndGet(node, "shape_rec",   cfg.shape_rec);
+  DeclareAndGet(node, "vmark_rec",   cfg.vmark_rec);
+  DeclareAndGet(node, "angle_rec",   cfg.angle_rec);
+
+  // === 数据预处理 ===
+  DeclareAndGet(node, "intensities_min",    cfg.intensity_threshold);
+  DeclareAndGet(node, "connect_threshold",  cfg.connect_threshold);
+  DeclareAndGet(node, "range_max",          cfg.range_max);
+  DeclareAndGet(node, "range_min",          cfg.range_min);
+  DeclareAndGet(node, "min_cluster_points", cfg.min_cluster_points);
+
+  // === 匹配阈值 ===
+  DeclareAndGet(node, "search_distance",   cfg.search_distance);
+  DeclareAndGet(node, "search_angle",      cfg.max_ang_error);     // yaml 名 vs config 字段名差异
+  DeclareAndGet(node, "max_error",         cfg.max_dis_error);     // 同上
+  DeclareAndGet(node, "start_rec_dis",     cfg.start_rec_dis);
+  DeclareAndGet(node, "min_select_points", cfg.min_select_points);
+
+  // === 反光板 ===
+  DeclareAndGet(node, "reflector_error",  cfg.reflector_error);
+  DeclareAndGet(node, "reflector_radius", cfg.reflector_radius);
+
+  // === 直线检测 ===
+  DeclareAndGet(node, "min_line_length", cfg.min_line_length);
+
+  // === 形状匹配 ===
+  DeclareAndGet(node, "shape_match_score",         cfg.shape_match_score);
+  DeclareAndGet(node, "shape_match_close_degree",  cfg.shape_match_close_degree);
+  DeclareAndGet(node, "shape_dis_to_robot_center", cfg.shape_dis_to_robot_center);
+
+  // === 模型文件（yaml 设置可覆盖 launch 的 -model_basename gflag） ===
+  std::string model_file_override;
+  node->declare_parameter("model_file", std::string(""));
+  node->get_parameter("model_file", model_file_override);
+  if (!model_file_override.empty()) {
+    cfg.model_file = model_file_override;
+    LOG(INFO) << "[InitParams] model_file overridden by yaml: " << cfg.model_file;
+  }
 }
 
 void Run()
