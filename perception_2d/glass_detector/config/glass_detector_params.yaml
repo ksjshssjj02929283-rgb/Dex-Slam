@@ -1,0 +1,44 @@
+# glass_detector 参数（一期 A 路径 / DEC-004）
+#
+# 双雷达独立 namespace（front. / rear.）— 修改后续接入算法时只改对应 namespace
+# E1 (Tibebu 2021) / E2 (Wang 2017) 独立开关，可分别在 front/rear 上启用不同算法
+#
+# ⚠️ 强度阈值占位值：Wang 2017 原值（Hokuyo URG-04LX），BlueSea 雷达需现场标定
+#    上机后用 calibration 流程（录 30s bag → 直方图）出真实阈值
+
+glass_detector:
+  ros__parameters:
+    # 全局开关：false 时双雷达 corrected 话题 = 原 scan 透传（A/B 对比测试）
+    use_glass_detection: true
+
+    front:
+      scan_topic:           "/laser_scan/front"
+      corrected_topic:      "/laser_scan/front_corrected"
+
+      enable_e1:            true
+      enable_e2:            true
+
+      # E1 几何不连续（Tibebu 2021）
+      e1_std_threshold:     0.05     # m
+      e1_range_jump:        0.30     # m
+      e1_window_size:       5
+
+      # E2 强度异常（Wang 2017 三参数）
+      e2_trigger_intensity: 8000.0   # BlueSea 待标定
+      e2_intensity_delta:   4000.0
+      e2_profile_width:     5
+
+    rear:
+      scan_topic:           "/laser_scan/rear"
+      corrected_topic:      "/laser_scan/rear_corrected"
+
+      enable_e1:            true
+      enable_e2:            true
+
+      e1_std_threshold:     0.05
+      e1_range_jump:        0.30
+      e1_window_size:       5
+
+      e2_trigger_intensity: 8000.0
+      e2_intensity_delta:   4000.0
+      e2_profile_width:     5
