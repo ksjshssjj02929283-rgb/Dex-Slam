@@ -118,6 +118,7 @@ def generate_launch_description():
             '-auto_save_interval_s', auto_save_interval_s,
             '-auto_save_linear_velocity_threshold', auto_save_linear_velocity_threshold,
             '-auto_save_angular_velocity_threshold', auto_save_angular_velocity_threshold,
+            '-auto_load_map', 'true',
         ],
         remappings=[
             ('scan_1', 'laser_scan/front'),

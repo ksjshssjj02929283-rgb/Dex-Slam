@@ -213,12 +213,46 @@ sensor::LineData MapLine2D::ComputeEndpointsFromFit(const std::vector<Eigen::Vec
   return sensor::LineData(min_point, max_point);
 }
 
+// ── 角度分桶索引辅助方法 ───────────────────────────────────────────
+
+void LineMap2DList::AddToAngleIndex(int local_id, double angle)
+{
+  int bucket = AngleToBucket(angle);
+  angle_index_[bucket].push_back(local_id);
+  local_id_to_bucket_[local_id] = bucket;
+}
+
+void LineMap2DList::RemoveFromAngleIndex(int local_id)
+{
+  auto it = local_id_to_bucket_.find(local_id);
+  if (it == local_id_to_bucket_.end()) return;
+  int bucket = it->second;
+  auto& vec = angle_index_[bucket];
+  vec.erase(std::remove(vec.begin(), vec.end(), local_id), vec.end());
+  local_id_to_bucket_.erase(it);
+}
+
+void LineMap2DList::UpdateAngleIndex(int local_id, double new_angle)
+{
+  int new_bucket = AngleToBucket(new_angle);
+  auto it = local_id_to_bucket_.find(local_id);
+  if (it != local_id_to_bucket_.end() && it->second == new_bucket) return;
+  RemoveFromAngleIndex(local_id);
+  AddToAngleIndex(local_id, new_angle);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+
 LineMap2DList::LineMap2DList(
   int latest_local_id,
   std::map<int, MapLine2D> active_line_data)
 : latest_local_id_(latest_local_id)
 {
   line_map_data_list_ = active_line_data;
+  // 重建角度索引
+  for (const auto& kv : line_map_data_list_) {
+    AddToAngleIndex(kv.first, kv.second.line_data().angle());
+  }
 }
 
 LineMap2DList::LineMap2DList(
@@ -226,12 +260,13 @@ LineMap2DList::LineMap2DList(
 {
   int global_id = 0;
   for (auto it : laser_line_map_2d) {
+    sensor::LineData ld{it.line_data.begin, it.line_data.end};
     line_map_data_list_.insert(
       std::pair<int, MapLine2D>(
         global_id,
         MapLine2D(
-          MapLine2D::LineMapTpye::static_line, global_id,
-          sensor::LineData{it.line_data.begin, it.line_data.end})));
+          MapLine2D::LineMapTpye::static_line, global_id, ld)));
+    AddToAngleIndex(global_id, ld.angle());
     global_id++;
   }
 }
@@ -251,6 +286,7 @@ LineMap2DList::LineMap2DList(
         MapLine2D(
           MapLine2D::LineMapTpye::static_line, global_id,
           line_data)));
+    AddToAngleIndex(global_id, line_data.angle());
     // line_map_data_list_[global_id].line_data().set_normal(it.normal);
     global_id++;
   }
@@ -288,6 +324,7 @@ void LineMap2DList::PushBack(std::vector<sensor::LineData> line_data)
     std::pair<int, MapLine2D>(
       latest_local_id_,
       MapLine2D(latest_local_id_, line_data[0])));
+  AddToAngleIndex(latest_local_id_, line_data[0].angle());
   observations_.insert(std::pair<int, size_t>(latest_local_id_, 1));
   
   // If there are multiple line data, use UpdateLineMap for the remaining ones
@@ -313,6 +350,7 @@ void LineMap2DList::PushBack(
     std::pair<int, MapLine2D>(
       local_id,
       MapLine2D(local_id, line_data[0])));
+  AddToAngleIndex(local_id, line_data[0].angle());
   observations_.insert(std::pair<int, size_t>(local_id, 1));
   
   // If there are multiple line data, use UpdateLineMap for the remaining ones
@@ -352,6 +390,8 @@ void LineMap2DList::UpdateLineMap(
     it->second.SetLoseTime(0);
   }
 
+  // RANSAC 拟合后角度可能改变，同步更新索引
+  UpdateAngleIndex(local_id, it->second.line_data().angle());
   observations_[local_id]++;
 }
 
@@ -397,6 +437,7 @@ void LineMap2DList::LineDataCulling()
   for (int local_id : to_remove) {
     line_map_data_list_.erase(local_id);
     observations_.erase(local_id);  // 同步清理observations_
+    RemoveFromAngleIndex(local_id);  // 同步清理角度索引
   }
   // LOG(INFO) << "Line culling: removed " << to_remove.size() 
   //       << "/" << line_map_data_list_.size() + to_remove.size() << " lines, remaining: " << line_map_data_list_.size()

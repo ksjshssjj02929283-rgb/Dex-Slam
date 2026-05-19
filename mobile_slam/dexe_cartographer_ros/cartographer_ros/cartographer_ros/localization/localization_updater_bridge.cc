@@ -32,10 +32,9 @@
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/submap_2d.h"
-#include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
-#include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/probability_values.h"
+#include "cartographer/transform/transform.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 #include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -156,10 +155,90 @@ bool LocalizationUpdaterBridge::SetInitialPose(const carto::transform::Rigid3d &
   return localization_updater_->SetInitialPose(initial_pose);
 }
 
+void LocalizationUpdaterBridge::TriggerGlobalRelocalization()
+{
+  localization_updater_->TriggerGlobalRelocalization();
+}
+
 std::optional<cartographer::localization::LocalizationState>
 LocalizationUpdaterBridge::GetLocalizationState() const
 {
   return localization_updater_->GetLocalizationState();
+}
+
+bool LocalizationUpdaterBridge::ResetMapOrigin(
+    const std::string& map_base_filename,
+    const std::string& pbstream_filename,
+    const float occ_thresh,
+    const float free_thresh)
+{
+  // -----------------------------------------------------------------------
+  // Step 1: 获取当前机器人在地图中的全局位姿
+  // -----------------------------------------------------------------------
+  // GetLocalTrajectoryData 内部会自行加锁，不需要在外部再持有 mutex_
+  const auto traj_data = GetLocalTrajectoryData();
+
+  if (traj_data.empty()) {
+    LOG(ERROR) << "ResetMapOrigin: no trajectory data available, aborting.";
+    return false;
+  }
+
+  const auto& latest = traj_data.begin()->second;
+  if (!latest.local_slam_data) {
+    LOG(ERROR) << "ResetMapOrigin: local_slam_data is null, aborting.";
+    return false;
+  }
+
+  // T_robot_in_map (3D) 投影到 2D 后再嵌回 3D，消除 z / roll / pitch 分量
+  const Rigid3d robot_pose_in_map =
+      latest.local_to_map * latest.local_slam_data->local_pose;
+  const Rigid3d T_reset =
+      ::cartographer::transform::Embed3D(
+          ::cartographer::transform::Project2D(robot_pose_in_map));
+  const Rigid3d T_inv = T_reset.inverse();  // 旧系 → 新系
+
+  LOG(INFO) << "ResetMapOrigin: robot pose in old map frame: "
+            << robot_pose_in_map;
+  LOG(INFO) << "ResetMapOrigin: applying inverse transform (T_inv): " << T_inv;
+
+  // -----------------------------------------------------------------------
+  // Step 2: 应用坐标变换。LocalizationUpdater::ApplyOriginTransform 现在会：
+  //   - 变换 pose graph 全局位姿（submap / node / landmark）
+  //   - 从已变换的 pose graph 节点**重新生成** global_static_submap_
+  //     （cloud + line + grid 都在新坐标系下，通过 node 的 cloud 重插得到）
+  //   - 用新的 static 重建 LocalMapUpdater2D 的 dynamic + local submap
+  //   - robot_pose_ 重置为 identity（reset 后机器人在新坐标系原点）
+  // 这与 reset_map_origin_tool 的离线流程**对齐**，避免拼接 trajectory submap
+  // 切片产生的重影。
+  // -----------------------------------------------------------------------
+  localization_updater_->ApplyOriginTransform(T_inv);
+
+  // -----------------------------------------------------------------------
+  // Step 3: 渲染地图 + 写 PNG / YAML。
+  //   走 SaveMapFromGlobalSubmap（is_from_pose_graph = false）：
+  //   渲染单个 global_dynamic_submap_（已是新坐标系下的合并 submap），
+  //   与 reset_map_origin_tool 的 RenderSingleStaticSubmap 等价。
+  // -----------------------------------------------------------------------
+  const bool map_ok = SaveMap(map_base_filename, occ_thresh, free_thresh,
+                              /*is_from_pose_graph=*/false);
+  if (!map_ok) {
+    LOG(ERROR) << "ResetMapOrigin: SaveMap failed for: " << map_base_filename;
+    // 仍然尝试保存 pbstream，不因此提前退出
+  }
+
+  // -----------------------------------------------------------------------
+  // Step 4: 保存新的 pbstream（含变换后的位姿）
+  // -----------------------------------------------------------------------
+  const bool pb_ok =
+      localization_updater_->SerializeStateToFile(true, pbstream_filename);
+  if (!pb_ok) {
+    LOG(ERROR) << "ResetMapOrigin: SerializeStateToFile failed for: "
+               << pbstream_filename;
+  }
+
+  LOG(INFO) << "ResetMapOrigin: done. map_ok=" << map_ok
+            << " pb_ok=" << pb_ok;
+  return map_ok && pb_ok;
 }
 
 /**
@@ -478,142 +557,113 @@ bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
 }
 
 // ---------------------------------------------------------------------------
-// Path B: rebuild map from all pose graph trajectory nodes (like MapBuilderBridge)
+// Path B: render the map by stitching all submaps in the pose graph
+// （与离线工具 reset_map_origin_main.cc / merge_maps_main.cc 走同一条路径：
+//   每个 submap 一个 SubmapSlice，PaintSubmapSlices 自动定边界）
 // ---------------------------------------------------------------------------
 bool LocalizationUpdaterBridge::SaveMapFromPoseGraph(
     const std::string& map_filename,
     const float occ_thresh,
     const float free_thresh) {
-  // 1. 获取所有轨迹节点
-  const auto nodes =
-      localization_updater_->pose_graph()->GetTrajectoryNodes();
-  if (nodes.empty()) {
-    LOG(WARNING) << "SaveMapFromPoseGraph: No trajectory nodes found";
+  const auto all_submap_data =
+      localization_updater_->pose_graph()->GetAllSubmapData();
+  if (all_submap_data.empty()) {
+    LOG(ERROR) << "SaveMapFromPoseGraph: pose graph has no submap";
     return false;
   }
-  LOG(INFO) << "SaveMapFromPoseGraph: " << nodes.size() << " trajectory nodes";
 
-  // 2. 获取配置参数（使用第一条轨迹的参数）
-  const auto& all_options = localization_updater_->GetAllTrajectoryBuilderOptions();
-  if (all_options.empty()) {
-    LOG(ERROR) << "SaveMapFromPoseGraph: No trajectory builder options available";
-    return false;
-  }
-  const auto& traj_options =
-      all_options.front().trajectory_builder_options();
-  const auto& submaps_options =
-      traj_options.trajectory_builder_2d_options().submaps_options();
-  const auto& rdi_options =
-      submaps_options.range_data_inserter_options();
-  const auto& line_matcher_options =
-      traj_options.trajectory_builder_2d_options().line_matcher_options();
-
-  // 3. 确定分辨率和原点
-  constexpr double kDefaultResolution = 0.05;
-  const double resolution = kDefaultResolution;
-  const Eigen::Vector2f origin =
-      nodes.begin()->data.global_pose.translation().head<2>().cast<float>();
-
-  // 4. 创建大尺寸 ProbabilityGrid
-  cartographer::mapping::ValueConversionTables conversion_tables;
-  constexpr int kLargeSubmapSize = 2000;
-  auto final_submap = std::make_shared<cartographer::mapping::Submap2D>(
-      origin,
-      std::unique_ptr<cartographer::mapping::Grid2D>(
-          static_cast<cartographer::mapping::Grid2D*>(
-              absl::make_unique<cartographer::mapping::ProbabilityGrid>(
-                  cartographer::mapping::MapLimits(
-                      resolution,
-                      origin.cast<double>(),
-                      cartographer::mapping::CellLimits(kLargeSubmapSize, kLargeSubmapSize)),
-                  &conversion_tables)
-                  .release())),
-      &conversion_tables,
-      std::make_unique<cartographer::sensor::PointCloud>(),
-      std::make_unique<cartographer::sensor::PointCloud>(),
-      0, std::map<int, cartographer::mapping::MapLine2D>{});
-
-  final_submap->SetCloudCullingProb(submaps_options.cloud_culling_prob());
-  final_submap->SetLineCullingParam(
-      submaps_options.min_line_length(),
-      submaps_options.max_line_length(),
-      submaps_options.line_culling_obs());
-
-  // 5. 配置 range data 插入器
-  ::cartographer::mapping::proto::ProbabilityGridRangeDataInserterOptions2D pg_options;
-  if (rdi_options.range_data_inserter_type() ==
-      ::cartographer::mapping::proto::RangeDataInserterOptions::
-          PROBABILITY_GRID_INSERTER_2D) {
-    const auto& p = rdi_options.probability_grid_range_data_inserter_options_2d();
-    pg_options.set_hit_probability(p.hit_probability());
-    pg_options.set_miss_probability(p.miss_probability());
-    pg_options.set_insert_free_space(p.insert_free_space());
-  } else {
-    pg_options.set_hit_probability(0.65);
-    pg_options.set_miss_probability(0.48);
-    pg_options.set_insert_free_space(true);
-  }
-  auto range_data_inserter =
-      absl::make_unique<cartographer::mapping::ProbabilityGridRangeDataInserter2D>(pg_options);
-
-  // 6. 创建 LineMatcher
-  auto line_matcher =
-      std::make_unique<cartographer::mapping::scan_matching::LineMatcher2D>(line_matcher_options);
-
-  // 7. 逐节点插入数据
-  for (const auto& node : nodes) {
-    // range data → probability grid
-    for (const auto& range_data : node.data.constant_data->range_datas) {
-      cartographer::sensor::RangeData global_range_data;
-      global_range_data.origin =
-          (node.data.global_pose * range_data.origin.cast<double>()).cast<float>();
-      global_range_data.returns = cartographer::sensor::TransformPointCloud(
-          range_data.returns, node.data.global_pose.cast<float>());
-      global_range_data.misses = cartographer::sensor::TransformPointCloud(
-          range_data.misses, node.data.global_pose.cast<float>());
-      final_submap->InsertRangeData(global_range_data, range_data_inserter.get());
+  std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice>
+      submap_slices;
+  double resolution = 0.0;
+  size_t skipped = 0;
+  for (const auto& submap_id_data : all_submap_data) {
+    const auto& id = submap_id_data.id;
+    const auto& data = submap_id_data.data;
+    if (!data.submap) {
+      ++skipped;
+      continue;
     }
 
-    // 点云
-    final_submap->InsertCloudData(
-        cartographer::sensor::TransformPointCloud(
-            node.data.constant_data->filtered_gravity_aligned_point_cloud,
-            node.data.global_pose.cast<float>()),
-        cartographer::sensor::TransformPointCloud(
-            node.data.constant_data->highlight_point_cloud,
-            node.data.global_pose.cast<float>()));
+    // Submap2D::ToResponseProto 会按当前 grid 渲染出 texture（cells/width/height/
+    // resolution/slice_pose），slice_pose 是 submap 自身坐标系下的；后续与
+    // submap 的 global pose 组合即可在 PaintSubmapSlices 中正确摆位。
+    ::cartographer::mapping::proto::SubmapQuery::Response response;
+    data.submap->ToResponseProto(data.pose, &response);
+    if (response.textures().empty()) {
+      LOG(WARNING) << "SaveMapFromPoseGraph: submap " << id
+                   << " has no texture, skipping";
+      ++skipped;
+      continue;
+    }
 
-    // 线特征
-    const auto& lines = node.data.constant_data->lines;
-    if (!lines.empty()) {
-      const cartographer::transform::Rigid2d global_pose_2d =
-          cartographer::transform::Project2D(node.data.global_pose);
-      std::map<int, std::vector<cartographer::sensor::LineData>> tracked_lines;
-      line_matcher->TrackLineFromMap(global_pose_2d, lines,
-                                     *final_submap->line_map_2d_list(),
-                                     tracked_lines);
-      std::map<int, std::vector<cartographer::sensor::LineData>> global_lines;
-      for (const auto& cat : tracked_lines) {
-        for (const auto& line : cat.second) {
-          global_lines[cat.first].push_back(
-              cartographer::sensor::TransformLineData(global_pose_2d, line));
-        }
-      }
-      if (!global_lines.empty()) {
-        final_submap->InsertLineData(global_lines);
-      }
+    const auto& texture = response.textures(0);
+    const auto pixels = ::cartographer::io::UnpackTextureData(
+        texture.cells(), texture.width(), texture.height());
+
+    auto& slice = submap_slices[id];
+    slice.pose = data.pose;  // 已经过 ApplyOriginTransform，处于新坐标系
+    slice.width = texture.width();
+    slice.height = texture.height();
+    slice.resolution = texture.resolution();
+    slice.slice_pose =
+        ::cartographer::transform::ToRigid3(texture.slice_pose());
+    slice.cairo_data.clear();
+    slice.surface = ::cartographer::io::DrawTexture(
+        pixels.intensity, pixels.alpha,
+        texture.width(), texture.height(), &slice.cairo_data);
+
+    if (resolution == 0.0) {
+      resolution = texture.resolution();
     }
   }
 
-  final_submap->Finish();
-  LOG(INFO) << "SaveMapFromPoseGraph: submap built with "
-            << final_submap->line_map_2d_list()->size() << " line features";
+  if (submap_slices.empty()) {
+    LOG(ERROR) << "SaveMapFromPoseGraph: no renderable submap slices";
+    return false;
+  }
+  LOG(INFO) << "SaveMapFromPoseGraph: " << submap_slices.size()
+            << " slices ready (skipped " << skipped
+            << "), resolution=" << resolution;
 
-  return RenderSubmapToFiles(map_filename, final_submap, occ_thresh, free_thresh,
-                             node_options_.save_origin_map,
-                             node_options_.navigation_map_filter_mode,
-                             node_options_.save_debug_map,
-                             node_options_.save_map_pcd);
+  // PaintSubmapSlices 会对所有 slice 求并集，自动确定输出尺寸和左上角原点。
+  auto paint = ::cartographer::io::PaintSubmapSlices(submap_slices, resolution);
+  ::cartographer::io::Image image(std::move(paint.surface));
+
+  const Eigen::Vector2d map_origin(
+      -paint.origin.x() * resolution,
+      (paint.origin.y() - image.height()) * resolution);
+
+  // 从 map_filename 推出目录，与 RenderSubmapToFiles 一致地写 PNG/YAML。
+  std::string map_dir;
+  const size_t last_slash = map_filename.find_last_of("/");
+  map_dir = (last_slash != std::string::npos)
+                ? map_filename.substr(0, last_slash + 1)
+                : "./";
+
+  cv::Mat origin_mat =
+      ::cartographer_ros::GeneratePngMat(image, occ_thresh, free_thresh);
+
+  WriteNavigationMap(origin_mat,
+                     map_filename + ".png",
+                     node_options_.navigation_map_filter_mode,
+                     node_options_.save_debug_map,
+                     map_dir);
+
+  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
+  WriteYaml(resolution, map_origin, map_filename, &yaml_writer,
+            occ_thresh, free_thresh);
+
+  if (node_options_.save_origin_map) {
+    const std::string origin_png = map_filename + "_origin.png";
+    cv::imwrite(origin_png, origin_mat);
+    LOG(INFO) << "SaveMapFromPoseGraph: origin map saved to " << origin_png;
+  }
+
+  LOG(INFO) << "SaveMapFromPoseGraph: saved " << map_filename
+            << ".png/.yaml (" << image.width() << "x" << image.height()
+            << " px, origin=(" << map_origin.x() << ", " << map_origin.y()
+            << "))";
+  return true;
 }
 
 /**

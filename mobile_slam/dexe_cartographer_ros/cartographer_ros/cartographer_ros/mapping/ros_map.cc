@@ -204,15 +204,18 @@ void WriteNavigationMap(const cv::Mat& original,
   int kept_by_gray = 0;
   int kept_by_size = 0;
   
-  // 创建中间处理结果可视化图像（用于debug）
-  cv::Mat removed_mask = cv::Mat::zeros(original.size(), CV_8U);
-  cv::Mat edge_mask = cv::Mat::zeros(original.size(), CV_8U);  // 05_edge_mask: 灰色邻居区域
+  // 创建中间处理结果可视化图像（仅 debug 模式才分配）
+  cv::Mat removed_mask, edge_mask;
+  if (save_debug_map) {
+    removed_mask = cv::Mat::zeros(original.size(), CV_8U);
+    edge_mask    = cv::Mat::zeros(original.size(), CV_8U);
+  }
   
-  // 处理每个连通域（逻辑与debug.py完全一致）
+  // 处理每个连通域
+  // 优化：利用 stats bounding box，将所有操作限制在小 ROI 内，
+  // 避免每次对整图（3534x4649）做全量扫描操作（原方案为 O(N×W×H)）
   for (int i = 1; i < num_labels; ++i) {
-    cv::Mat component_mask = (labels == i) * 255;
-    
-    // 条件①：面积约束（仅use_area_filter=True时生效）
+    // 条件①：面积约束优先判断（无需创建 mask，直接跳过大连通域）
     if (use_area_filter) {
       int area = stats.at<int>(i, cv::CC_STAT_AREA);
       if (area >= min_noise_area) {
@@ -220,27 +223,46 @@ void WriteNavigationMap(const cv::Mat& original,
         continue;
       }
     }
-    
-    // 条件②：灰色邻居约束
-    cv::Mat dilated;
-    cv::dilate(component_mask, dilated, kernel, cv::Point(-1, -1), 1);
-    
-    cv::Mat neighbor_mask;
-    cv::bitwise_and(dilated, ~component_mask, neighbor_mask);
-    
-    cv::Mat gray_neighbors;
-    cv::bitwise_and(neighbor_mask, gray_mask, gray_neighbors);
-    
-    bool has_gray_neighbor = cv::countNonZero(gray_neighbors) > 0;
-    
+
+    // 从 stats 获取 tight bounding box
+    const int x = stats.at<int>(i, cv::CC_STAT_LEFT);
+    const int y = stats.at<int>(i, cv::CC_STAT_TOP);
+    const int w = stats.at<int>(i, cv::CC_STAT_WIDTH);
+    const int h = stats.at<int>(i, cv::CC_STAT_HEIGHT);
+
+    // 带 padding 的 ROI（为膨胀操作留出边界）
+    const int pad = dilate_radius + 1;
+    const int x0 = std::max(0, x - pad);
+    const int y0 = std::max(0, y - pad);
+    const int x1 = std::min(original.cols, x + w + pad);
+    const int y1 = std::min(original.rows, y + h + pad);
+    const cv::Rect padded_roi(x0, y0, x1 - x0, y1 - y0);
+
+    // 条件②：灰色邻居约束 —— 仅在小 ROI 上操作
+    cv::Mat component_mask_roi;
+    cv::compare(labels(padded_roi), i, component_mask_roi, cv::CMP_EQ);
+
+    cv::Mat dilated_roi;
+    cv::dilate(component_mask_roi, dilated_roi, kernel, cv::Point(-1, -1), 1);
+
+    cv::Mat neighbor_roi;
+    cv::bitwise_and(dilated_roi, ~component_mask_roi, neighbor_roi);
+    cv::Mat gray_neighbors_roi;
+    cv::bitwise_and(neighbor_roi, gray_mask(padded_roi), gray_neighbors_roi);
+
+    const bool has_gray_neighbor = cv::countNonZero(gray_neighbors_roi) > 0;
+
+    // 从 padded ROI 中提取 tight 区域的 mask，用于写回全图
+    const cv::Rect tight_roi(x, y, w, h);
+    const cv::Mat tight_mask = component_mask_roi(cv::Rect(x - x0, y - y0, w, h));
+
     if (has_gray_neighbor) {
       kept_by_gray++;
-      // 记录边缘区域（有灰色邻居的区域）
-      edge_mask.setTo(255, component_mask);
+      if (save_debug_map) edge_mask(tight_roi).setTo(255, tight_mask);
     } else {
-      // 判定为噪点，清除（改为白色255）
-      result.setTo(255, component_mask);
-      removed_mask.setTo(255, component_mask);
+      // 判定为噪点，清除（改为白色 255）
+      result(tight_roi).setTo(255, tight_mask);
+      if (save_debug_map) removed_mask(tight_roi).setTo(255, tight_mask);
       removed_count++;
     }
   }

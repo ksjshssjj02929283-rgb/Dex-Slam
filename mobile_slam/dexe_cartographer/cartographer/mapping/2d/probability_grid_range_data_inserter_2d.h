@@ -50,10 +50,16 @@ class ProbabilityGridRangeDataInserter2D : public RangeDataInserterInterface {
   virtual void Insert(const sensor::RangeData& range_data,
                       GridInterface* grid) const override;
 
+  // 开启后，miss 射线跳过已饱和 free 格子（数学等价，用于离线后处理提速）
+  void SetSkipSaturatedFreeCells(bool skip) {
+    skip_saturated_free_cells_ = skip;
+  }
+
  private:
   const proto::ProbabilityGridRangeDataInserterOptions2D options_;
   const std::vector<uint16> hit_table_;
   const std::vector<uint16> miss_table_;
+  mutable bool skip_saturated_free_cells_ = false;
 };
 
 }  // namespace mapping

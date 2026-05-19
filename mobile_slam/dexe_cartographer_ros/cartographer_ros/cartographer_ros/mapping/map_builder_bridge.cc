@@ -17,6 +17,7 @@
 #include "cartographer_ros/mapping/map_builder_bridge.h"
 
 #include <fstream>
+#include <chrono>
 
 #include <cairo/cairo.h>
 #include <pcl/io/pcd_io.h>
@@ -206,16 +207,26 @@ void MapBuilderBridge::RunFinalOptimization() {
 
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
+  using Clock = std::chrono::steady_clock;
+  using Ms = std::chrono::duration<double, std::milli>;
+  const auto t_total_start = Clock::now();
+
   LOG(INFO) << "Starting optimized SaveMap process for " << map_filename;
   
-  // 1. 生成统一的final submap，包含所有数据
-  auto final_submap = GenerateFinalSubmap(resolution);
+  // 1. 优先复用 SerializeStateToFile 已缓存的 global_static_submap，避免重复构建
+  //    （离线建图流程：SerializeState → SaveMap，缓存一定存在）
+  //    若缓存为空（单独调用 SaveMap 的场景），则回退到本地 GenerateFinalSubmap
+  auto final_submap = map_builder_->GetGlobalStaticSubmap();
+  if (final_submap) {
+    LOG(INFO) << "SaveMap: reusing cached global_static_submap (skipping regeneration)";
+  } else {
+    LOG(INFO) << "SaveMap: global_static_submap not cached, generating via GenerateFinalSubmap";
+    final_submap = GenerateFinalSubmap(resolution);
+  }
   if (!final_submap) {
     LOG(WARNING) << "No trajectory nodes available, skipping map save. Returning success to allow normal mapping process completion.";
     return true;  // 返回true以正常结束建图流程
   }
-  
-  LOG(INFO) << "Generated final submap successfully";
   
   // 2. 使用同一个submap保存不同格式的地图，避免重复计算（resolution从submap中获取）
   // 增加对每个单独模块保存文件的校验
@@ -238,18 +249,25 @@ bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double res
   //   return false;
   // }
 
+  LOG(INFO) << "[Timing] SaveMap total: " << Ms(Clock::now() - t_total_start).count() << " ms";
   LOG(INFO) << "Optimized SaveMap process completed successfully for " << map_filename;
   return true;
 }
 
 std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinalSubmap(const double resolution)
 {
+  using Clock = std::chrono::steady_clock;
+  using Ms = std::chrono::duration<double, std::milli>;
+  const auto t_total_start = Clock::now();
+
   LOG(INFO) << "Starting GenerateFinalSubmap with resolution: " << resolution;
   
   // 1. 获取所有trajectory nodes
+  auto t0 = Clock::now();
   cartographer::mapping::MapById<
     cartographer::mapping::NodeId, cartographer::mapping::TrajectoryNode>
   nodes = map_builder_->pose_graph()->GetTrajectoryNodes();
+  LOG(INFO) << "[Timing] GetTrajectoryNodes: " << Ms(Clock::now() - t0).count() << " ms";
   
   if (nodes.empty()) {
     LOG(WARNING) << "No trajectory nodes found for final submap generation. Map building will complete without saving map files.";
@@ -264,6 +282,7 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
   const Eigen::Vector2f origin = nodes.begin()->data.global_pose.translation().head<2>().cast<float>();
 
   // 3. 创建大的submap来积累所有数据
+  t0 = Clock::now();
   constexpr int kLargeSubmapSize = 2000;
   auto final_submap = std::make_shared<cartographer::mapping::Submap2D>(
       origin,
@@ -278,6 +297,7 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
       std::make_unique<cartographer::sensor::PointCloud>(),
       std::make_unique<cartographer::sensor::PointCloud>(),
       0, std::map<int, cartographer::mapping::MapLine2D>{});
+  LOG(INFO) << "[Timing] Create Submap2D: " << Ms(Clock::now() - t0).count() << " ms";
   
   // 4. 获取配置参数并设置到final_submap - 使用第一个轨迹的参数
   CHECK(!trajectory_options_.empty()) 
@@ -337,8 +357,10 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
   LOG(INFO) << "Processing " << nodes.size() << " nodes to generate final submap";
 
   // 7. 逐帧处理所有数据并插入到final submap中
+  double time_range_data = 0.0, time_cloud_data = 0.0, time_line_data = 0.0;
   for (const auto& node : nodes) {
     // 7a. 处理range_datas（原始激光数据）
+    auto t_step = Clock::now();
     for (const auto& range_data : node.data.constant_data->range_datas) {
       // 转换range data到global坐标系
       cartographer::sensor::RangeData global_range_data;
@@ -358,8 +380,10 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
       // 插入range data用于概率栅格处理
       final_submap->InsertRangeData(global_range_data, range_data_inserter.get());
     }
+    time_range_data += Ms(Clock::now() - t_step).count();
 
     // 7b. 处理点云数据
+    t_step = Clock::now();
     auto transformed_cloud = cartographer::sensor::TransformPointCloud(
                                 node.data.constant_data->filtered_gravity_aligned_point_cloud,
                                 node.data.global_pose.cast<float>());
@@ -367,8 +391,10 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
                                         node.data.constant_data->highlight_point_cloud,
                                         node.data.global_pose.cast<float>());
     final_submap->InsertCloudData(transformed_cloud, transformed_highlight_cloud);
+    time_cloud_data += Ms(Clock::now() - t_step).count();
 
     // 7c. 处理线特征数据（参考local_trajectory_builder_2d.cc中的线特征跟踪处理）
+    t_step = Clock::now();
     const auto& lines = node.data.constant_data->lines;
     bool use_line_rematch = true; // 这里可以根据需要设置是否使用line matcher
     if (!lines.empty() && line_matcher && use_line_rematch) {
@@ -423,13 +449,22 @@ std::shared_ptr<cartographer::mapping::Submap2D> MapBuilderBridge::GenerateFinal
       // 插入线数据到final submap
       final_submap->InsertLineData(transformed_lines);
     }
+    time_line_data += Ms(Clock::now() - t_step).count();
   }
 
+  LOG(INFO) << "[Timing] Node loop total breakdown:";
+  LOG(INFO) << "[Timing]   7a InsertRangeData (all nodes): " << time_range_data << " ms";
+  LOG(INFO) << "[Timing]   7b InsertCloudData (all nodes): " << time_cloud_data << " ms";
+  LOG(INFO) << "[Timing]   7c Line tracking & insert (all nodes): " << time_line_data << " ms";
+
   // 8. 完成submap构建
+  t0 = Clock::now();
   final_submap->Finish();
+  LOG(INFO) << "[Timing] Finish(): " << Ms(Clock::now() - t0).count() << " ms";
   
   LOG(INFO) << "Final submap generation completed successfully with " 
             << final_submap->line_map_2d_list()->size() << " line features";
+  LOG(INFO) << "[Timing] GenerateFinalSubmap total: " << Ms(Clock::now() - t_total_start).count() << " ms";
   
   return final_submap;
 }

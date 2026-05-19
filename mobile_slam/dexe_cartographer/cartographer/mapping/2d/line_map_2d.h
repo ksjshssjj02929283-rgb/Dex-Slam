@@ -16,9 +16,11 @@
 #include "cartographer/sensor/line_data.h"
 #include <vector>
 #include <map>
+#include <array>
 #include <utility>
 #include <limits>
 #include <algorithm>
+#include <cmath>
 
 namespace cartographer
 {
@@ -89,6 +91,32 @@ private:
 
 class LineMap2DList
 {
+public:
+  // 每桶 5°，搜索 ±2 桶覆盖 ±10°（等于最大角度阈值）
+  static constexpr int kAngleBuckets = 36;
+
+  // 将角度（任意弧度）映射到 [0, kAngleBuckets) 的桶编号
+  // NaN/Inf 安全：异常值统一映射到桶 0，避免越界访问
+  static int AngleToBucket(double angle) {
+    if (!std::isfinite(angle)) return 0;
+    // 线段方向无正负之分，归一化到 [0, π)
+    double a = std::fmod(angle, M_PI);
+    if (a < 0) a += M_PI;
+    int b = static_cast<int>(a / M_PI * kAngleBuckets);
+    return std::min(b, kAngleBuckets - 1);
+  }
+
+  // 返回指定桶的 local_id 列表（供 line_matcher_2d.cc 使用）
+  const std::vector<int>& GetAngleBucket(int bucket) const {
+    return angle_index_[bucket];
+  }
+
+  // 检查角度索引是否与 line_map_data_list_ 保持一致
+  // 若返回 false 则说明索引未初始化或过时，调用方应回退到全量遍历
+  bool is_angle_index_valid() const {
+    return local_id_to_bucket_.size() == line_map_data_list_.size();
+  }
+
 private:
   /* data */
   int latest_local_id_;
@@ -100,6 +128,10 @@ private:
   double min_line_length_ = 0.4;
   double max_line_length_ = 7.0;
   int culling_obs_ = 3;
+
+  // 角度分桶索引：将线段方向归一化到 [0, π)，分 kAngleBuckets 个桶
+  std::array<std::vector<int>, kAngleBuckets> angle_index_;  // bucket → local_id list
+  std::map<int, int> local_id_to_bucket_;  // local_id → bucket，用于 O(1) 查表删除
 
 public:
   LineMap2DList() = default;
@@ -154,6 +186,11 @@ public:
     return res;
   }
   //   bool getNextestLine();
+
+private:
+  void AddToAngleIndex(int local_id, double angle);
+  void RemoveFromAngleIndex(int local_id);
+  void UpdateAngleIndex(int local_id, double new_angle);
 };
 
 }  // namespace mapping

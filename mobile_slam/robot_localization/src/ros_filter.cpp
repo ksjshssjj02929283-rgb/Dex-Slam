@@ -165,6 +165,9 @@ void RosFilter<T>::reset()
 
   // reset filter to uninitialized state
   filter_.reset();
+
+  // reset ros-level initialization flag so we wait for a fresh pose measurement
+  is_initialized_ = false;
 }
 
 template<typename T>
@@ -205,7 +208,10 @@ void RosFilter<T>::startFilterCallback(
   } else {
     RCLCPP_INFO(
       this->get_logger(),
-      "Starting filter processing.");
+      "Starting filter processing: resetting state and waiting for fresh pose measurement.");
+    // Reset all state so the filter reinitializes from incoming measurements
+    // in the new coordinate frame, discarding any old-frame accumulation.
+    reset();
     toggled_on_ = true;
     resp->success = true;
     resp->message = "Filter started successfully.";
@@ -227,8 +233,11 @@ void RosFilter<T>::stopFilterCallback(
   } else {
     RCLCPP_INFO(
       this->get_logger(),
-      "Stopping filter processing.");
+      "Stopping filter processing: clearing state to halt TF publishing.");
     toggled_on_ = false;
+    // Reset filter: getFilteredOdometryMessage() returns false → TF stops.
+    // Old-frame state discarded; start_filter reinitializes cleanly.
+    reset();
     resp->success = true;
     resp->message = "Filter stopped successfully.";
   }

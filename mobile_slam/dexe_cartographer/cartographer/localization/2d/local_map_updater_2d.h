@@ -43,6 +43,15 @@ public:
   // - NONE: 返回 global_static_submap_
   // - SHORT/LONG/PERSISTENT: 返回 global_dynamic_submap_
   std::shared_ptr<mapping::Submap2D> GetGlobalSubmap() const;
+
+  // 同步地以给定位姿为中心，从 global_dynamic_submap_ 裁剪并构建新的 local submap，
+  // 并直接替换内部的 local_submap_（同时更新 local_map_origin_）。
+  // 用于 Recovery 场景：先将 local map 对准估计位姿，再调用 local_submap() 进行搜索。
+  // global_dynamic_submap_ 未初始化时为 no-op。
+  void RebuildLocalSubmapAt(const transform::Rigid2d& pose);
+
+  // reset_map_origin 时同步更新内部地图和状态到新坐标系。
+  void ApplyOriginTransform(const transform::Rigid3d& T);
   
   // 获取动态地图策略
   proto::DynamicMapPolicy GetDynamicMapPolicy() const {

@@ -157,6 +157,11 @@ class PoseGraph2D : public PoseGraph {
       int trajectory_id, const common::Time time) const
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
+  // Applies a rigid transform to all global poses (nodes, submaps, landmarks).
+  // Used for map-origin reset in localization mode.
+  void ApplyTransformToAllPoses(const transform::Rigid3d& transform) override
+      LOCKS_EXCLUDED(mutex_);
+
   static void RegisterMetrics(metrics::FamilyFactory* family_factory);
 
  private:
