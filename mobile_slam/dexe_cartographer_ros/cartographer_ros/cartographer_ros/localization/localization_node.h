@@ -95,6 +95,16 @@ public:
 
   bool SaveMap(const std::string& map_filename, const double resolution);
 
+  // 以当前机器人定位位姿为新原点，将所有数据变换到新坐标系，
+  // 并将新地图图像/yaml 写入 map_base_filename（不含后缀），
+  // 将新 pbstream 写入 pbstream_filename。
+  bool ResetMapOriginAndSave(const std::string& map_base_filename,
+                              const std::string& pbstream_filename);
+
+  // 触发全局重定位：将初始位姿设为地图原点（identity），
+  // 用于重置地图原点并重启定位后，将机器人定位到新地图原点处。
+  bool TriggerGlobalRelocalization();
+
   // Public methods for offline processing (similar to mapping::Node)
   std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>
   ComputeExpectedSensorIds(const TrajectoryOptions& options) const;
@@ -159,6 +169,7 @@ private:
   // Helpers
   bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);
   bool StopFilter();
+  bool StartFilter();
 
   // Timed publishers
   void PublishSubmapList();

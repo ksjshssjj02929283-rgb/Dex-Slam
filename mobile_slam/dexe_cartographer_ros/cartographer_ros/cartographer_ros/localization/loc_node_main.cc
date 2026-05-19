@@ -65,10 +65,20 @@ DEFINE_string(
 // ---------------------------------------------------------------------------
 // MapPersistenceManager GFlags（可在 launch 文件的 arguments 中覆盖）
 // ---------------------------------------------------------------------------
+DEFINE_bool(
+    auto_load_map, false,
+    "If true, automatically load the map specified by --map_folder/--map_name on startup. "
+    "If false, skip map loading at startup and wait for the set_map_changed service to trigger.");
+
+DEFINE_bool(
+    enable_auto_save_map, false,
+    "Enable automatic map saving during localization. When disabled, "
+    "map will only be saved manually via save_map service or on shutdown.");
 DEFINE_double(
     auto_save_interval_s, 1800.0,
     "Interval in seconds between automatic map saves (default: 1800 = 30 min). "
-    "The save is triggered only when the robot velocity is below threshold.");
+    "The save is triggered only when the robot velocity is below threshold. "
+    "Only effective when enable_auto_save_map is true.");
 DEFINE_double(
     auto_save_linear_velocity_threshold, 0.01,
     "Linear velocity threshold (m/s) below which the robot is considered static "
@@ -102,17 +112,24 @@ public:
     
     RCLCPP_INFO(get_logger(), "LocalizationManager Node initialized successfully");
     
-    // 自动启动定位（延迟一小段时间以确保所有组件就绪）
+    // 自动启动（延迟一小段时间确保所有组件就绪）
     auto_start_timer_ = create_wall_timer(
         std::chrono::milliseconds(500),
         [this]() {
           auto_start_timer_->cancel();  // 只执行一次
-          RCLCPP_INFO(get_logger(), "Auto-starting localization...");
           std::lock_guard<std::mutex> lock(state_mutex_);
-          if (StartFilter() && StartLocalization()) {
-            RCLCPP_INFO(get_logger(), "Localization auto-started successfully");
+          if (FLAGS_auto_load_map) {
+            RCLCPP_INFO(get_logger(), "auto_load_map=true: auto-starting localization with map...");
+            if (StartLocalization()) {
+              StartFilter();
+              RCLCPP_INFO(get_logger(), "Localization auto-started successfully");
+            } else {
+              RCLCPP_ERROR(get_logger(), "Failed to auto-start localization");
+            }
           } else {
-            RCLCPP_ERROR(get_logger(), "Failed to auto-start localization");
+            RCLCPP_INFO(get_logger(),
+                        "auto_load_map=false: skipping map load at startup, "
+                        "waiting for ~/set_map_changed service to trigger");
           }
         });
   }
@@ -171,11 +188,10 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
 
-  // === Service Clients ===
-  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_filter_client_;
-  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stop_filter_client_;
-  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr reset_filter_client_;
+  // filter service 调用使用临时 node + 独立 executor，不持有长期 client
+  // （在 service handler 线程中调用同进程其他 service 会死锁，须独立 executor）
 
   // === Monitoring ===
   rclcpp::TimerBase::SharedPtr health_check_timer_;
@@ -211,13 +227,12 @@ private:
         std::bind(&LocalizationManagerNode::HandleSaveMap, this,
                   std::placeholders::_1, std::placeholders::_2));
 
-    // 创建服务客户端
-    start_filter_client_ = create_client<std_srvs::srv::Trigger>(
-        "/robot_localization/start_filter");
-    stop_filter_client_ = create_client<std_srvs::srv::Trigger>(
-        "/robot_localization/stop_filter");
-    reset_filter_client_ = create_client<std_srvs::srv::Trigger>(
-        "/robot_localization/reset_filter");
+    reset_map_origin_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/reset_map_origin",
+        std::bind(&LocalizationManagerNode::HandleResetMapOrigin, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    // filter service 客户端在调用时临时创建，不在此注册
   }
 
   void InitializeTfComponents() {
@@ -240,14 +255,11 @@ private:
       return;
     }
 
-    if (!StartFilter()) {
-      response->success = false;
-      response->message = "Failed to start robot localization filter";
-      return;
-    }
-
     response->success = StartLocalization();
-    response->message = response->success ? 
+    if (response->success) {
+      StartFilter();
+    }
+    response->message = response->success ?
         "Localization started successfully" : "Failed to start localization";
   }
 
@@ -256,9 +268,9 @@ private:
       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    StopLocalization();
+
     StopFilter();
+    StopLocalization();
     
     response->success = true;
     response->message = "Localization stopped successfully";
@@ -271,12 +283,16 @@ private:
     std::lock_guard<std::mutex> lock(state_mutex_);
     
     RCLCPP_INFO(get_logger(), "Resetting localization");
-    
+
+    StopFilter();
     StopLocalization();
     // ResetFilter();
-    
+
     response->success = StartLocalization();
-    response->message = response->success ? 
+    if (response->success) {
+      StartFilter();
+    }
+    response->message = response->success ?
         "Localization reset successfully" : "Failed to reset localization";
   }
 
@@ -421,14 +437,21 @@ private:
       state_ = LocalizationState::RUNNING;
 
       // 创建地图持久化管理器（定时自动保存 + 外部调用保存）
-      map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
-          this,
-          [this]() -> localization::LocalizationNode* {
-            return localization_node_.get();
-          },
-          [this]() -> std::pair<std::string, std::string> {
-            return {FLAGS_map_folder, FLAGS_map_name};
-          });
+      // 仅在 enable_auto_save_map 为 true 时创建，否则只能通过 save_map 服务手动保存
+      if (FLAGS_enable_auto_save_map) {
+        map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
+            this,
+            [this]() -> localization::LocalizationNode* {
+              return localization_node_.get();
+            },
+            [this]() -> std::pair<std::string, std::string> {
+              return {FLAGS_map_folder, FLAGS_map_name};
+            });
+        RCLCPP_INFO(get_logger(), "Auto-save map is ENABLED (interval: %.0f s)",
+                    FLAGS_auto_save_interval_s);
+      } else {
+        RCLCPP_INFO(get_logger(), "Auto-save map is DISABLED - map will only be saved manually via save_map service");
+      }
 
       RCLCPP_INFO(get_logger(), "Localization started successfully");
       return true;
@@ -476,6 +499,39 @@ private:
       state_ = LocalizationState::STOPPED;
       RCLCPP_INFO(get_logger(), "=== Localization stopped successfully ===");
       
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(get_logger(), "Error while stopping localization: %s", e.what());
+      state_ = LocalizationState::ERROR;
+    }
+  }
+
+  // 停止定位但不保存地图，用于重置地图原点后的快速重启
+  void StopLocalizationNoSave() {
+    if (state_ == LocalizationState::STOPPED) {
+      RCLCPP_INFO(get_logger(), "Localization already stopped");
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "Stopping localization (no save)...");
+    state_ = LocalizationState::STOPPING;
+
+    try {
+      if (map_persistence_manager_) {
+        map_persistence_manager_->Stop();
+        map_persistence_manager_.reset();
+      }
+
+      if (localization_node_) {
+        localization_node_->FinishAllTrajectories();
+        localization_node_.reset();
+      }
+
+      node_options_.reset();
+      trajectory_options_.reset();
+
+      state_ = LocalizationState::STOPPED;
+      RCLCPP_INFO(get_logger(), "Localization stopped (no save)");
+
     } catch (const std::exception& e) {
       RCLCPP_ERROR(get_logger(), "Error while stopping localization: %s", e.what());
       state_ = LocalizationState::ERROR;
@@ -568,6 +624,81 @@ private:
     response->message = success ? "Map saved successfully" : "Map save completed with errors (check logs)";
   }
 
+  void HandleResetMapOrigin(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING || !localization_node_) {
+      response->success = false;
+      response->message = "Localization is not running, cannot reset map origin";
+      RCLCPP_WARN(get_logger(), "reset_map_origin called but localization is not running");
+      return;
+    }
+
+    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
+      response->success = false;
+      response->message = "map_folder or map_name is not set";
+      RCLCPP_ERROR(get_logger(), "reset_map_origin: --map_folder and --map_name must be specified");
+      return;
+    }
+
+    const std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+    const std::string map_base = map_dir + "/map";
+    const std::string pbstream_path = map_dir + "/map.pbstream";
+
+    RCLCPP_INFO(get_logger(), "reset_map_origin: starting workflow...");
+
+    // 1. 停止 EKF filter，避免 TF 变换期间出现冲突
+    RCLCPP_INFO(get_logger(), "reset_map_origin [1/5]: stopping EKF filter...");
+    StopFilter();
+
+    // 2. 在定位运行时获取当前位姿，重置地图原点并保存新地图文件
+    RCLCPP_INFO(get_logger(),
+                "reset_map_origin [2/5]: resetting map origin (map_base=%s)...",
+                map_base.c_str());
+    const bool reset_success =
+        localization_node_->ResetMapOriginAndSave(map_base, pbstream_path);
+
+    if (!reset_success) {
+      RCLCPP_ERROR(get_logger(), "reset_map_origin: ResetMapOriginAndSave failed, aborting");
+      StartFilter();  // 尽力恢复 filter
+      response->success = false;
+      response->message = "Failed to reset map origin (check logs)";
+      return;
+    }
+
+    // 3. 停止定位（不保存），避免覆盖刚写好的新地图
+    RCLCPP_INFO(get_logger(), "reset_map_origin [3/5]: stopping localization (no save)...");
+    StopLocalizationNoSave();
+
+    // 4. 用新 pbstream 重新启动定位
+    RCLCPP_INFO(get_logger(), "reset_map_origin [4/5]: restarting localization with new map...");
+    const bool start_success = StartLocalization();
+
+    if (!start_success) {
+      RCLCPP_ERROR(get_logger(),
+                   "reset_map_origin: failed to restart localization after origin reset");
+      response->success = false;
+      response->message = "Map origin reset succeeded but failed to restart localization";
+      return;
+    }
+
+    // 5. 触发重定位：机器人当前位置即新地图原点，设初始位姿为 identity
+    RCLCPP_INFO(get_logger(),
+                "reset_map_origin [5/5]: triggering relocalization at new map origin...");
+    localization_node_->TriggerGlobalRelocalization();
+
+    // start_filter 内部已执行 reset()，滤波器将从新帧的首次位姿测量重新初始化
+    StartFilter();
+
+    RCLCPP_INFO(get_logger(), "reset_map_origin: completed successfully");
+    response->success = true;
+    response->message =
+        "Map origin reset, localization restarted, relocalization triggered at new origin";
+  }
+
   bool ValidateMapResources() {
     // 使用gflags参数
     if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
@@ -601,96 +732,53 @@ private:
     return true;
   }
 
+  // 在 service handler 线程内调用另一个 service 会死锁（主 executor 被占用无法 spin）。
+  // 解决方案：每次调用创建临时 node + 独立 SingleThreadedExecutor，与主 executor 完全隔离。
   bool CallRobotLocalizationService(const std::string& service_name) {
-    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client;
-    
-    // 对于 start_filter，创建临时节点进行调用
-    if (service_name.find("start_filter") != std::string::npos) {
-      try {
-        RCLCPP_INFO(get_logger(), "Creating temporary node to call %s", service_name.c_str());
-        
-        // 创建临时节点
-        auto temp_node = std::make_shared<rclcpp::Node>(
-            "temp_start_filter_client",
-            rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
-        
-        // 创建临时客户端
-        auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(service_name);
-        
-        if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
-          RCLCPP_ERROR(get_logger(), "Service %s not available", service_name.c_str());
-          return false;
-        }
-        
-        auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
-        auto future = temp_client->async_send_request(request);
-        
-        // 使用临时 executor 来处理响应
-        rclcpp::executors::SingleThreadedExecutor temp_executor;
-        temp_executor.add_node(temp_node);
-        
-        auto timeout = std::chrono::seconds(5);
-        auto start_time = std::chrono::steady_clock::now();
-        
-        while (rclcpp::ok() && 
-               future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
-          temp_executor.spin_some();
-          
-          if (std::chrono::steady_clock::now() - start_time > timeout) {
-            RCLCPP_ERROR(get_logger(), "Service %s call timeout", service_name.c_str());
-            return false;
-          }
-        }
-        
-        auto response = future.get();
-        if (!response->success) {
-          RCLCPP_ERROR(get_logger(), "Service %s call failed: %s", 
-                       service_name.c_str(), response->message.c_str());
-          return false;
-        }
-        
-        RCLCPP_INFO(get_logger(), "Service %s call successful", service_name.c_str());
-        return true;
-        
-      } catch (const std::exception& e) {
-        RCLCPP_ERROR(get_logger(), "Exception while calling %s: %s", 
-                     service_name.c_str(), e.what());
+    try {
+      auto temp_node = std::make_shared<rclcpp::Node>(
+          "temp_filter_client",
+          rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
+      auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(service_name);
+
+      if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
+        RCLCPP_ERROR(get_logger(), "Service %s not available", service_name.c_str());
         return false;
       }
-    }
-    
-    // 对于其他服务，使用已有的客户端
-    if (service_name.find("stop_filter") != std::string::npos) {
-      client = stop_filter_client_;
-    } else if (service_name.find("reset_filter") != std::string::npos) {
-      client = reset_filter_client_;
-    } else {
-      RCLCPP_ERROR(get_logger(), "Unknown service name: %s", service_name.c_str());
+
+      auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+      auto future = temp_client->async_send_request(request);
+
+      rclcpp::executors::SingleThreadedExecutor temp_executor;
+      temp_executor.add_node(temp_node);
+
+      const auto timeout = std::chrono::seconds(5);
+      const auto start_time = std::chrono::steady_clock::now();
+
+      while (rclcpp::ok() &&
+             future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+        temp_executor.spin_some();
+        if (std::chrono::steady_clock::now() - start_time > timeout) {
+          RCLCPP_ERROR(get_logger(), "Service %s call timeout", service_name.c_str());
+          return false;
+        }
+      }
+
+      auto response = future.get();
+      if (!response->success) {
+        RCLCPP_ERROR(get_logger(), "Service %s call failed: %s",
+                     service_name.c_str(), response->message.c_str());
+        return false;
+      }
+
+      RCLCPP_INFO(get_logger(), "Service %s call successful", service_name.c_str());
+      return true;
+
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(get_logger(), "Exception while calling %s: %s",
+                   service_name.c_str(), e.what());
       return false;
     }
-
-    if (!client->wait_for_service(std::chrono::seconds(5))) {
-      RCLCPP_ERROR(get_logger(), "Service %s not available", service_name.c_str());
-      return false;
-    }
-
-    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
-    auto future = client->async_send_request(request);
-
-    if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
-      RCLCPP_ERROR(get_logger(), "Service %s call timeout", service_name.c_str());
-      return false;
-    }
-
-    auto response = future.get();
-    if (!response->success) {
-      RCLCPP_ERROR(get_logger(), "Service %s call failed: %s", 
-                   service_name.c_str(), response->message.c_str());
-      return false;
-    }
-
-    RCLCPP_INFO(get_logger(), "Service %s call successful", service_name.c_str());
-    return true;
   }
 
   bool StartFilter() {

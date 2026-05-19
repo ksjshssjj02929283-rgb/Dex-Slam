@@ -30,6 +30,7 @@
 #include "cartographer/mapping/proto/map_builder_options.pb.h"
 #include "cartographer/mapping/proto/submap_visualization.pb.h"
 #include "cartographer/mapping/proto/trajectory_builder_options.pb.h"
+#include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/submaps.h"
 #include "cartographer/mapping/trajectory_builder_interface.h"
 
@@ -120,6 +121,12 @@ class MapBuilderInterface {
   GetLineMap()const = 0;
 
   virtual int num_trajectory_builders() const = 0;
+
+  // 返回已缓存的全局静态 Submap（由 SerializeStateToFile 生成并缓存）。
+  // 若尚未生成则返回 nullptr。非 2D 实现（mock/stub）保持默认返回 nullptr 即可。
+  virtual std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const {
+    return nullptr;
+  }
 
   virtual mapping::PoseGraphInterface* pose_graph() = 0;
 

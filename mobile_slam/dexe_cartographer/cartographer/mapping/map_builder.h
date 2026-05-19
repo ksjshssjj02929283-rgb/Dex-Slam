@@ -109,6 +109,11 @@ class MapBuilder : public MapBuilderInterface {
   // Generate global static submap from all trajectory nodes
   std::shared_ptr<Submap2D> GenerateGlobalStaticSubmap(double resolution);
 
+  // 返回已缓存的全局静态 Submap（SerializeStateToFile 后可用），否则返回 nullptr
+  std::shared_ptr<Submap2D> GetGlobalStaticSubmap() const override {
+    return global_static_submap_;
+  }
+
  private:
   const proto::MapBuilderOptions options_;
   common::ThreadPool thread_pool_;

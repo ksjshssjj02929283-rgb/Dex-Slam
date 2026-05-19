@@ -171,7 +171,9 @@ void PoseInitializer::Run()
       if (need_apply_initial_pose_) {
         RelocalzationOnce();  // 局部重定位（有初始位姿）
       } else if (need_global_relocalization_) {
+        cartographer::common::TicToc timer;
         GlobalRelocalzationOnce();  // 全局重定位（无初始位姿）
+        LOG(INFO) << "Global relocalization took " << timer.toc() << " ms";
       }
     }
   }

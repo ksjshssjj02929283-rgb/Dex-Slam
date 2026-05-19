@@ -16,6 +16,8 @@
 
 #include "cartographer/mapping/map_builder.h"
 
+#include <chrono>
+
 #include "absl/memory/memory.h"
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
@@ -252,7 +254,12 @@ void MapBuilder::SerializeState(bool include_unfinished_submaps,
                       .resolution();
       }
     }
+    const auto t0 = std::chrono::steady_clock::now();
     GenerateGlobalStaticSubmap(resolution);
+    const auto t1 = std::chrono::steady_clock::now();
+    LOG(INFO) << "[Timing] GenerateGlobalStaticSubmap (SerializeState): "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
+              << " ms";
   }
   
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
@@ -275,7 +282,12 @@ bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
                       .resolution();
       }
     }
+    const auto t0 = std::chrono::steady_clock::now();
     GenerateGlobalStaticSubmap(resolution);
+    const auto t1 = std::chrono::steady_clock::now();
+    LOG(INFO) << "[Timing] GenerateGlobalStaticSubmap (SerializeStateToFile): "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
+              << " ms";
   }
   
   io::ProtoStreamWriter writer(filename);
@@ -364,6 +376,8 @@ std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resoluti
 
   auto range_data_inserter = 
       absl::make_unique<ProbabilityGridRangeDataInserter2D>(options);
+  // 离线后处理：跳过已饱和 free 格子的 miss 射线更新（数学等价，显著减少无效计算）
+  range_data_inserter->SetSkipSaturatedFreeCells(true);
 
   // 7. 逐帧处理所有数据
   int nodes_with_real_range_data = 0;
