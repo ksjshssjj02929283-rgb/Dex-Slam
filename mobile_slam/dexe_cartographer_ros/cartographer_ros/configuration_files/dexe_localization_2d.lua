@@ -104,7 +104,7 @@ POSE_ESTIMATOR_2D.map_insertion_motion_filter.max_angle_radians = math.rad(90.)
 POSE_ESTIMATOR_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.hit_probability = 0.61
 POSE_ESTIMATOR_2D.submaps.range_data_inserter.probability_grid_range_data_inserter.miss_probability = 0.48
 POSE_ESTIMATOR_2D.submaps.num_range_data = 20
-POSE_ESTIMATOR_2D.submaps.grid_options_2d.resolution = 0.04
+POSE_ESTIMATOR_2D.submaps.grid_options_2d.resolution = 0.05
 
 -- [[回环检测参数]]
 POSE_GRAPH.constraint_builder.min_score = 0.55
