@@ -180,6 +180,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_global_relocalization_srv_;
   rclcpp::Service<cartographer_ros_msgs::srv::RollbackMapTo>::SharedPtr rollback_map_to_srv_;
 
   // filter service 调用使用临时 node + 独立 executor，不持有长期 client
@@ -222,6 +223,11 @@ private:
     reset_map_origin_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/reset_map_origin",
         std::bind(&LocalizationManagerNode::HandleResetMapOrigin, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    trigger_global_relocalization_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/trigger_global_relocalization",
+        std::bind(&LocalizationManagerNode::HandleTriggerGlobalRelocalization, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     rollback_map_to_srv_ = create_service<cartographer_ros_msgs::srv::RollbackMapTo>(
@@ -627,6 +633,35 @@ private:
     response->success = true;
     response->message =
         "Map origin reset, localization restarted, relocalization triggered at new origin";
+  }
+
+  void HandleTriggerGlobalRelocalization(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING || !localization_node_) {
+      response->success = false;
+      response->message = "Localization is not running, cannot trigger relocalization";
+      RCLCPP_WARN(get_logger(),
+                  "trigger_global_relocalization called but localization is not running");
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "trigger_global_relocalization: invoking...");
+    const bool ok = localization_node_->TriggerGlobalRelocalization();
+
+    response->success = ok;
+    response->message = ok
+        ? "Global relocalization triggered successfully"
+        : "Global relocalization failed (see node logs)";
+
+    if (ok) {
+      RCLCPP_INFO(get_logger(), "trigger_global_relocalization: success");
+    } else {
+      RCLCPP_ERROR(get_logger(), "trigger_global_relocalization: failed");
+    }
   }
 
   void HandleRollbackMapTo(
