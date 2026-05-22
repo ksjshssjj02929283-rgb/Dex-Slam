@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <chrono>
+#include <ctime>
 #include <mutex>
 #include <filesystem>
 #include <atomic>
@@ -30,8 +31,10 @@
 
 #include "absl/memory/memory.h"
 #include "cartographer/localization/localization_updater.h"
+#include "cartographer_ros/localization/atomic_dir_swap.h"
 #include "cartographer_ros/localization/localization_node.h"
 #include "cartographer_ros/localization/map_persistence_manager.h"
+#include "cartographer_ros_msgs/srv/rollback_map_to.hpp"
 #include "cartographer_ros/options/localization_node_options.h"
 #include "cartographer_ros/mapping/ros_log_sink.h"
 #include "gflags/gflags.h"
@@ -69,6 +72,12 @@ DEFINE_bool(
     auto_load_map, false,
     "If true, automatically load the map specified by --map_folder/--map_name on startup. "
     "If false, skip map loading at startup and wait for the set_map_changed service to trigger.");
+
+DEFINE_int32(
+    map_backup_keep_count, 5,
+    "Number of historical map backups to keep on disk (rotated after each save). "
+    "0 = do not keep any historical backups. Each backup occupies one copy of the "
+    "map folder size.");
 
 namespace cartographer_ros {
 
@@ -171,6 +180,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
+  rclcpp::Service<cartographer_ros_msgs::srv::RollbackMapTo>::SharedPtr rollback_map_to_srv_;
 
   // filter service 调用使用临时 node + 独立 executor，不持有长期 client
   // （在 service handler 线程中调用同进程其他 service 会死锁，须独立 executor）
@@ -212,6 +222,11 @@ private:
     reset_map_origin_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/reset_map_origin",
         std::bind(&LocalizationManagerNode::HandleResetMapOrigin, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    rollback_map_to_srv_ = create_service<cartographer_ros_msgs::srv::RollbackMapTo>(
+        "~/rollback_map_to",
+        std::bind(&LocalizationManagerNode::HandleRollbackMapTo, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // filter service 客户端在调用时临时创建，不在此注册
@@ -383,8 +398,15 @@ private:
     }
 
     state_ = LocalizationState::STARTING;
-    
+
     try {
+      // 启动恢复：扫描磁盘 staging/swap_backup/tombstone 残留，按决策表自愈
+      // 必须在 ValidateMapResources 之前——半成品 staging/swap_backup 可能让 validate 误判
+      if (!FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
+        const std::string target_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+        AtomicDirSwap::RecoverIfInterrupted(target_dir);
+      }
+
       // 验证地图资源
       if (!ValidateMapResources()) {
         state_ = LocalizationState::ERROR;
@@ -426,7 +448,8 @@ private:
           },
           [this]() -> std::pair<std::string, std::string> {
             return {FLAGS_map_folder, FLAGS_map_name};
-          });
+          },
+          FLAGS_map_backup_keep_count);
 
       RCLCPP_INFO(get_logger(), "Localization started successfully");
       return true;
@@ -604,6 +627,128 @@ private:
     response->success = true;
     response->message =
         "Map origin reset, localization restarted, relocalization triggered at new origin";
+  }
+
+  void HandleRollbackMapTo(
+      const std::shared_ptr<cartographer_ros_msgs::srv::RollbackMapTo::Request> request,
+      std::shared_ptr<cartographer_ros_msgs::srv::RollbackMapTo::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING) {
+      response->success = false;
+      response->message = "Localization is not running, cannot rollback";
+      RCLCPP_WARN(get_logger(), "rollback_map_to called but localization is not running");
+      return;
+    }
+
+    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
+      response->success = false;
+      response->message = "map_folder or map_name is not set";
+      return;
+    }
+
+    const std::string target_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+
+    // 1. 列出可用历史 backup（已按时间戳降序）
+    auto backups = AtomicDirSwap::ListHistoricalBackups(target_dir);
+    if (backups.empty()) {
+      response->success = false;
+      response->message = "No historical backups available";
+      RCLCPP_WARN(get_logger(), "rollback_map_to: no backups found in %s",
+                  FLAGS_map_folder.c_str());
+      return;
+    }
+
+    // 2. 选定目标 backup
+    std::string chosen_backup;
+    if (request->timestamp.empty()) {
+      // 取最新
+      chosen_backup = backups.front();
+    } else {
+      // 精确匹配后缀 .backup.<ts>
+      const std::string suffix = ".backup." + request->timestamp;
+      for (const auto& b : backups) {
+        if (b.size() >= suffix.size() &&
+            b.compare(b.size() - suffix.size(), suffix.size(), suffix) == 0) {
+          chosen_backup = b;
+          break;
+        }
+      }
+      if (chosen_backup.empty()) {
+        // 列出可用 ts
+        std::string available;
+        for (const auto& b : backups) {
+          const size_t pos = b.rfind(".backup.");
+          if (pos != std::string::npos) {
+            if (!available.empty()) available += ", ";
+            available += b.substr(pos + 8);  // 跳过 ".backup."
+          }
+        }
+        response->success = false;
+        response->message = "Timestamp not found. Available: " + available;
+        return;
+      }
+    }
+
+    RCLCPP_INFO(get_logger(), "rollback_map_to: restoring from %s", chosen_backup.c_str());
+
+    // 3. 停止定位（不保存——保存会写 staging，但我们要 mv target 走，避免和保存路径冲突）
+    StopFilter();
+    StopLocalizationNoSave();
+
+    // 4. 把当前 target 归档为新 backup（保留原内容；用当前时间戳）
+    std::time_t now = std::time(nullptr);
+    char ts_buf[32];
+    struct tm tm_buf;
+    ::localtime_r(&now, &tm_buf);
+    std::strftime(ts_buf, sizeof(ts_buf), "%Y%m%d-%H%M%S", &tm_buf);
+    std::string archive_path = target_dir + ".backup." + std::string(ts_buf);
+    // 同秒冲突追加 retry 后缀（参照 AtomicDirSwap 内部逻辑）
+    for (int r = 0; r < 5 && std::filesystem::exists(archive_path); ++r) {
+      archive_path = target_dir + ".backup." + std::string(ts_buf) + "-" + std::to_string(r + 1);
+    }
+    std::error_code ec;
+    std::filesystem::rename(target_dir, archive_path, ec);
+    if (ec) {
+      RCLCPP_ERROR(get_logger(), "rollback: archive current target failed: %s", ec.message().c_str());
+      response->success = false;
+      response->message = "Failed to archive current target: " + ec.message();
+      // 尝试重启定位
+      StartLocalization();
+      StartFilter();
+      return;
+    }
+
+    // 5. 把选中的 backup rename 为新 target
+    std::filesystem::rename(chosen_backup, target_dir, ec);
+    if (ec) {
+      RCLCPP_ERROR(get_logger(), "rollback: rename backup -> target failed: %s", ec.message().c_str());
+      // 紧急回滚：把 archive 改回 target
+      std::error_code ec2;
+      std::filesystem::rename(archive_path, target_dir, ec2);
+      response->success = false;
+      response->message = "Rename backup failed; archive restored: " + ec.message();
+      StartLocalization();
+      StartFilter();
+      return;
+    }
+
+    // 6. 重启定位
+    if (!StartLocalization()) {
+      RCLCPP_ERROR(get_logger(), "rollback: failed to start localization with rolled-back map");
+      response->success = false;
+      response->message = "Map rolled back but failed to start localization";
+      return;
+    }
+    StartFilter();
+
+    response->success = true;
+    response->message = "Map rolled back successfully";
+    response->restored_from = chosen_backup;
+    response->archived_current_as = archive_path;
+    RCLCPP_INFO(get_logger(), "rollback_map_to: completed. current archived as %s",
+                archive_path.c_str());
   }
 
   bool ValidateMapResources() {

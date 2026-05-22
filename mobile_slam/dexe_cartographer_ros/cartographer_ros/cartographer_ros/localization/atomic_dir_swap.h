@@ -17,61 +17,86 @@
 namespace cartographer_ros {
 
 /**
- * @brief 目录级原子替换工具。
+ * @brief 目录级原子替换工具，带历史 backup 轮换。
  *
- *   提供"先写 staging → 写 sentinel → 同卷 rename 替换 target → 清 backup"的
- *   崩溃安全工作流。staging / backup / target 必须位于同一文件系统
- *   （依赖 POSIX rename(2) 的同卷原子性）。
- *
- *   典型用法：
- *     AtomicDirSwap swap("/path/to/map_dir");
- *     std::string staging = swap.BeginStage();
- *     // 把若干文件写入 staging/<name>，每个文件 close 前 fsync
- *     swap.CommitStage({"map.pbstream", "map.png", "map.yaml"});
- *     swap.ActivateAndCleanup();
+ *   流程（6 步）：
+ *     1. BeginStage()          → 准备 <target>.staging/
+ *     2. (调用方写文件 + fsync)
+ *     3. CommitStage(files)    → 写 sentinel + fsync
+ *     4. ActivateAndCleanup()  → 内含 step 3-5b：
+ *        a. rename(target, swap_backup)
+ *        b. rename(staging, target)
+ *        c. rename(swap_backup, backup.<ts>)       ← 归档
+ *        d. 轮换：扫描 backup.*，超过 max_backups 个的
+ *                 rename→tombstone→rm
  *
  *   启动期：
- *     AtomicDirSwap::RecoverIfInterrupted("/path/to/map_dir");
- *   会扫描磁盘状态（target / target.staging / target.backup 三者的存在与
- *   sentinel 完整性），根据决策表自动完成中断的切换或清理残留。
+ *     AtomicDirSwap::RecoverIfInterrupted(target_dir);
+ *     按决策表清残缺 staging / 续做 swap / 清 tombstone；不动 backup.<ts>
  *
- *   决策表（8 种磁盘状态全覆盖）：见 atomic_dir_swap.cc 内文档。
+ *   命名空间区分：
+ *     - <target>.staging/         瞬态：step 1-2 中存在
+ *     - <target>.swap_backup/     瞬态：step 3-5a 中存在
+ *     - <target>.backup.<ts>/     历史：max_backups 个保留版本
+ *     - <target>.tombstone.<idx>/ 瞬态：step 5b 删除中存在
+ *
+ *   所有目录必须位于同一文件系统（POSIX rename 同卷原子）。
  */
 class AtomicDirSwap {
  public:
-  // sentinel 文件名（位于 staging / target 目录根下）
+  // sentinel 文件名
   static constexpr const char* kSentinelName = ".complete";
 
-  explicit AtomicDirSwap(std::string target_dir);
+  // target_dir       绝对路径，如 "/data/maps/dex_map_test"
+  // max_backups      保留多少个历史 backup（含本次刚归档的）；0 = 不保留；负数视为 0
+  // enable_checksum  是否在 sentinel 中写 SHA256（v1.2，默认开启）；启动恢复时若 sentinel 含
+  //                  sha256_<file>=<hex>，会自动校验文件完整性
+  explicit AtomicDirSwap(std::string target_dir, int max_backups = 5,
+                         bool enable_checksum = true);
 
-  // 准备 staging 目录（先清掉旧 staging，再创建空目录）。
-  // 返回 staging 绝对路径供调用方逐文件写入；失败返回空字符串。
+  // Step 1: 清残留 staging + 创建空 staging 目录。失败返回空字符串。
   std::string BeginStage();
 
-  // 验证 expected_files 全部存在于 staging，fsync 每个文件，写 sentinel，
-  // fsync sentinel + staging 目录。
+  // Step 2: 验证 expected_files 全部存在于 staging、逐个 fsync、写 sentinel、
+  //         fsync sentinel + staging 目录。
   // expected_files 是文件名（不含路径），如 {"map.pbstream", "map.png", "map.yaml"}。
+  // 若构造时 enable_checksum=true，sentinel 中会追加每个文件的 SHA256（sha256_<file>=<hex>）。
   bool CommitStage(const std::vector<std::string>& expected_files);
 
-  // 执行 swap：
-  //   1. rename(target, backup)（同卷原子）
-  //   2. rename(staging, target)（同卷原子）
-  //   3. rm -rf backup
-  // 任一 rename 失败会尝试紧急回滚到 target。
+  // Step 3-5b：
+  //   3. rename(target, swap_backup)
+  //   4. rename(staging, target)
+  //   5a. rename(swap_backup, backup.<ts>)
+  //   5b. 轮换历史 backup，保留最近 max_backups 个
   bool ActivateAndCleanup();
 
-  // 静态启动恢复：扫描 target_dir / target_dir.staging / target_dir.backup
-  // 的磁盘状态，按决策表完成中断的步骤或清理残留。
-  // 返回 true 表示 target_dir 现在是有效可加载的状态。
+  // 启动恢复（静态）：扫描磁盘状态，按决策表完成切换或清残留。
+  // 不动 backup.<ts>；返回 true 表示 target_dir 现在有效可加载。
+  // 状态 3/4 中若 staging sentinel 含 sha256_*，会先调 ValidateSentinel 校验；
+  // 不匹配 → 清掉 staging 当作残缺处理，加载旧 target。
   static bool RecoverIfInterrupted(const std::string& target_dir);
+
+  // 列出 target_dir.backup.* 历史版本，按时间戳降序（最新在前）。
+  static std::vector<std::string> ListHistoricalBackups(
+      const std::string& target_dir);
+
+  // v1.2: 校验 dir/.complete 中所有 sha256_<file>=<hex> 字段对应文件是否匹配。
+  //   - sentinel 不含任何 sha256_* 字段（旧版本）→ 视为兼容 → 返回 true
+  //   - 文件计算 SHA256 与 sentinel 不匹配 → LOG(WARNING) 列出文件名 + 返回 false
+  //   - sentinel / 任一文件读不到 → 返回 false
+  static bool ValidateSentinel(const std::string& dir);
 
   // 路径工具
   std::string StagingPath() const { return target_dir_ + ".staging"; }
-  std::string BackupPath() const { return target_dir_ + ".backup"; }
+  std::string SwapBackupPath() const { return target_dir_ + ".swap_backup"; }
   const std::string& TargetPath() const { return target_dir_; }
+  int MaxBackups() const { return max_backups_; }
+  bool ChecksumEnabled() const { return enable_checksum_; }
 
  private:
   std::string target_dir_;
+  int max_backups_;
+  bool enable_checksum_;
 };
 
 }  // namespace cartographer_ros

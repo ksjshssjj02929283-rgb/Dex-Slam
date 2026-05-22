@@ -24,6 +24,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
+#include "cartographer_ros/localization/atomic_dir_swap.h"
 #include "cartographer_ros/localization/localization_node.h"
 
 namespace cartographer_ros {
@@ -31,33 +32,38 @@ namespace cartographer_ros {
 /**
  * @brief MapPersistenceManager
  *
- *   地图保存执行单元：将 LocalizationNode 当前的 pbstream 状态和图像 (map.png/yaml)
- *   写入磁盘。仅支持显式手动触发（HandleSaveMap 服务或 StopLocalization
- *   生命周期），不再含任何 timer / odom / 静止检测的自动保存路径。
+ *   地图保存执行单元，采用崩溃安全的"staging + sentinel + 同卷 rename"流程，
+ *   保存动作仅由显式手动触发（HandleSaveMap 服务 / StopLocalization 生命周期）。
  *
- *   生命周期：
- *     - 由 LocalizationManagerNode 在 StartLocalization() 成功后创建。
- *     - 在 StopLocalization() 中先调用 SaveNow()，再 reset()。
- *     - 持有对 localization_node 的非拥有引用（通过 get_loc_node_ callback）。
+ *   核心流程：
+ *     1. AtomicDirSwap::BeginStage() → 准备 <target>.staging/
+ *     2. SerializeState(staging/map.pbstream)   ← 写 pbstream
+ *     3. SaveMap(staging/map)                   ← 写 png + yaml
+ *     4. AtomicDirSwap::CommitStage({pbstream,png,yaml}) → 写 sentinel + fsync
+ *     5. AtomicDirSwap::ActivateAndCleanup()    → 切换 + 归档 + 轮换历史 backup
  *
- *   后续 Phase 3 会在 SaveNow() 内部引入 staging+sentinel+rename 崩溃安全机制。
+ *   历史 backup 保留数量由 max_backups（默认 5）控制，通过构造参数注入。
  */
 class MapPersistenceManager {
  public:
   /**
    * @param node            ROS2 节点（用于打日志）
-   * @param get_loc_node    返回当前 LocalizationNode* 的 callable；可返回 nullptr
+   * @param get_loc_node    返回当前 LocalizationNode* 的 callable
    * @param get_map_paths   返回 {map_folder, map_name} 的 callable
+   * @param max_backups     保留多少个历史 backup（默认 5）
    */
   MapPersistenceManager(
       rclcpp::Node* node,
       std::function<localization::LocalizationNode*()> get_loc_node,
-      std::function<std::pair<std::string, std::string>()> get_map_paths)
+      std::function<std::pair<std::string, std::string>()> get_map_paths,
+      int max_backups = 5)
       : node_(node),
         get_loc_node_(std::move(get_loc_node)),
-        get_map_paths_(std::move(get_map_paths)) {
+        get_map_paths_(std::move(get_map_paths)),
+        max_backups_(max_backups < 0 ? 0 : max_backups) {
     RCLCPP_INFO(node_->get_logger(),
-                "[MapPersistenceManager] Initialized (manual-save only)");
+                "[MapPersistenceManager] Initialized (manual-save only, "
+                "max_backups=%d)", max_backups_);
   }
 
   ~MapPersistenceManager() = default;
@@ -66,10 +72,10 @@ class MapPersistenceManager {
   MapPersistenceManager& operator=(const MapPersistenceManager&) = delete;
 
   /**
-   * @brief 立即执行一次保存（pbstream + map.png/yaml）。
+   * @brief 立即执行一次崩溃安全保存。
    *        调用方须保证 localization_node 仍然存活
    *        （即在 FinishAllTrajectories() 之前调用）。
-   * @return true 表示全部保存成功
+   * @return true 表示完整保存成功（含 commit + activate + 历史轮换）
    */
   bool SaveNow() {
     auto* loc = get_loc_node_();
@@ -81,20 +87,50 @@ class MapPersistenceManager {
     auto [map_folder, map_name] = get_map_paths_();
     if (map_folder.empty() || map_name.empty()) {
       RCLCPP_WARN(node_->get_logger(),
-                  "[MapPersistenceManager] SaveNow: map_folder or map_name is empty, skipping");
+                  "[MapPersistenceManager] SaveNow: map_folder or map_name empty, skipping");
       return false;
     }
-    bool ok = true;
-    ok &= SavePbstream(loc, map_folder, map_name);
-    ok &= SaveMapImage(loc, map_folder, map_name);
-    return ok;
+
+    const std::string target_dir = map_folder + "/" + map_name;
+    AtomicDirSwap swap(target_dir, max_backups_);
+
+    // Step 1: 准备 staging
+    const std::string staging = swap.BeginStage();
+    if (staging.empty()) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "[MapPersistenceManager] BeginStage failed");
+      return false;
+    }
+
+    // Step 2: 写文件到 staging
+    const std::string pbstream_in_staging = staging + "/map.pbstream";
+    const std::string image_base_in_staging = staging + "/map";  // 会生成 map.png + map.yaml
+    if (!SavePbstream(loc, pbstream_in_staging)) return false;
+    if (!SaveMapImage(loc, image_base_in_staging)) return false;
+
+    // Step 3: Commit（fsync + sentinel）
+    if (!swap.CommitStage({"map.pbstream", "map.png", "map.yaml"})) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "[MapPersistenceManager] CommitStage failed");
+      return false;
+    }
+
+    // Step 4-5b: Activate + 历史归档 + 轮换
+    if (!swap.ActivateAndCleanup()) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "[MapPersistenceManager] ActivateAndCleanup failed");
+      return false;
+    }
+
+    RCLCPP_INFO(node_->get_logger(),
+                "[MapPersistenceManager] SaveNow completed for target: %s",
+                target_dir.c_str());
+    return true;
   }
 
  private:
   bool SavePbstream(localization::LocalizationNode* loc,
-                    const std::string& map_folder,
-                    const std::string& map_name) {
-    const std::string filename = map_folder + "/" + map_name + "/map.pbstream";
+                    const std::string& filename) {
     RCLCPP_INFO(node_->get_logger(),
                 "[MapPersistenceManager] Saving pbstream: %s", filename.c_str());
     const auto t0 = std::chrono::steady_clock::now();
@@ -113,19 +149,18 @@ class MapPersistenceManager {
   }
 
   bool SaveMapImage(localization::LocalizationNode* loc,
-                    const std::string& map_folder,
-                    const std::string& map_name) {
-    const std::string filestream = map_folder + "/" + map_name + "/map";
+                    const std::string& filestream) {
     RCLCPP_INFO(node_->get_logger(),
                 "[MapPersistenceManager] Saving map image: %s.png", filestream.c_str());
     try {
       const bool ok = loc->SaveMap(filestream, 0.05 /* resolution, unused */);
       if (ok) {
         RCLCPP_INFO(node_->get_logger(),
-                    "[MapPersistenceManager] Map image saved: %s.png/.yaml", filestream.c_str());
+                    "[MapPersistenceManager] Map image saved: %s.png/.yaml",
+                    filestream.c_str());
       } else {
         RCLCPP_WARN(node_->get_logger(),
-                    "[MapPersistenceManager] SaveMap returned false for %s (may be non-fatal)",
+                    "[MapPersistenceManager] SaveMap returned false for %s",
                     filestream.c_str());
       }
       return ok;
@@ -139,6 +174,7 @@ class MapPersistenceManager {
   rclcpp::Node* node_;
   std::function<localization::LocalizationNode*()> get_loc_node_;
   std::function<std::pair<std::string, std::string>()> get_map_paths_;
+  int max_backups_;
 };
 
 }  // namespace cartographer_ros

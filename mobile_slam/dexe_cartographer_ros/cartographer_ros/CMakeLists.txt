@@ -58,6 +58,7 @@ find_package(Boost REQUIRED COMPONENTS system iostreams)
 find_package(PCL REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(OpenSSL REQUIRED)  # v1.2: AtomicDirSwap SHA256 完整性校验
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
@@ -108,6 +109,9 @@ add_library(${PROJECT_NAME} STATIC ${ALL_SRCS})
 add_subdirectory("cartographer_ros")
 
 target_link_libraries(${PROJECT_NAME} PUBLIC cartographer)
+
+# OpenSSL (libcrypto) — v1.2: AtomicDirSwap SHA256 sentinel
+target_link_libraries(${PROJECT_NAME} PUBLIC OpenSSL::Crypto)
 
 
 # PCL
