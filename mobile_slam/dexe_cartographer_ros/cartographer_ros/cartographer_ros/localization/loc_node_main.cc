@@ -63,30 +63,12 @@ DEFINE_string(
     "Name of the map to be saved. If empty, a map will not be saved.");
 
 // ---------------------------------------------------------------------------
-// MapPersistenceManager GFlags（可在 launch 文件的 arguments 中覆盖）
+// 启动期 GFlags
 // ---------------------------------------------------------------------------
 DEFINE_bool(
     auto_load_map, false,
     "If true, automatically load the map specified by --map_folder/--map_name on startup. "
     "If false, skip map loading at startup and wait for the set_map_changed service to trigger.");
-
-DEFINE_bool(
-    enable_auto_save_map, false,
-    "Enable automatic map saving during localization. When disabled, "
-    "map will only be saved manually via save_map service or on shutdown.");
-DEFINE_double(
-    auto_save_interval_s, 1800.0,
-    "Interval in seconds between automatic map saves (default: 1800 = 30 min). "
-    "The save is triggered only when the robot velocity is below threshold. "
-    "Only effective when enable_auto_save_map is true.");
-DEFINE_double(
-    auto_save_linear_velocity_threshold, 0.01,
-    "Linear velocity threshold (m/s) below which the robot is considered static "
-    "for periodic map saving.");
-DEFINE_double(
-    auto_save_angular_velocity_threshold, 0.01,
-    "Angular velocity threshold (rad/s) below which the robot is considered static "
-    "for periodic map saving.");
 
 namespace cartographer_ros {
 
@@ -436,22 +418,15 @@ private:
 
       state_ = LocalizationState::RUNNING;
 
-      // 创建地图持久化管理器（定时自动保存 + 外部调用保存）
-      // 仅在 enable_auto_save_map 为 true 时创建，否则只能通过 save_map 服务手动保存
-      if (FLAGS_enable_auto_save_map) {
-        map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
-            this,
-            [this]() -> localization::LocalizationNode* {
-              return localization_node_.get();
-            },
-            [this]() -> std::pair<std::string, std::string> {
-              return {FLAGS_map_folder, FLAGS_map_name};
-            });
-        RCLCPP_INFO(get_logger(), "Auto-save map is ENABLED (interval: %.0f s)",
-                    FLAGS_auto_save_interval_s);
-      } else {
-        RCLCPP_INFO(get_logger(), "Auto-save map is DISABLED - map will only be saved manually via save_map service");
-      }
+      // 创建地图保存执行单元（仅手动保存：HandleSaveMap / StopLocalization 触发）
+      map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
+          this,
+          [this]() -> localization::LocalizationNode* {
+            return localization_node_.get();
+          },
+          [this]() -> std::pair<std::string, std::string> {
+            return {FLAGS_map_folder, FLAGS_map_name};
+          });
 
       RCLCPP_INFO(get_logger(), "Localization started successfully");
       return true;
@@ -473,20 +448,12 @@ private:
     state_ = LocalizationState::STOPPING;
     
     try {
-      // 先停止自动保存定时器，防止与下面的手动保存并发
-      if (map_persistence_manager_) {
-        map_persistence_manager_->Stop();
-      }
-
       if (localization_node_) {
-        // 在结束轨迹前通过持久化管理器保存地图（pbstream + map.png/yaml）
+        // 通过保存执行单元保存地图（pbstream + map.png/yaml）
         if (map_persistence_manager_) {
           map_persistence_manager_->SaveNow();
-        } else {
-          // 降级：直接调用（map_persistence_manager 未初始化时的保底路径）
-          SaveMapInternal();
         }
-        
+
         // 结束所有轨迹
         localization_node_->FinishAllTrajectories();
         localization_node_.reset();
@@ -517,7 +484,6 @@ private:
 
     try {
       if (map_persistence_manager_) {
-        map_persistence_manager_->Stop();
         map_persistence_manager_.reset();
       }
 
@@ -538,63 +504,6 @@ private:
     }
   }
 
-  /**
-   * @brief 保存地图的核心逻辑（pbstream + map.png/yaml）
-   *        必须在 FinishAllTrajectories 之前调用。
-   * @return true 表示 pbstream 和图像均保存成功，false 表示至少有一项失败
-   */
-  bool SaveMapInternal() {
-    if (!localization_node_) {
-      RCLCPP_ERROR(get_logger(), "Cannot save map: localization node is not running");
-      return false;
-    }
-
-    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
-      RCLCPP_WARN(get_logger(), "Map folder or name not specified, skipping map save");
-      return false;
-    }
-
-    bool overall_success = true;
-
-    // 保存 pbstream（包含增量更新后的 global static submap）
-    std::string save_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
-    RCLCPP_INFO(get_logger(), "=== Starting map save procedure ===");
-    RCLCPP_INFO(get_logger(), "Saving updated map to: %s", save_filename.c_str());
-
-    auto start_time = std::chrono::steady_clock::now();
-    try {
-      RCLCPP_INFO(get_logger(), "Calling SerializeState...");
-      localization_node_->SerializeState(save_filename, true /* include_unfinished_submaps */);
-
-      auto end_time = std::chrono::steady_clock::now();
-      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-      RCLCPP_INFO(get_logger(), "Successfully saved updated map with global static submap (took %ld ms)",
-                  duration.count());
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "Failed to save pbstream: %s", e.what());
-      overall_success = false;
-    }
-
-    // 保存地图图像（map.png + map.yaml）
-    // 注意：必须在 FinishAllTrajectories 之前调用，以确保 PoseEstimator 仍然可用
-    try {
-      const std::string map_filestream = FLAGS_map_folder + "/" + FLAGS_map_name + "/map";
-      RCLCPP_INFO(get_logger(), "Saving map image to: %s.png", map_filestream.c_str());
-      bool save_map_success = localization_node_->SaveMap(map_filestream, 0.05 /*resolution, unused*/);
-      if (save_map_success) {
-        RCLCPP_INFO(get_logger(), "Map image saved successfully: %s.png/.yaml", map_filestream.c_str());
-      } else {
-        RCLCPP_WARN(get_logger(), "SaveMap returned false for %s (may be non-fatal)", map_filestream.c_str());
-        overall_success = false;
-      }
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "Failed to save map image: %s", e.what());
-      overall_success = false;
-    }
-
-    return overall_success;
-  }
-
   void HandleSaveMap(
       const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -608,17 +517,15 @@ private:
       return;
     }
 
-    if (map_persistence_manager_ && map_persistence_manager_->IsSaving()) {
+    if (!map_persistence_manager_) {
       response->success = false;
-      response->message = "A save operation is already in progress";
-      RCLCPP_WARN(get_logger(), "save_map service: periodic save is already running, try later");
+      response->message = "MapPersistenceManager is not initialized";
+      RCLCPP_ERROR(get_logger(), "save_map service called but MapPersistenceManager is null");
       return;
     }
 
     RCLCPP_INFO(get_logger(), "save_map service called, saving map via MapPersistenceManager...");
-    bool success = map_persistence_manager_
-                       ? map_persistence_manager_->SaveNow()
-                       : SaveMapInternal();
+    const bool success = map_persistence_manager_->SaveNow();
 
     response->success = success;
     response->message = success ? "Map saved successfully" : "Map save completed with errors (check logs)";

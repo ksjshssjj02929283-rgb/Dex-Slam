@@ -353,9 +353,9 @@ map_manager/load_map(map_name)
 | `map_folder` | `~/.dexe/data/maps` | 地图根目录 |
 | `map_name` | `offline_map_2` | 地图名称 |
 | `resolution` | `0.04` | 栅格分辨率（m/格） |
-| `auto_save_interval_s` | `1800.0` | 自动保存间隔（秒，机器人静止时触发） |
-| `auto_save_linear_velocity_threshold` | `0.01` | 触发自动保存的线速度阈值（m/s） |
-| `auto_save_angular_velocity_threshold` | `0.01` | 触发自动保存的角速度阈值（rad/s） |
+
+> **2026-05-22 hotfix（项目 29 Phase 1）**：取消自动保存机制。原 `auto_save_interval_s` / `auto_save_linear_velocity_threshold` / `auto_save_angular_velocity_threshold` 三个 gflag 已删除；地图保存仅由 `~/save_map` 服务或 `~/stop_localization` lifecycle（含 `~/set_map_changed` / `~/reset_localization`）触发。
+> Phase 3 将引入 staging+sentinel+rename 崩溃安全保存机制，届时本表会更新。
 
 > **`auto_load_map` 参数**：通过 gflag 传入 localization_node，默认 `false`。  
 > `false`：节点启动后不加载地图，等待 `set_map_changed` 服务触发。  
