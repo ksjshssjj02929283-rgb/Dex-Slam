@@ -446,7 +446,7 @@ private:
 
       state_ = LocalizationState::RUNNING;
 
-      // 创建地图保存执行单元（仅手动保存：HandleSaveMap / StopLocalization 触发）
+      // 创建地图保存执行单元（仅手动保存：只能由 HandleSaveMap 触发；StopLocalization 不再附带保存）
       map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
           this,
           [this]() -> localization::LocalizationNode* {
@@ -467,48 +467,15 @@ private:
     }
   }
 
+  // 停定位 — 纯停止，不再附带保存。
+  // 保存仅由 ~/save_map 服务显式触发；如需"停定位前保存"，调用方应先调 save_map 再调 stop_localization。
   void StopLocalization() {
     if (state_ == LocalizationState::STOPPED) {
       RCLCPP_INFO(get_logger(), "Localization already stopped");
       return;
     }
 
-    RCLCPP_INFO(get_logger(), "Starting localization stop procedure...");
-    state_ = LocalizationState::STOPPING;
-    
-    try {
-      if (localization_node_) {
-        // 通过保存执行单元保存地图（pbstream + map.png/yaml）
-        if (map_persistence_manager_) {
-          map_persistence_manager_->SaveNow();
-        }
-
-        // 结束所有轨迹
-        localization_node_->FinishAllTrajectories();
-        localization_node_.reset();
-      }
-
-      map_persistence_manager_.reset();
-      node_options_.reset();
-      trajectory_options_.reset();
-      
-      state_ = LocalizationState::STOPPED;
-      RCLCPP_INFO(get_logger(), "=== Localization stopped successfully ===");
-      
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "Error while stopping localization: %s", e.what());
-      state_ = LocalizationState::ERROR;
-    }
-  }
-
-  // 停止定位但不保存地图，用于重置地图原点后的快速重启
-  void StopLocalizationNoSave() {
-    if (state_ == LocalizationState::STOPPED) {
-      RCLCPP_INFO(get_logger(), "Localization already stopped");
-      return;
-    }
-
-    RCLCPP_INFO(get_logger(), "Stopping localization (no save)...");
+    RCLCPP_INFO(get_logger(), "Stopping localization...");
     state_ = LocalizationState::STOPPING;
 
     try {
@@ -525,7 +492,7 @@ private:
       trajectory_options_.reset();
 
       state_ = LocalizationState::STOPPED;
-      RCLCPP_INFO(get_logger(), "Localization stopped (no save)");
+      RCLCPP_INFO(get_logger(), "=== Localization stopped successfully ===");
 
     } catch (const std::exception& e) {
       RCLCPP_ERROR(get_logger(), "Error while stopping localization: %s", e.what());
@@ -605,9 +572,9 @@ private:
       return;
     }
 
-    // 3. 停止定位（不保存），避免覆盖刚写好的新地图
-    RCLCPP_INFO(get_logger(), "reset_map_origin [3/5]: stopping localization (no save)...");
-    StopLocalizationNoSave();
+    // 3. 停止定位（StopLocalization 默认不保存——保存只由 save_map 服务触发）
+    RCLCPP_INFO(get_logger(), "reset_map_origin [3/5]: stopping localization...");
+    StopLocalization();
 
     // 4. 用新 pbstream 重新启动定位
     RCLCPP_INFO(get_logger(), "reset_map_origin [4/5]: restarting localization with new map...");
@@ -696,16 +663,22 @@ private:
     }
 
     // 2. 选定目标 backup
+    //    v3: backup 路径是 <target>/backups/backup.<ts>，用 filename 提取 ts 做匹配
+    //    （健壮：不依赖全路径子串，路径结构变化也不影响）
+    auto extract_ts = [](const std::string& path) -> std::string {
+      const std::string fname = std::filesystem::path(path).filename().string();
+      const std::string prefix = "backup.";
+      if (fname.rfind(prefix, 0) == 0) return fname.substr(prefix.size());
+      return "";
+    };
+
     std::string chosen_backup;
     if (request->timestamp.empty()) {
-      // 取最新
+      // 取最新（ListHistoricalBackups 已按时间戳降序）
       chosen_backup = backups.front();
     } else {
-      // 精确匹配后缀 .backup.<ts>
-      const std::string suffix = ".backup." + request->timestamp;
       for (const auto& b : backups) {
-        if (b.size() >= suffix.size() &&
-            b.compare(b.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        if (extract_ts(b) == request->timestamp) {
           chosen_backup = b;
           break;
         }
@@ -714,10 +687,10 @@ private:
         // 列出可用 ts
         std::string available;
         for (const auto& b : backups) {
-          const size_t pos = b.rfind(".backup.");
-          if (pos != std::string::npos) {
+          const std::string ts = extract_ts(b);
+          if (!ts.empty()) {
             if (!available.empty()) available += ", ";
-            available += b.substr(pos + 8);  // 跳过 ".backup."
+            available += ts;
           }
         }
         response->success = false;
@@ -728,48 +701,38 @@ private:
 
     RCLCPP_INFO(get_logger(), "rollback_map_to: restoring from %s", chosen_backup.c_str());
 
-    // 3. 停止定位（不保存——保存会写 staging，但我们要 mv target 走，避免和保存路径冲突）
+    // 2.5 v2 增强：校验选中 backup 的 sentinel SHA256（DEC-008）
+    //     旧 backup（无 sha256_ 字段）→ ValidateSentinel 返回 true 兼容；含 sha256 不匹配 → 拒绝
+    if (!AtomicDirSwap::ValidateSentinel(chosen_backup)) {
+      response->success = false;
+      response->message =
+          "Selected backup has corrupted sentinel (sha256 mismatch); refusing to rollback. "
+          "Use another timestamp.";
+      RCLCPP_ERROR(get_logger(),
+                   "rollback_map_to: chosen backup %s failed ValidateSentinel, aborting",
+                   chosen_backup.c_str());
+      return;
+    }
+
+    // 3. 停止定位（StopLocalization 默认不保存——保存只由 save_map 服务触发）
     StopFilter();
-    StopLocalizationNoSave();
+    StopLocalization();
 
-    // 4. 把当前 target 归档为新 backup（保留原内容；用当前时间戳）
-    std::time_t now = std::time(nullptr);
-    char ts_buf[32];
-    struct tm tm_buf;
-    ::localtime_r(&now, &tm_buf);
-    std::strftime(ts_buf, sizeof(ts_buf), "%Y%m%d-%H%M%S", &tm_buf);
-    std::string archive_path = target_dir + ".backup." + std::string(ts_buf);
-    // 同秒冲突追加 retry 后缀（参照 AtomicDirSwap 内部逻辑）
-    for (int r = 0; r < 5 && std::filesystem::exists(archive_path); ++r) {
-      archive_path = target_dir + ".backup." + std::string(ts_buf) + "-" + std::to_string(r + 1);
-    }
-    std::error_code ec;
-    std::filesystem::rename(target_dir, archive_path, ec);
-    if (ec) {
-      RCLCPP_ERROR(get_logger(), "rollback: archive current target failed: %s", ec.message().c_str());
+    // 4. 纯三件套替换：用 chosen backup 的 pbstream/png/yaml/.complete 覆盖 <map_name>/ 下的三件套。
+    //    **完全不碰 <map_name>/backups/**——不新增、不删除、不移动任何 backup。
+    //    chosen 用 copy 复制（保留在 backups 里，可重复 rollback）。
+    //    崩溃安全：marker + 重启重做（ReplaceCurrentMapFrom 内部封装）。
+    AtomicDirSwap swap(target_dir, FLAGS_map_backup_keep_count);
+    if (!swap.ReplaceCurrentMapFrom(chosen_backup)) {
+      RCLCPP_ERROR(get_logger(), "rollback: ReplaceCurrentMapFrom failed");
       response->success = false;
-      response->message = "Failed to archive current target: " + ec.message();
-      // 尝试重启定位
+      response->message = "Failed to replace current map from backup";
       StartLocalization();
       StartFilter();
       return;
     }
 
-    // 5. 把选中的 backup rename 为新 target
-    std::filesystem::rename(chosen_backup, target_dir, ec);
-    if (ec) {
-      RCLCPP_ERROR(get_logger(), "rollback: rename backup -> target failed: %s", ec.message().c_str());
-      // 紧急回滚：把 archive 改回 target
-      std::error_code ec2;
-      std::filesystem::rename(archive_path, target_dir, ec2);
-      response->success = false;
-      response->message = "Rename backup failed; archive restored: " + ec.message();
-      StartLocalization();
-      StartFilter();
-      return;
-    }
-
-    // 6. 重启定位
+    // 5. 重启定位
     if (!StartLocalization()) {
       RCLCPP_ERROR(get_logger(), "rollback: failed to start localization with rolled-back map");
       response->success = false;
@@ -779,11 +742,11 @@ private:
     StartFilter();
 
     response->success = true;
-    response->message = "Map rolled back successfully";
+    response->message = "Map rolled back (triplet replaced; backups untouched)";
     response->restored_from = chosen_backup;
-    response->archived_current_as = archive_path;
-    RCLCPP_INFO(get_logger(), "rollback_map_to: completed. current archived as %s",
-                archive_path.c_str());
+    response->archived_current_as = "";  // rollback 不归档当前地图（按设计：只有 save_map 改变 backup）
+    RCLCPP_INFO(get_logger(), "rollback_map_to: completed. triplet replaced from %s",
+                chosen_backup.c_str());
   }
 
   bool ValidateMapResources() {

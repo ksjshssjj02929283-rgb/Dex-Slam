@@ -21,6 +21,7 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -116,54 +117,128 @@ std::time_t ReadSentinelTimestamp(const std::string& sentinel_path) {
   return std::time(nullptr);
 }
 
-// 列出所有 <target>.backup.* 目录（按字典序，等价时间序）
+// v3: 列出 <target>/backups/backup.* 内所有历史 backup（target 内部容器）
 std::vector<fs::path> ListBackupPaths(const std::string& target_dir) {
   std::vector<fs::path> result;
-  fs::path parent = fs::path(target_dir).parent_path();
-  std::string name_prefix = fs::path(target_dir).filename().string() + ".backup.";
-  if (parent.empty()) parent = ".";
+  const fs::path container = target_dir + "/backups";
   std::error_code ec;
-  if (!fs::exists(parent, ec)) return result;
-  for (auto const& entry : fs::directory_iterator(parent, ec)) {
+  if (!fs::exists(container, ec)) return result;
+  for (auto const& entry : fs::directory_iterator(container, ec)) {
     if (ec) break;
     if (!entry.is_directory()) continue;
     const std::string fname = entry.path().filename().string();
-    if (fname.rfind(name_prefix, 0) == 0) {
+    if (fname.rfind("backup.", 0) == 0) {
       result.push_back(entry.path());
     }
   }
-  std::sort(result.begin(), result.end());  // 字典序升序 = 时间升序
+  std::sort(result.begin(), result.end());
   return result;
 }
 
-// 列出所有 <target>.tombstone.* 目录
+// v3: 列出 <target>/backups/tombstone.*
 std::vector<fs::path> ListTombstonePaths(const std::string& target_dir) {
   std::vector<fs::path> result;
-  fs::path parent = fs::path(target_dir).parent_path();
-  std::string name_prefix = fs::path(target_dir).filename().string() + ".tombstone.";
-  if (parent.empty()) parent = ".";
+  const fs::path container = target_dir + "/backups";
   std::error_code ec;
-  if (!fs::exists(parent, ec)) return result;
-  for (auto const& entry : fs::directory_iterator(parent, ec)) {
+  if (!fs::exists(container, ec)) return result;
+  for (auto const& entry : fs::directory_iterator(container, ec)) {
     if (ec) break;
     if (!entry.is_directory()) continue;
     const std::string fname = entry.path().filename().string();
-    if (fname.rfind(name_prefix, 0) == 0) {
+    if (fname.rfind("tombstone.", 0) == 0) {
       result.push_back(entry.path());
     }
   }
   return result;
 }
 
-// 找一个未占用的 tombstone 索引
+// v3: tombstone 路径在 <target>/backups/ 内
 std::string NextTombstonePath(const std::string& target_dir) {
+  const std::string container = target_dir + "/backups";
   for (int i = 0; i < 10000; ++i) {
-    std::string path = target_dir + ".tombstone." + std::to_string(i);
+    std::string path = container + "/tombstone." + std::to_string(i);
     if (!fs::exists(path)) return path;
   }
-  // 极端兜底：用 pid + 时间戳
-  return target_dir + ".tombstone." + std::to_string(::getpid()) + "_" +
+  return container + "/tombstone." + std::to_string(::getpid()) + "_" +
          std::to_string(std::time(nullptr));
+}
+
+// v3 helper: 启动恢复路径中"抽出 swap_backup 内 backups 子目录 + 归档 swap_backup"的统一逻辑。
+//   - 若 swap_backup/backups 存在 → rename 到 target/backups
+//   - rename swap_backup → target/backups/backup.<ts>
+//   - 同秒冲突追加 -retry 后缀
+// 调用前 target 必须已存在；swap_backup 也必须存在；本函数容错处理同名冲突和不存在情况。
+static bool ArchiveSwapBackupToTarget(const std::string& target_dir,
+                                      const std::string& swap_backup,
+                                      const std::string& ts_str) {
+  std::error_code ec;
+  if (!fs::exists(swap_backup, ec)) return true;  // 幂等：swap_backup 不存在视为已归档
+
+  // 5a: 抽出 swap_backup 内的 backups 子目录（如果存在）到新 target
+  const std::string swap_backups_subdir = swap_backup + "/backups";
+  const std::string target_backups_subdir = target_dir + "/backups";
+  if (fs::exists(swap_backups_subdir, ec)) {
+    if (fs::exists(target_backups_subdir, ec)) {
+      LOG(WARNING) << "[AtomicDirSwap] ArchiveSwapBackupToTarget: target/backups already exists; "
+                   << "removing before extracting from swap_backup";
+      RemoveDirIfExists(target_backups_subdir);
+    }
+    fs::rename(swap_backups_subdir, target_backups_subdir, ec);
+    if (ec) {
+      LOG(ERROR) << "[AtomicDirSwap] ArchiveSwapBackupToTarget: extract backups failed: "
+                 << ec.message();
+      return false;
+    }
+    FsyncPath(target_dir);
+  } else {
+    // swap_backup 内无 backups（首次保存）→ 在 target 内创建空容器供 step 5b 用
+    std::error_code ec_mk;
+    fs::create_directories(target_backups_subdir, ec_mk);
+    if (ec_mk) {
+      LOG(ERROR) << "[AtomicDirSwap] ArchiveSwapBackupToTarget: cannot create target/backups: "
+                 << ec_mk.message();
+      return false;
+    }
+    FsyncPath(target_dir);
+  }
+
+  // 5b: rename swap_backup → target/backups/backup.<ts>，同秒冲突追加 retry
+  std::string history_backup = target_backups_subdir + "/backup." + ts_str;
+  for (int r = 0; r < 5 && fs::exists(history_backup); ++r) {
+    history_backup = target_backups_subdir + "/backup." + ts_str + "-" + std::to_string(r + 1);
+  }
+  std::error_code ec_arc;
+  fs::rename(swap_backup, history_backup, ec_arc);
+  if (ec_arc) {
+    LOG(WARNING) << "[AtomicDirSwap] ArchiveSwapBackupToTarget: archive failed (target still valid): "
+                 << ec_arc.message();
+    return false;
+  }
+  FsyncPath(target_backups_subdir);
+  LOG(INFO) << "[AtomicDirSwap] ArchiveSwapBackupToTarget: archived to " << history_backup;
+  return true;
+}
+
+// v3: 确保 <target>/backups/ 容器目录存在（幂等）
+// 注意：target 本身必须先存在；本函数只负责 mkdir backups 子目录
+bool EnsureBackupsContainer(const std::string& target_dir) {
+  const std::string container = target_dir + "/backups";
+  std::error_code ec;
+  if (fs::exists(container, ec)) return true;
+  if (!fs::exists(target_dir, ec)) {
+    LOG(WARNING) << "[AtomicDirSwap] EnsureBackupsContainer: target_dir not exists yet: "
+                 << target_dir;
+    return false;
+  }
+  fs::create_directories(container, ec);
+  if (ec) {
+    LOG(ERROR) << "[AtomicDirSwap] EnsureBackupsContainer failed: "
+               << container << " " << ec.message();
+    return false;
+  }
+  // fsync target 目录（因为 backups 是其新子目录）
+  FsyncPath(target_dir);
+  return true;
 }
 
 // 删除所有 tombstone（启动恢复必做）
@@ -175,21 +250,28 @@ void PurgeTombstones(const std::string& target_dir) {
   }
 }
 
-// v1.2: 用 OpenSSL EVP API 计算文件 SHA256，返回 64 字符小写 hex；失败返回空串。
-// 用流式 8KB 缓冲读，避免大 pbstream 一次性占内存。
-std::string ComputeFileSha256(const std::string& path) {
+// 把 32 字节 SHA256 digest 转 64 hex 字符
+std::string DigestToHex(const unsigned char* digest, unsigned int len) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.resize(len * 2);
+  for (unsigned int i = 0; i < len; ++i) {
+    out[i * 2]     = kHex[(digest[i] >> 4) & 0x0F];
+    out[i * 2 + 1] = kHex[digest[i] & 0x0F];
+  }
+  return out;
+}
+
+// 8KB 流式 SHA256 — 作为 mmap 路径的 fallback（小文件 / mmap 失败时使用）
+std::string ComputeFileSha256Stream(const std::string& path) {
   std::ifstream ifs(path, std::ios::binary);
   if (!ifs) {
-    LOG(WARNING) << "[AtomicDirSwap] sha256: cannot open file: " << path;
+    LOG(WARNING) << "[AtomicDirSwap] sha256(stream): cannot open file: " << path;
     return "";
   }
   EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-  if (ctx == nullptr) {
-    LOG(ERROR) << "[AtomicDirSwap] sha256: EVP_MD_CTX_new failed";
-    return "";
-  }
+  if (ctx == nullptr) return "";
   if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
-    LOG(ERROR) << "[AtomicDirSwap] sha256: EVP_DigestInit_ex failed";
     EVP_MD_CTX_free(ctx);
     return "";
   }
@@ -200,33 +282,94 @@ std::string ComputeFileSha256(const std::string& path) {
     std::streamsize got = ifs.gcount();
     if (got > 0) {
       if (EVP_DigestUpdate(ctx, buf, static_cast<size_t>(got)) != 1) {
-        LOG(ERROR) << "[AtomicDirSwap] sha256: EVP_DigestUpdate failed: " << path;
         EVP_MD_CTX_free(ctx);
         return "";
       }
     }
   }
   if (ifs.bad()) {
-    LOG(WARNING) << "[AtomicDirSwap] sha256: read error on " << path;
     EVP_MD_CTX_free(ctx);
     return "";
   }
   unsigned char digest[EVP_MAX_MD_SIZE];
   unsigned int digest_len = 0;
   if (EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
-    LOG(ERROR) << "[AtomicDirSwap] sha256: EVP_DigestFinal_ex failed";
     EVP_MD_CTX_free(ctx);
     return "";
   }
   EVP_MD_CTX_free(ctx);
-  static constexpr char kHex[] = "0123456789abcdef";
-  std::string out;
-  out.resize(digest_len * 2);
-  for (unsigned int i = 0; i < digest_len; ++i) {
-    out[i * 2]     = kHex[(digest[i] >> 4) & 0x0F];
-    out[i * 2 + 1] = kHex[digest[i] & 0x0F];
+  return DigestToHex(digest, digest_len);
+}
+
+// v1.2 + v2: 用 OpenSSL EVP API 计算文件 SHA256，返回 64 字符小写 hex；失败返回空串。
+// 优先用 mmap（单次 EVP_DigestUpdate 避免 syscall 开销，对 ≥1MB 文件提速 2-5×）；
+// 小文件 / mmap 失败 / 空文件 → fallback 到 8KB 流式实现。
+std::string ComputeFileSha256(const std::string& path) {
+  constexpr size_t kMmapThreshold = 64 * 1024;  // < 64KB 直接流式（mmap 开销不值）
+
+  int fd = ::open(path.c_str(), O_RDONLY);
+  if (fd < 0) {
+    LOG(WARNING) << "[AtomicDirSwap] sha256: cannot open file: " << path
+                 << " errno=" << errno;
+    return "";
   }
-  return out;
+  struct stat st;
+  if (::fstat(fd, &st) != 0) {
+    ::close(fd);
+    return ComputeFileSha256Stream(path);
+  }
+  const size_t file_size = static_cast<size_t>(st.st_size);
+  if (file_size == 0) {
+    ::close(fd);
+    return ComputeFileSha256Stream(path);  // 让流式路径产生 empty-hash
+  }
+  if (file_size < kMmapThreshold) {
+    ::close(fd);
+    return ComputeFileSha256Stream(path);
+  }
+
+  void* addr = ::mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (addr == MAP_FAILED) {
+    LOG(WARNING) << "[AtomicDirSwap] sha256: mmap failed for " << path
+                 << " size=" << file_size << " errno=" << errno
+                 << "; falling back to stream";
+    ::close(fd);
+    return ComputeFileSha256Stream(path);
+  }
+  // 提示内核：顺序访问 + 提前预读
+  ::madvise(addr, file_size, MADV_SEQUENTIAL);
+
+  EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+  if (ctx == nullptr) {
+    ::munmap(addr, file_size);
+    ::close(fd);
+    return "";
+  }
+  if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+    EVP_MD_CTX_free(ctx);
+    ::munmap(addr, file_size);
+    ::close(fd);
+    return "";
+  }
+  if (EVP_DigestUpdate(ctx, addr, file_size) != 1) {
+    LOG(ERROR) << "[AtomicDirSwap] sha256: EVP_DigestUpdate(mmap) failed: " << path;
+    EVP_MD_CTX_free(ctx);
+    ::munmap(addr, file_size);
+    ::close(fd);
+    return "";
+  }
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len = 0;
+  if (EVP_DigestFinal_ex(ctx, digest, &digest_len) != 1) {
+    EVP_MD_CTX_free(ctx);
+    ::munmap(addr, file_size);
+    ::close(fd);
+    return "";
+  }
+  EVP_MD_CTX_free(ctx);
+  ::munmap(addr, file_size);
+  ::close(fd);
+  return DigestToHex(digest, digest_len);
 }
 
 // 解析 dir/.complete 中所有 "sha256_<file>=<hex>" 行；返回 file -> hex 的 map。
@@ -370,7 +513,9 @@ bool AtomicDirSwap::ActivateAndCleanup() {
   // 读 timestamp 用于命名历史 backup
   const std::time_t commit_unix = ReadSentinelTimestamp(sentinel);
   const std::string ts_str = FormatBackupTimestamp(commit_unix);
-  const std::string history_backup = target + ".backup." + ts_str;
+  // v3: 历史 backup 路径 = <target>/backups/backup.<ts>
+  const std::string container = target + "/backups";
+  const std::string history_backup = container + "/backup." + ts_str;
   const std::string parent = fs::path(target).parent_path().string();
 
   std::error_code ec;
@@ -385,7 +530,7 @@ bool AtomicDirSwap::ActivateAndCleanup() {
   // 兜底：history_backup 同名冲突（同秒两次保存）→ 退一秒重试
   std::string final_history = history_backup;
   for (int retry = 0; retry < 5 && fs::exists(final_history); ++retry) {
-    final_history = target + ".backup." + ts_str + "-" + std::to_string(retry + 1);
+    final_history = container + "/backup." + ts_str + "-" + std::to_string(retry + 1);
   }
 
   // step 3: rename target → swap_backup（同卷原子）
@@ -417,36 +562,63 @@ bool AtomicDirSwap::ActivateAndCleanup() {
   }
   FsyncPath(parent);
 
-  // step 5a: rename swap_backup → backup.<ts>（同卷原子；归档到历史）
+  // step 5a: 把 swap_backup 内的 backups 子目录抽出来放回新 target（v3 关键步骤）
+  //          step 3 rename target → swap_backup 时，整个 target 含 backups 子目录被带走；
+  //          这里需要把旧的 backups 历史"救回"新 target 内。
+  //          首次保存时 swap_backup 内没有 backups（跳过即可）。
+  const std::string swap_backups_subdir = swap_backup + "/backups";
+  const std::string target_backups_subdir = target + "/backups";
+  if (fs::exists(swap_backup) && fs::exists(swap_backups_subdir)) {
+    // 此时 staging 写入的新 target 还没有 backups 子目录（staging 内不带 backups），
+    // 所以直接 rename 即可；若旧版本有 race condition 导致已存在，先清空
+    if (fs::exists(target_backups_subdir)) {
+      LOG(WARNING) << "[AtomicDirSwap] step 5a: new target unexpectedly has backups; removing";
+      RemoveDirIfExists(target_backups_subdir);
+    }
+    fs::rename(swap_backups_subdir, target_backups_subdir, ec);
+    if (ec) {
+      LOG(ERROR) << "[AtomicDirSwap] step 5a rename(swap_backup/backups -> target/backups) failed: "
+                 << ec.message();
+      // step 4 已成功；返回 true 让启动恢复续做（避免破坏 target）
+      return true;
+    }
+    FsyncPath(target);
+    LOG(INFO) << "[AtomicDirSwap] step 5a: extracted backups from swap_backup back to new target";
+  } else {
+    // 首次保存：旧 target 无 backups → 仅确保新 target 内有空 backups/ 子目录供 step 5b 用
+    if (!EnsureBackupsContainer(target)) {
+      LOG(ERROR) << "[AtomicDirSwap] step 5a: cannot create backups container in target";
+      return true;  // target 有效，仅历史归档失败
+    }
+  }
+
+  // step 5b: 归档旧 target 三件套为新历史 backup
   if (fs::exists(swap_backup)) {
     fs::rename(swap_backup, final_history, ec);
     if (ec) {
-      LOG(ERROR) << "[AtomicDirSwap] step 5a rename(swap_backup -> backup.<ts>) failed: "
+      LOG(ERROR) << "[AtomicDirSwap] step 5b rename(swap_backup -> backup.<ts>) failed: "
                  << ec.message() << "; new target is still valid";
-      // step 4 已成功，target 有效；返回 true 但记录错误
-      // 下次启动恢复表会识别 swap_backup 残留并续做
       return true;
     }
-    FsyncPath(parent);
-    LOG(INFO) << "[AtomicDirSwap] step 5a: archived swap_backup -> "
-              << final_history;
+    FsyncPath(container);
+    LOG(INFO) << "[AtomicDirSwap] step 5b: archived swap_backup -> " << final_history;
   }
 
-  // step 5b: 轮换历史 backup，保留最近 max_backups 个
+  // step 5c: 轮换历史 backup，保留最近 max_backups 个
   if (max_backups_ >= 0) {  // 0 也合法（不保留任何历史）
     auto backups = ListBackupPaths(target_dir_);
     // 按字典序升序 = 时间升序；最旧在前
     const int total = static_cast<int>(backups.size());
     const int to_remove = total - max_backups_;
     if (to_remove > 0) {
-      LOG(INFO) << "[AtomicDirSwap] step 5b: " << total << " backups, max=" << max_backups_
+      LOG(INFO) << "[AtomicDirSwap] step 5c: " << total << " backups, max=" << max_backups_
                 << ", rotating out " << to_remove;
       for (int i = 0; i < to_remove; ++i) {
         const std::string tombstone = NextTombstonePath(target_dir_);
         std::error_code ec_rn;
         fs::rename(backups[i], tombstone, ec_rn);
         if (ec_rn) {
-          LOG(WARNING) << "[AtomicDirSwap] step 5b rename to tombstone failed: "
+          LOG(WARNING) << "[AtomicDirSwap] step 5c rename to tombstone failed: "
                        << backups[i].string() << " -> " << tombstone
                        << ": " << ec_rn.message();
           continue;
@@ -517,7 +689,11 @@ bool AtomicDirSwap::RecoverIfInterrupted(const std::string& target_dir) {
   const std::string swap_backup = target_dir + ".swap_backup";
   const std::string sentinel = staging + "/" + kSentinelName;
 
-  // 第一件事：清掉所有 tombstone 残留
+  // 第一步 — 检测并重做未完成的 rollback（marker 协议）
+  //   rollback 路径不留 staging/swap_backup，先处理 marker 再走 save-path 决策表
+  RecoverRollbackIfInterrupted(target_dir);
+
+  // 清掉所有 tombstone 残留
   PurgeTombstones(target_dir);
 
   const bool has_target = fs::exists(target_dir);
@@ -557,14 +733,8 @@ bool AtomicDirSwap::RecoverIfInterrupted(const std::string& target_dir) {
       return true;  // 旧 target 仍然有效
     }
     LOG(WARNING) << "[AtomicDirSwap] state: step 2 done, completing activation";
-    // 不传 max_backups（用默认 5）；如有特殊需求外部应在 Recover 之后立即触发一次正常保存
-    // 这里只完成 step 3-5a（不做 5b 轮换），下次正常保存时再轮换
     const std::time_t commit_unix = ReadSentinelTimestamp(sentinel);
     const std::string ts_str = FormatBackupTimestamp(commit_unix);
-    std::string history_backup = target_dir + ".backup." + ts_str;
-    for (int r = 0; r < 5 && fs::exists(history_backup); ++r) {
-      history_backup = target_dir + ".backup." + ts_str + "-" + std::to_string(r + 1);
-    }
     // 3: target → swap_backup
     fs::rename(target_dir, swap_backup, ec);
     if (ec) {
@@ -581,14 +751,8 @@ bool AtomicDirSwap::RecoverIfInterrupted(const std::string& target_dir) {
       return false;
     }
     FsyncPath(parent);
-    // 5a: swap_backup → backup.<ts>
-    fs::rename(swap_backup, history_backup, ec);
-    if (ec) {
-      LOG(WARNING) << "[AtomicDirSwap] recover step 5a failed (target still valid): "
-                   << ec.message();
-    } else {
-      FsyncPath(parent);
-    }
+    // v3 step 5a+5b: 抽出 swap_backup/backups → target/backups，然后归档 swap_backup
+    ArchiveSwapBackupToTarget(target_dir, swap_backup, ts_str);
     return true;
   }
 
@@ -610,7 +774,7 @@ bool AtomicDirSwap::RecoverIfInterrupted(const std::string& target_dir) {
       FsyncPath(parent);
       return true;
     }
-    LOG(WARNING) << "[AtomicDirSwap] state: step 3 done, completing step 4-5a";
+    LOG(WARNING) << "[AtomicDirSwap] state: step 3 done, completing step 4-5b";
     // 4: staging → target
     fs::rename(staging, target_dir, ec);
     if (ec) {
@@ -621,37 +785,19 @@ bool AtomicDirSwap::RecoverIfInterrupted(const std::string& target_dir) {
       return !ec2;
     }
     FsyncPath(parent);
-    // 5a: swap_backup → backup.<ts>
+    // v3 step 5a+5b: 抽出 + 归档
     const std::time_t commit_unix = ReadSentinelTimestamp(target_dir + "/" + kSentinelName);
     const std::string ts_str = FormatBackupTimestamp(commit_unix);
-    std::string history_backup = target_dir + ".backup." + ts_str;
-    for (int r = 0; r < 5 && fs::exists(history_backup); ++r) {
-      history_backup = target_dir + ".backup." + ts_str + "-" + std::to_string(r + 1);
-    }
-    std::error_code ec3;
-    fs::rename(swap_backup, history_backup, ec3);
-    if (ec3) {
-      LOG(WARNING) << "[AtomicDirSwap] recover step 5a (from state 4) failed: " << ec3.message();
-    } else {
-      FsyncPath(parent);
-    }
+    ArchiveSwapBackupToTarget(target_dir, swap_backup, ts_str);
     return true;
   }
 
-  // 状态 5: target + swap_backup（无 staging）→ step 4 完成、step 5a 未开始 → 归档 swap_backup
+  // 状态 5: target + swap_backup（无 staging）→ step 4 完成、step 5a/5b 未开始 → 抽出+归档
   if (has_target && !has_staging && has_swap_backup) {
-    LOG(WARNING) << "[AtomicDirSwap] state: step 4 done, archiving swap_backup";
+    LOG(WARNING) << "[AtomicDirSwap] state: step 4 done, extracting+archiving swap_backup";
     const std::time_t commit_unix = ReadSentinelTimestamp(target_dir + "/" + kSentinelName);
     const std::string ts_str = FormatBackupTimestamp(commit_unix);
-    std::string history_backup = target_dir + ".backup." + ts_str;
-    for (int r = 0; r < 5 && fs::exists(history_backup); ++r) {
-      history_backup = target_dir + ".backup." + ts_str + "-" + std::to_string(r + 1);
-    }
-    fs::rename(swap_backup, history_backup, ec);
-    if (ec) {
-      LOG(WARNING) << "[AtomicDirSwap] recover step 5a (from state 5) failed: " << ec.message();
-      // target 已有效，返回 true
-    } else {
+    if (ArchiveSwapBackupToTarget(target_dir, swap_backup, ts_str)) {
       FsyncPath(parent);
     }
     return true;
@@ -682,6 +828,182 @@ bool AtomicDirSwap::RecoverIfInterrupted(const std::string& target_dir) {
   // 兜底
   LOG(WARNING) << "[AtomicDirSwap] state: unhandled combination, has_target=" << has_target;
   return has_target;
+}
+
+// ---------------------------------------------------------------------------
+// v3.1: rollback = 纯三件套替换（不碰 backups），marker + 重做保证崩溃安全
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// rollback 替换的文件清单（三件套 + sentinel）
+const char* kRollbackFiles[] = {"map.pbstream", "map.png", "map.yaml", ".complete"};
+
+// 清理 target 内残留的 *.rbtmp 临时文件
+void CleanupRollbackTmp(const std::string& target_dir) {
+  std::error_code ec;
+  if (!fs::exists(target_dir, ec)) return;
+  for (auto const& entry : fs::directory_iterator(target_dir, ec)) {
+    if (ec) break;
+    if (!entry.is_regular_file()) continue;
+    const std::string fname = entry.path().filename().string();
+    if (fname.size() >= 6 && fname.compare(fname.size() - 6, 6, ".rbtmp") == 0) {
+      fs::remove(entry.path(), ec);
+    }
+  }
+}
+
+// 核心：用 source backup 的三件套替换 target 三件套（幂等，可重复调用做崩溃重做）。
+//   phase 1: 全部 cp 到 <target>/<f>.rbtmp + fsync（不动现有三件套）
+//   phase 2: 连续 rename(.rbtmp → 正式名)（单文件 POSIX 原子，窗口极小）
+//   完全不碰 <target>/backups/
+bool ReplaceTripletFromBackup(const std::string& target_dir,
+                              const std::string& source_backup_dir) {
+  std::error_code ec;
+  if (!fs::exists(source_backup_dir, ec)) {
+    LOG(ERROR) << "[AtomicDirSwap] ReplaceTriplet: source missing: " << source_backup_dir;
+    return false;
+  }
+  // phase 1: cp 全部到 .rbtmp
+  for (const char* f : kRollbackFiles) {
+    const std::string src = source_backup_dir + "/" + f;
+    if (!fs::exists(src, ec)) {
+      // .complete 可能不存在于老 backup；三件套必须存在
+      if (std::string(f) == ".complete") continue;
+      LOG(ERROR) << "[AtomicDirSwap] ReplaceTriplet: source file missing: " << src;
+      return false;
+    }
+    const std::string tmp = target_dir + "/" + f + ".rbtmp";
+    fs::copy_file(src, tmp, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+      LOG(ERROR) << "[AtomicDirSwap] ReplaceTriplet: copy " << src << " -> " << tmp
+                 << " failed: " << ec.message();
+      CleanupRollbackTmp(target_dir);
+      return false;
+    }
+    FsyncPath(tmp);
+  }
+  FsyncPath(target_dir);
+
+  // phase 2: 连续 rename .rbtmp → 正式名（窗口极小；崩溃靠 marker 重做）
+  for (const char* f : kRollbackFiles) {
+    const std::string tmp = target_dir + "/" + f + ".rbtmp";
+    if (!fs::exists(tmp, ec)) continue;  // .complete 可能没 cp
+    fs::rename(tmp, target_dir + "/" + f, ec);
+    if (ec) {
+      LOG(ERROR) << "[AtomicDirSwap] ReplaceTriplet: rename " << tmp
+                 << " failed: " << ec.message();
+      return false;
+    }
+  }
+  FsyncPath(target_dir);
+  LOG(INFO) << "[AtomicDirSwap] ReplaceTriplet: target triplet replaced from "
+            << source_backup_dir;
+  return true;
+}
+
+}  // namespace
+
+bool AtomicDirSwap::WriteRollbackMarker(const std::string& target_dir,
+                                       const std::string& chosen_backup) {
+  const std::string marker = target_dir + kRollbackMarkerSuffix;
+  int fd = ::open(marker.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0644);
+  if (fd < 0) {
+    LOG(ERROR) << "[AtomicDirSwap] WriteRollbackMarker: open failed: " << marker
+               << " errno=" << errno;
+    return false;
+  }
+  std::ostringstream oss;
+  oss << "chosen_backup=" << chosen_backup << "\n"
+      << "started_unix=" << std::time(nullptr) << "\n";
+  const std::string content = oss.str();
+  const ssize_t got = ::write(fd, content.data(), content.size());
+  if (got != static_cast<ssize_t>(content.size())) {
+    LOG(ERROR) << "[AtomicDirSwap] WriteRollbackMarker: short write";
+    ::close(fd);
+    return false;
+  }
+  if (::fsync(fd) != 0) {
+    LOG(WARNING) << "[AtomicDirSwap] WriteRollbackMarker: fsync failed";
+  }
+  ::close(fd);
+  const std::string parent = fs::path(target_dir).parent_path().string();
+  FsyncPath(parent.empty() ? "." : parent);
+  LOG(INFO) << "[AtomicDirSwap] rollback marker written: chosen=" << chosen_backup;
+  return true;
+}
+
+bool AtomicDirSwap::RemoveRollbackMarker(const std::string& target_dir) {
+  const std::string marker = target_dir + kRollbackMarkerSuffix;
+  std::error_code ec;
+  if (!fs::exists(marker, ec)) return true;  // 幂等
+  fs::remove(marker, ec);
+  if (ec) {
+    LOG(WARNING) << "[AtomicDirSwap] RemoveRollbackMarker: failed: " << ec.message();
+    return false;
+  }
+  const std::string parent = fs::path(target_dir).parent_path().string();
+  FsyncPath(parent.empty() ? "." : parent);
+  return true;
+}
+
+bool AtomicDirSwap::ReplaceCurrentMapFrom(const std::string& source_backup_dir) {
+  std::error_code ec;
+  if (!fs::exists(source_backup_dir, ec)) {
+    LOG(ERROR) << "[AtomicDirSwap] ReplaceCurrentMapFrom: source missing: " << source_backup_dir;
+    return false;
+  }
+  // 1. 写 marker（崩溃后重启可从 chosen 重做）
+  if (!WriteRollbackMarker(target_dir_, source_backup_dir)) {
+    LOG(ERROR) << "[AtomicDirSwap] ReplaceCurrentMapFrom: cannot write marker";
+    return false;
+  }
+  // 2. 替换三件套（不碰 backups）
+  const bool ok = ReplaceTripletFromBackup(target_dir_, source_backup_dir);
+  // 3. 清 marker
+  RemoveRollbackMarker(target_dir_);
+  return ok;
+}
+
+bool AtomicDirSwap::RecoverRollbackIfInterrupted(const std::string& target_dir) {
+  const std::string marker = target_dir + kRollbackMarkerSuffix;
+  std::error_code ec;
+  // 无论有无 marker，先清理可能的 .rbtmp 残留
+  if (!fs::exists(marker, ec)) {
+    CleanupRollbackTmp(target_dir);
+    return true;
+  }
+
+  // 解析 marker 的 chosen_backup
+  std::string chosen_backup;
+  {
+    std::ifstream ifs(marker);
+    if (ifs) {
+      std::string line;
+      const std::string key = "chosen_backup=";
+      while (std::getline(ifs, line)) {
+        if (line.rfind(key, 0) == 0) {
+          chosen_backup = line.substr(key.size());
+          break;
+        }
+      }
+    }
+  }
+
+  LOG(WARNING) << "[AtomicDirSwap] RecoverRollback: unfinished rollback detected, chosen="
+               << chosen_backup << "; redoing triplet replace";
+
+  if (!chosen_backup.empty() && fs::exists(chosen_backup, ec)) {
+    // 重做三件套替换（幂等；chosen 始终完整保留在 backups 内）
+    ReplaceTripletFromBackup(target_dir, chosen_backup);
+  } else {
+    LOG(WARNING) << "[AtomicDirSwap] RecoverRollback: chosen backup gone, cannot redo; "
+                 << "cleaning up tmp (target may be partial — re-run rollback manually)";
+  }
+
+  CleanupRollbackTmp(target_dir);
+  fs::remove(marker, ec);
+  return true;
 }
 
 std::vector<std::string> AtomicDirSwap::ListHistoricalBackups(

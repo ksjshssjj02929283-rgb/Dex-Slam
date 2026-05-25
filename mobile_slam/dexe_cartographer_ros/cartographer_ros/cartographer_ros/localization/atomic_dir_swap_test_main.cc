@@ -239,14 +239,15 @@ static void TestTombstoneCleanup() {
 
   PutValidMap(target, "current");
 
-  // 人工创建 2 个 tombstone
-  fs::create_directories(target + ".tombstone.0");
-  WriteFile(target + ".tombstone.0/map.pbstream", "deleted-stuff");
-  fs::create_directories(target + ".tombstone.1");
+  // v3: tombstone 在 <target>/backups/ 容器内（target 内部）
+  const std::string container = target + "/backups";
+  fs::create_directories(container + "/tombstone.0");
+  WriteFile(container + "/tombstone.0/map.pbstream", "deleted-stuff");
+  fs::create_directories(container + "/tombstone.1");
 
   EXPECT(AtomicDirSwap::RecoverIfInterrupted(target), "recover succeeds");
-  EXPECT(!fs::exists(target + ".tombstone.0"), "tombstone.0 cleaned");
-  EXPECT(!fs::exists(target + ".tombstone.1"), "tombstone.1 cleaned");
+  EXPECT(!fs::exists(container + "/tombstone.0"), "tombstone.0 cleaned");
+  EXPECT(!fs::exists(container + "/tombstone.1"), "tombstone.1 cleaned");
   EXPECT(fs::exists(target + "/map.pbstream"), "target intact");
 }
 
@@ -455,6 +456,193 @@ static void TestChecksumDisabled() {
 }
 
 // ---------------------------------------------------------------------------
+// v2 测试：rollback marker 协议
+// ---------------------------------------------------------------------------
+
+// T14: rollback 三件套替换中途崩溃（marker 存在 + 三件套写了一半）
+//      → RecoverRollbackIfInterrupted 从 chosen 重做，三件套恢复一致；backups 不动
+static void TestRollbackMarkerRedo() {
+  const std::string root = MakeTestRoot();
+  const std::string target = root + "/map_rb1";
+
+  // 现有 target = "current" + 1 个历史 backup = "old"
+  PutValidMap(target, "current");
+  fs::create_directories(target + "/backups");
+  const std::string chosen = target + "/backups/backup.20260101-100000";
+  PutValidMap(chosen, "old");
+
+  // 模拟 rollback 三件套替换中途崩溃：marker 已写 + pbstream 已换成 old 但 png/yaml 还是 current
+  EXPECT(AtomicDirSwap::WriteRollbackMarker(target, chosen), "WriteRollbackMarker");
+  WriteFile(target + "/map.pbstream", "pbstream-content-old");  // 只换了 pbstream（混版！）
+  // png/yaml 仍是 current → 此刻三件套不一致
+
+  // 启动恢复 — 从 chosen 重做全部三件套
+  EXPECT(AtomicDirSwap::RecoverIfInterrupted(target), "recover should succeed");
+
+  // 验证：三件套全部变成 old（一致），backups 不动，marker 清除
+  EXPECT(ReadFile(target + "/map.pbstream") == "pbstream-content-old", "pbstream = old");
+  EXPECT(ReadFile(target + "/map.png") == "png-content-old", "png = old (redone)");
+  EXPECT(ReadFile(target + "/map.yaml") == "yaml-content-old", "yaml = old (redone)");
+  EXPECT(fs::exists(chosen), "chosen backup preserved (not consumed)");
+  EXPECT(ReadFile(chosen + "/map.pbstream") == "pbstream-content-old", "chosen content intact");
+  EXPECT(!fs::exists(target + ".rollback_marker"), "marker cleaned");
+  // 无 .rbtmp 残留
+  std::error_code ec;
+  for (auto const& e : fs::directory_iterator(target, ec)) {
+    const std::string fn = e.path().filename().string();
+    EXPECT(fn.find(".rbtmp") == std::string::npos, "no .rbtmp leftover: " + fn);
+  }
+}
+
+// T15: rollback 崩溃后 chosen backup 消失（异常）→ 清理 marker + tmp，target 保持原样不损坏
+static void TestRollbackMarkerChosenGone() {
+  const std::string root = MakeTestRoot();
+  const std::string target = root + "/map_rb2";
+
+  PutValidMap(target, "current");
+  fs::create_directories(target + "/backups");
+  const std::string chosen = target + "/backups/backup.20260101-100000";
+  PutValidMap(chosen, "old");
+
+  EXPECT(AtomicDirSwap::WriteRollbackMarker(target, chosen), "marker");
+  // 残留一个 .rbtmp（模拟崩溃在 phase 1）
+  WriteFile(target + "/map.pbstream.rbtmp", "half-copied");
+  // chosen 异常消失
+  std::error_code ec;
+  fs::remove_all(chosen, ec);
+
+  EXPECT(AtomicDirSwap::RecoverIfInterrupted(target), "recover succeeds (cleanup path)");
+
+  // 验证：chosen 没了无法重做，但 target 三件套保持原样（current），.rbtmp 清掉，marker 清掉
+  EXPECT(ReadFile(target + "/map.pbstream") == "pbstream-content-current",
+         "target unchanged (current preserved, rollback never completed)");
+  EXPECT(!fs::exists(target + "/map.pbstream.rbtmp"), ".rbtmp cleaned");
+  EXPECT(!fs::exists(target + ".rollback_marker"), "marker cleaned");
+}
+
+// ---------------------------------------------------------------------------
+// 地图目录自包含验证
+// ---------------------------------------------------------------------------
+
+// T16: 历史 backup 落在 <target>/backups/ 内（target 自包含）
+//      含 step 5a "swap_backup 内 backups 抽出到新 target" 流程
+static void TestSelfContainedBackups() {
+  const std::string root = MakeTestRoot();
+  const std::string target = root + "/map_v3";
+
+  // 连续保存 3 次形成历史链
+  AtomicDirSwap swap1(target, 5);
+  std::string staging = swap1.BeginStage();
+  WriteFakeMapToStaging(staging, "v1");
+  EXPECT(swap1.CommitStage({"map.pbstream", "map.png", "map.yaml"}), "v1 commit");
+  EXPECT(swap1.ActivateAndCleanup(), "v1 activate");
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+
+  AtomicDirSwap swap2(target, 5);
+  staging = swap2.BeginStage();
+  WriteFakeMapToStaging(staging, "v2");
+  EXPECT(swap2.CommitStage({"map.pbstream", "map.png", "map.yaml"}), "v2 commit");
+  EXPECT(swap2.ActivateAndCleanup(), "v2 activate");
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+
+  AtomicDirSwap swap3(target, 5);
+  staging = swap3.BeginStage();
+  WriteFakeMapToStaging(staging, "v3");
+  EXPECT(swap3.CommitStage({"map.pbstream", "map.png", "map.yaml"}), "v3 commit");
+  EXPECT(swap3.ActivateAndCleanup(), "v3 activate");
+
+  // 关键断言 1：target 内有 backups 子目录（v3 自包含）
+  EXPECT(fs::exists(target + "/backups"), "target/backups exists (self-contained)");
+
+  // 关键断言 2：所有历史 backup 都在 target 内部
+  auto backups = AtomicDirSwap::ListHistoricalBackups(target);
+  EXPECT(backups.size() == 2, "have 2 historical backups (v1 + v2)");
+  for (const auto& b : backups) {
+    EXPECT(b.find(target + "/backups/backup.") == 0,
+           "backup path inside target: " + b);
+  }
+
+  // 关键断言 3：<map_folder> 顶级**没有** target.backup.* / target.backups/ 散落
+  EXPECT(!fs::exists(target + ".backup.20260520-093045"), "no legacy v2.0 sibling");
+  EXPECT(!fs::exists(target + ".backups"), "no v2.1 sibling container");
+
+  // 关键断言 4：target 内三件套是 v3 内容（最新生效）
+  EXPECT(ReadFile(target + "/map.pbstream") == "pbstream-content-v3", "current is v3");
+
+  // 关键断言 5：历史 backup 内容是 v1/v2
+  EXPECT(ReadFile(backups[0] + "/map.pbstream") == "pbstream-content-v2", "newest backup is v2");
+  EXPECT(ReadFile(backups[1] + "/map.pbstream") == "pbstream-content-v1", "oldest backup is v1");
+
+  // 关键断言 6：删除整个 target 目录 → 所有历史一起被删（用户的"一个目录管理所有"诉求）
+  fs::remove_all(target);
+  EXPECT(!fs::exists(target), "target removed");
+  EXPECT(!fs::exists(target + "/backups"), "backups removed with target");
+  // 没有任何散落条目残留
+  std::error_code ec;
+  for (auto const& entry : fs::directory_iterator(root, ec)) {
+    EXPECT(false, "unexpected leftover: " + entry.path().string());
+  }
+}
+
+// T18: rollback 纯替换语义 — ReplaceCurrentMapFrom 只换三件套，backups 完全不动
+static void TestReplaceCurrentMapFrom() {
+  const std::string root = MakeTestRoot();
+  const std::string target = root + "/map_rb_sem";
+
+  // 保存 3 次形成历史（v1 → v2 → v3，backups 里有 2 个 = v1, v2）
+  for (const char* tag : {"v1", "v2", "v3"}) {
+    AtomicDirSwap swap(target, 5);
+    std::string staging = swap.BeginStage();
+    WriteFakeMapToStaging(staging, tag);
+    EXPECT(swap.CommitStage({"map.pbstream", "map.png", "map.yaml"}), std::string("commit ") + tag);
+    EXPECT(swap.ActivateAndCleanup(), std::string("activate ") + tag);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  }
+
+  auto before = AtomicDirSwap::ListHistoricalBackups(target);
+  EXPECT(before.size() == 2, "before rollback: 2 backups (v1, v2)");
+  EXPECT(ReadFile(target + "/map.pbstream") == "pbstream-content-v3", "current = v3");
+
+  // 记录 backups 目录的完整快照（用于验证"完全不动"）
+  const std::string chosen = before[1];  // v1（最旧；before 降序 → [0]=v2, [1]=v1）
+  EXPECT(ReadFile(chosen + "/map.pbstream") == "pbstream-content-v1", "chosen is v1");
+
+  // rollback：纯三件套替换
+  AtomicDirSwap swap_rb(target, 5);
+  EXPECT(swap_rb.ReplaceCurrentMapFrom(chosen), "ReplaceCurrentMapFrom succeeds");
+
+  // 验证 rollback 语义：
+  // 1. target 三件套全部变成 v1
+  EXPECT(ReadFile(target + "/map.pbstream") == "pbstream-content-v1", "target pbstream = v1");
+  EXPECT(ReadFile(target + "/map.png") == "png-content-v1", "target png = v1");
+  EXPECT(ReadFile(target + "/map.yaml") == "yaml-content-v1", "target yaml = v1");
+  // 2. backups 数量完全不变（不新增、不删除）
+  auto after = AtomicDirSwap::ListHistoricalBackups(target);
+  EXPECT(after.size() == 2, "after rollback: still exactly 2 backups (untouched)");
+  // 3. backups 内容完全不变（v2, v1 仍在）
+  EXPECT(ReadFile(after[0] + "/map.pbstream") == "pbstream-content-v2", "backup[0] still v2");
+  EXPECT(ReadFile(after[1] + "/map.pbstream") == "pbstream-content-v1", "backup[1] still v1");
+  // 4. chosen 仍在（copy 不消耗，可重复 rollback）
+  EXPECT(fs::exists(chosen), "chosen preserved");
+  // 5. 无 swap_backup / .rbtmp / marker 残留
+  EXPECT(!fs::exists(target + ".swap_backup"), "no swap_backup leftover");
+  EXPECT(!fs::exists(target + ".rollback_marker"), "no marker leftover");
+  std::error_code ec;
+  for (auto const& e : fs::directory_iterator(target, ec)) {
+    const std::string fn = e.path().filename().string();
+    EXPECT(fn.find(".rbtmp") == std::string::npos, "no .rbtmp leftover: " + fn);
+  }
+
+  // 6. 可重复 rollback 到同一 chosen（验证 copy 语义）
+  EXPECT(swap_rb.ReplaceCurrentMapFrom(chosen), "second rollback to same chosen succeeds");
+  EXPECT(ReadFile(target + "/map.pbstream") == "pbstream-content-v1", "still v1 after 2nd rollback");
+  auto after2 = AtomicDirSwap::ListHistoricalBackups(target);
+  EXPECT(after2.size() == 2, "still 2 backups after 2nd rollback");
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -479,6 +667,10 @@ int main(int argc, char** argv) {
   RUN_TEST(ForkInterruptAfterCommit);
   RUN_TEST(TestChecksumMismatch);
   RUN_TEST(TestChecksumDisabled);
+  RUN_TEST(TestRollbackMarkerRedo);
+  RUN_TEST(TestRollbackMarkerChosenGone);
+  RUN_TEST(TestSelfContainedBackups);
+  RUN_TEST(TestReplaceCurrentMapFrom);
 
   std::cout << "\n═══ 结果：" << g_pass << " pass / " << g_fail << " fail ═══\n";
   return g_fail == 0 ? 0 : 1;
