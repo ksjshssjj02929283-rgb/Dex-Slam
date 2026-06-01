@@ -47,34 +47,10 @@ def generate_launch_description():
         description='Resolution for occupancy grid'
     )
 
-    auto_save_interval_s_arg = DeclareLaunchArgument(
-        'auto_save_interval_s',
-        default_value='1800.0',
-        description='Interval in seconds between automatic map saves (default: 1800 = 30 min). '
-                    'Save is triggered only when the robot velocity is below threshold.'
-    )
-
-    auto_save_linear_velocity_threshold_arg = DeclareLaunchArgument(
-        'auto_save_linear_velocity_threshold',
-        default_value='0.01',
-        description='Linear velocity threshold (m/s) below which the robot is considered static '
-                    'for periodic map saving.'
-    )
-
-    auto_save_angular_velocity_threshold_arg = DeclareLaunchArgument(
-        'auto_save_angular_velocity_threshold',
-        default_value='0.01',
-        description='Angular velocity threshold (rad/s) below which the robot is considered static '
-                    'for periodic map saving.'
-    )
-
     # Get launch configurations
     map_folder = LaunchConfiguration('map_folder')
     map_name = LaunchConfiguration('map_name')
     resolution = LaunchConfiguration('resolution')
-    auto_save_interval_s = LaunchConfiguration('auto_save_interval_s')
-    auto_save_linear_velocity_threshold = LaunchConfiguration('auto_save_linear_velocity_threshold')
-    auto_save_angular_velocity_threshold = LaunchConfiguration('auto_save_angular_velocity_threshold')
 
     # Get package directory for configuration files
     cartographer_ros_share = FindPackageShare('cartographer_ros')
@@ -115,9 +91,6 @@ def generate_launch_description():
             '-map_folder', map_folder,
             '-map_name', map_name,
             '-collect_metrics', 'false',
-            '-auto_save_interval_s', auto_save_interval_s,
-            '-auto_save_linear_velocity_threshold', auto_save_linear_velocity_threshold,
-            '-auto_save_angular_velocity_threshold', auto_save_angular_velocity_threshold,
             '-auto_load_map', 'true',
         ],
         remappings=[
@@ -148,9 +121,6 @@ def generate_launch_description():
         map_folder_arg,
         map_name_arg,
         resolution_arg,
-        auto_save_interval_s_arg,
-        auto_save_linear_velocity_threshold_arg,
-        auto_save_angular_velocity_threshold_arg,
         
         # Robot localization
         robot_localization_launch,

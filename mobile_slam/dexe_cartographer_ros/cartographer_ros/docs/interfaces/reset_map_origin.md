@@ -198,6 +198,7 @@ $$T_{R}^{M'} = T_{inv} \cdot T_{R}^{M} = I \quad (\text{即原点})$$
 
 3. **覆盖写入**：新文件直接覆盖旧文件，无备份机制。如有需要请在调用前手动备份。
 
-4. **并发安全**：`LocalizationNode::ResetMapOriginAndSave` 持有 `localization_updater_mutex_`；`PoseGraph2D::ApplyTransformToAllPoses` 持有其内部 `mutex_`。两者均线程安全，但同一时刻不应与自动保存（`MapPersistenceManager`）并发——`HandleResetMapOrigin` 未检查 `IsSaving()`，如确有需要可在 handler 中补充该判断。
+4. **并发安全**：`LocalizationNode::ResetMapOriginAndSave` 持有 `localization_updater_mutex_`；`PoseGraph2D::ApplyTransformToAllPoses` 持有其内部 `mutex_`。两者均线程安全。
+   > **2026-05-22 hotfix（项目 29 Phase 1）**：自动保存已取消，`MapPersistenceManager` 不再持有 timer / odom 订阅，`IsSaving()` 检查随之删除。`HandleResetMapOrigin` 与 `HandleSaveMap` 在 `LocalizationManagerNode` 层都持 `state_mutex_`，串行执行，已无并发风险。
 
 5. **定位状态为 LOC_NOT_INIT 时慎用**：Step 1 依赖 `local_slam_data` 非空，若机器人刚启动尚未完成初始定位，调用会返回 false 并打印错误日志。

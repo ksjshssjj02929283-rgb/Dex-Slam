@@ -37,6 +37,18 @@ install(TARGETS localization_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# Phase 4 注入测试 binary（standalone，运行：`ros2 run cartographer_ros atomic_dir_swap_test`）
+google_binary(atomic_dir_swap_test
+  SRCS
+    localization/atomic_dir_swap_test_main.cc
+)
+
+install(TARGETS atomic_dir_swap_test
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(loc_offline_node
   SRCS
     localization/loc_offline_node_main.cc

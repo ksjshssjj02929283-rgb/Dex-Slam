@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <chrono>
+#include <ctime>
 #include <mutex>
 #include <filesystem>
 #include <atomic>
@@ -30,8 +31,10 @@
 
 #include "absl/memory/memory.h"
 #include "cartographer/localization/localization_updater.h"
+#include "cartographer_ros/localization/atomic_dir_swap.h"
 #include "cartographer_ros/localization/localization_node.h"
 #include "cartographer_ros/localization/map_persistence_manager.h"
+#include "cartographer_ros_msgs/srv/rollback_map_to.hpp"
 #include "cartographer_ros/options/localization_node_options.h"
 #include "cartographer_ros/mapping/ros_log_sink.h"
 #include "gflags/gflags.h"
@@ -63,30 +66,18 @@ DEFINE_string(
     "Name of the map to be saved. If empty, a map will not be saved.");
 
 // ---------------------------------------------------------------------------
-// MapPersistenceManager GFlags（可在 launch 文件的 arguments 中覆盖）
+// 启动期 GFlags
 // ---------------------------------------------------------------------------
 DEFINE_bool(
     auto_load_map, false,
     "If true, automatically load the map specified by --map_folder/--map_name on startup. "
     "If false, skip map loading at startup and wait for the set_map_changed service to trigger.");
 
-DEFINE_bool(
-    enable_auto_save_map, false,
-    "Enable automatic map saving during localization. When disabled, "
-    "map will only be saved manually via save_map service or on shutdown.");
-DEFINE_double(
-    auto_save_interval_s, 1800.0,
-    "Interval in seconds between automatic map saves (default: 1800 = 30 min). "
-    "The save is triggered only when the robot velocity is below threshold. "
-    "Only effective when enable_auto_save_map is true.");
-DEFINE_double(
-    auto_save_linear_velocity_threshold, 0.01,
-    "Linear velocity threshold (m/s) below which the robot is considered static "
-    "for periodic map saving.");
-DEFINE_double(
-    auto_save_angular_velocity_threshold, 0.01,
-    "Angular velocity threshold (rad/s) below which the robot is considered static "
-    "for periodic map saving.");
+DEFINE_int32(
+    map_backup_keep_count, 5,
+    "Number of historical map backups to keep on disk (rotated after each save). "
+    "0 = do not keep any historical backups. Each backup occupies one copy of the "
+    "map folder size.");
 
 namespace cartographer_ros {
 
@@ -189,6 +180,8 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_global_relocalization_srv_;
+  rclcpp::Service<cartographer_ros_msgs::srv::RollbackMapTo>::SharedPtr rollback_map_to_srv_;
 
   // filter service 调用使用临时 node + 独立 executor，不持有长期 client
   // （在 service handler 线程中调用同进程其他 service 会死锁，须独立 executor）
@@ -230,6 +223,16 @@ private:
     reset_map_origin_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/reset_map_origin",
         std::bind(&LocalizationManagerNode::HandleResetMapOrigin, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    trigger_global_relocalization_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/trigger_global_relocalization",
+        std::bind(&LocalizationManagerNode::HandleTriggerGlobalRelocalization, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    rollback_map_to_srv_ = create_service<cartographer_ros_msgs::srv::RollbackMapTo>(
+        "~/rollback_map_to",
+        std::bind(&LocalizationManagerNode::HandleRollbackMapTo, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // filter service 客户端在调用时临时创建，不在此注册
@@ -401,8 +404,15 @@ private:
     }
 
     state_ = LocalizationState::STARTING;
-    
+
     try {
+      // 启动恢复：扫描磁盘 staging/swap_backup/tombstone 残留，按决策表自愈
+      // 必须在 ValidateMapResources 之前——半成品 staging/swap_backup 可能让 validate 误判
+      if (!FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
+        const std::string target_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+        AtomicDirSwap::RecoverIfInterrupted(target_dir);
+      }
+
       // 验证地图资源
       if (!ValidateMapResources()) {
         state_ = LocalizationState::ERROR;
@@ -436,22 +446,16 @@ private:
 
       state_ = LocalizationState::RUNNING;
 
-      // 创建地图持久化管理器（定时自动保存 + 外部调用保存）
-      // 仅在 enable_auto_save_map 为 true 时创建，否则只能通过 save_map 服务手动保存
-      if (FLAGS_enable_auto_save_map) {
-        map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
-            this,
-            [this]() -> localization::LocalizationNode* {
-              return localization_node_.get();
-            },
-            [this]() -> std::pair<std::string, std::string> {
-              return {FLAGS_map_folder, FLAGS_map_name};
-            });
-        RCLCPP_INFO(get_logger(), "Auto-save map is ENABLED (interval: %.0f s)",
-                    FLAGS_auto_save_interval_s);
-      } else {
-        RCLCPP_INFO(get_logger(), "Auto-save map is DISABLED - map will only be saved manually via save_map service");
-      }
+      // 创建地图保存执行单元（仅手动保存：只能由 HandleSaveMap 触发；StopLocalization 不再附带保存）
+      map_persistence_manager_ = std::make_unique<MapPersistenceManager>(
+          this,
+          [this]() -> localization::LocalizationNode* {
+            return localization_node_.get();
+          },
+          [this]() -> std::pair<std::string, std::string> {
+            return {FLAGS_map_folder, FLAGS_map_name};
+          },
+          FLAGS_map_backup_keep_count);
 
       RCLCPP_INFO(get_logger(), "Localization started successfully");
       return true;
@@ -463,61 +467,19 @@ private:
     }
   }
 
+  // 停定位 — 纯停止，不再附带保存。
+  // 保存仅由 ~/save_map 服务显式触发；如需"停定位前保存"，调用方应先调 save_map 再调 stop_localization。
   void StopLocalization() {
     if (state_ == LocalizationState::STOPPED) {
       RCLCPP_INFO(get_logger(), "Localization already stopped");
       return;
     }
 
-    RCLCPP_INFO(get_logger(), "Starting localization stop procedure...");
-    state_ = LocalizationState::STOPPING;
-    
-    try {
-      // 先停止自动保存定时器，防止与下面的手动保存并发
-      if (map_persistence_manager_) {
-        map_persistence_manager_->Stop();
-      }
-
-      if (localization_node_) {
-        // 在结束轨迹前通过持久化管理器保存地图（pbstream + map.png/yaml）
-        if (map_persistence_manager_) {
-          map_persistence_manager_->SaveNow();
-        } else {
-          // 降级：直接调用（map_persistence_manager 未初始化时的保底路径）
-          SaveMapInternal();
-        }
-        
-        // 结束所有轨迹
-        localization_node_->FinishAllTrajectories();
-        localization_node_.reset();
-      }
-
-      map_persistence_manager_.reset();
-      node_options_.reset();
-      trajectory_options_.reset();
-      
-      state_ = LocalizationState::STOPPED;
-      RCLCPP_INFO(get_logger(), "=== Localization stopped successfully ===");
-      
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "Error while stopping localization: %s", e.what());
-      state_ = LocalizationState::ERROR;
-    }
-  }
-
-  // 停止定位但不保存地图，用于重置地图原点后的快速重启
-  void StopLocalizationNoSave() {
-    if (state_ == LocalizationState::STOPPED) {
-      RCLCPP_INFO(get_logger(), "Localization already stopped");
-      return;
-    }
-
-    RCLCPP_INFO(get_logger(), "Stopping localization (no save)...");
+    RCLCPP_INFO(get_logger(), "Stopping localization...");
     state_ = LocalizationState::STOPPING;
 
     try {
       if (map_persistence_manager_) {
-        map_persistence_manager_->Stop();
         map_persistence_manager_.reset();
       }
 
@@ -530,69 +492,12 @@ private:
       trajectory_options_.reset();
 
       state_ = LocalizationState::STOPPED;
-      RCLCPP_INFO(get_logger(), "Localization stopped (no save)");
+      RCLCPP_INFO(get_logger(), "=== Localization stopped successfully ===");
 
     } catch (const std::exception& e) {
       RCLCPP_ERROR(get_logger(), "Error while stopping localization: %s", e.what());
       state_ = LocalizationState::ERROR;
     }
-  }
-
-  /**
-   * @brief 保存地图的核心逻辑（pbstream + map.png/yaml）
-   *        必须在 FinishAllTrajectories 之前调用。
-   * @return true 表示 pbstream 和图像均保存成功，false 表示至少有一项失败
-   */
-  bool SaveMapInternal() {
-    if (!localization_node_) {
-      RCLCPP_ERROR(get_logger(), "Cannot save map: localization node is not running");
-      return false;
-    }
-
-    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
-      RCLCPP_WARN(get_logger(), "Map folder or name not specified, skipping map save");
-      return false;
-    }
-
-    bool overall_success = true;
-
-    // 保存 pbstream（包含增量更新后的 global static submap）
-    std::string save_filename = FLAGS_map_folder + "/" + FLAGS_map_name + "/map.pbstream";
-    RCLCPP_INFO(get_logger(), "=== Starting map save procedure ===");
-    RCLCPP_INFO(get_logger(), "Saving updated map to: %s", save_filename.c_str());
-
-    auto start_time = std::chrono::steady_clock::now();
-    try {
-      RCLCPP_INFO(get_logger(), "Calling SerializeState...");
-      localization_node_->SerializeState(save_filename, true /* include_unfinished_submaps */);
-
-      auto end_time = std::chrono::steady_clock::now();
-      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-      RCLCPP_INFO(get_logger(), "Successfully saved updated map with global static submap (took %ld ms)",
-                  duration.count());
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "Failed to save pbstream: %s", e.what());
-      overall_success = false;
-    }
-
-    // 保存地图图像（map.png + map.yaml）
-    // 注意：必须在 FinishAllTrajectories 之前调用，以确保 PoseEstimator 仍然可用
-    try {
-      const std::string map_filestream = FLAGS_map_folder + "/" + FLAGS_map_name + "/map";
-      RCLCPP_INFO(get_logger(), "Saving map image to: %s.png", map_filestream.c_str());
-      bool save_map_success = localization_node_->SaveMap(map_filestream, 0.05 /*resolution, unused*/);
-      if (save_map_success) {
-        RCLCPP_INFO(get_logger(), "Map image saved successfully: %s.png/.yaml", map_filestream.c_str());
-      } else {
-        RCLCPP_WARN(get_logger(), "SaveMap returned false for %s (may be non-fatal)", map_filestream.c_str());
-        overall_success = false;
-      }
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "Failed to save map image: %s", e.what());
-      overall_success = false;
-    }
-
-    return overall_success;
   }
 
   void HandleSaveMap(
@@ -608,17 +513,15 @@ private:
       return;
     }
 
-    if (map_persistence_manager_ && map_persistence_manager_->IsSaving()) {
+    if (!map_persistence_manager_) {
       response->success = false;
-      response->message = "A save operation is already in progress";
-      RCLCPP_WARN(get_logger(), "save_map service: periodic save is already running, try later");
+      response->message = "MapPersistenceManager is not initialized";
+      RCLCPP_ERROR(get_logger(), "save_map service called but MapPersistenceManager is null");
       return;
     }
 
     RCLCPP_INFO(get_logger(), "save_map service called, saving map via MapPersistenceManager...");
-    bool success = map_persistence_manager_
-                       ? map_persistence_manager_->SaveNow()
-                       : SaveMapInternal();
+    const bool success = map_persistence_manager_->SaveNow();
 
     response->success = success;
     response->message = success ? "Map saved successfully" : "Map save completed with errors (check logs)";
@@ -669,9 +572,9 @@ private:
       return;
     }
 
-    // 3. 停止定位（不保存），避免覆盖刚写好的新地图
-    RCLCPP_INFO(get_logger(), "reset_map_origin [3/5]: stopping localization (no save)...");
-    StopLocalizationNoSave();
+    // 3. 停止定位（StopLocalization 默认不保存——保存只由 save_map 服务触发）
+    RCLCPP_INFO(get_logger(), "reset_map_origin [3/5]: stopping localization...");
+    StopLocalization();
 
     // 4. 用新 pbstream 重新启动定位
     RCLCPP_INFO(get_logger(), "reset_map_origin [4/5]: restarting localization with new map...");
@@ -697,6 +600,153 @@ private:
     response->success = true;
     response->message =
         "Map origin reset, localization restarted, relocalization triggered at new origin";
+  }
+
+  void HandleTriggerGlobalRelocalization(
+      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING || !localization_node_) {
+      response->success = false;
+      response->message = "Localization is not running, cannot trigger relocalization";
+      RCLCPP_WARN(get_logger(),
+                  "trigger_global_relocalization called but localization is not running");
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "trigger_global_relocalization: invoking...");
+    const bool ok = localization_node_->TriggerGlobalRelocalization();
+
+    response->success = ok;
+    response->message = ok
+        ? "Global relocalization triggered successfully"
+        : "Global relocalization failed (see node logs)";
+
+    if (ok) {
+      RCLCPP_INFO(get_logger(), "trigger_global_relocalization: success");
+    } else {
+      RCLCPP_ERROR(get_logger(), "trigger_global_relocalization: failed");
+    }
+  }
+
+  void HandleRollbackMapTo(
+      const std::shared_ptr<cartographer_ros_msgs::srv::RollbackMapTo::Request> request,
+      std::shared_ptr<cartographer_ros_msgs::srv::RollbackMapTo::Response> response) {
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (state_ != LocalizationState::RUNNING) {
+      response->success = false;
+      response->message = "Localization is not running, cannot rollback";
+      RCLCPP_WARN(get_logger(), "rollback_map_to called but localization is not running");
+      return;
+    }
+
+    if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
+      response->success = false;
+      response->message = "map_folder or map_name is not set";
+      return;
+    }
+
+    const std::string target_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+
+    // 1. 列出可用历史 backup（已按时间戳降序）
+    auto backups = AtomicDirSwap::ListHistoricalBackups(target_dir);
+    if (backups.empty()) {
+      response->success = false;
+      response->message = "No historical backups available";
+      RCLCPP_WARN(get_logger(), "rollback_map_to: no backups found in %s",
+                  FLAGS_map_folder.c_str());
+      return;
+    }
+
+    // 2. 选定目标 backup
+    //    v3: backup 路径是 <target>/backups/backup.<ts>，用 filename 提取 ts 做匹配
+    //    （健壮：不依赖全路径子串，路径结构变化也不影响）
+    auto extract_ts = [](const std::string& path) -> std::string {
+      const std::string fname = std::filesystem::path(path).filename().string();
+      const std::string prefix = "backup.";
+      if (fname.rfind(prefix, 0) == 0) return fname.substr(prefix.size());
+      return "";
+    };
+
+    std::string chosen_backup;
+    if (request->timestamp.empty()) {
+      // 取最新（ListHistoricalBackups 已按时间戳降序）
+      chosen_backup = backups.front();
+    } else {
+      for (const auto& b : backups) {
+        if (extract_ts(b) == request->timestamp) {
+          chosen_backup = b;
+          break;
+        }
+      }
+      if (chosen_backup.empty()) {
+        // 列出可用 ts
+        std::string available;
+        for (const auto& b : backups) {
+          const std::string ts = extract_ts(b);
+          if (!ts.empty()) {
+            if (!available.empty()) available += ", ";
+            available += ts;
+          }
+        }
+        response->success = false;
+        response->message = "Timestamp not found. Available: " + available;
+        return;
+      }
+    }
+
+    RCLCPP_INFO(get_logger(), "rollback_map_to: restoring from %s", chosen_backup.c_str());
+
+    // 2.5 v2 增强：校验选中 backup 的 sentinel SHA256（DEC-008）
+    //     旧 backup（无 sha256_ 字段）→ ValidateSentinel 返回 true 兼容；含 sha256 不匹配 → 拒绝
+    if (!AtomicDirSwap::ValidateSentinel(chosen_backup)) {
+      response->success = false;
+      response->message =
+          "Selected backup has corrupted sentinel (sha256 mismatch); refusing to rollback. "
+          "Use another timestamp.";
+      RCLCPP_ERROR(get_logger(),
+                   "rollback_map_to: chosen backup %s failed ValidateSentinel, aborting",
+                   chosen_backup.c_str());
+      return;
+    }
+
+    // 3. 停止定位（StopLocalization 默认不保存——保存只由 save_map 服务触发）
+    StopFilter();
+    StopLocalization();
+
+    // 4. 纯三件套替换：用 chosen backup 的 pbstream/png/yaml/.complete 覆盖 <map_name>/ 下的三件套。
+    //    **完全不碰 <map_name>/backups/**——不新增、不删除、不移动任何 backup。
+    //    chosen 用 copy 复制（保留在 backups 里，可重复 rollback）。
+    //    崩溃安全：marker + 重启重做（ReplaceCurrentMapFrom 内部封装）。
+    AtomicDirSwap swap(target_dir, FLAGS_map_backup_keep_count);
+    if (!swap.ReplaceCurrentMapFrom(chosen_backup)) {
+      RCLCPP_ERROR(get_logger(), "rollback: ReplaceCurrentMapFrom failed");
+      response->success = false;
+      response->message = "Failed to replace current map from backup";
+      StartLocalization();
+      StartFilter();
+      return;
+    }
+
+    // 5. 重启定位
+    if (!StartLocalization()) {
+      RCLCPP_ERROR(get_logger(), "rollback: failed to start localization with rolled-back map");
+      response->success = false;
+      response->message = "Map rolled back but failed to start localization";
+      return;
+    }
+    StartFilter();
+
+    response->success = true;
+    response->message = "Map rolled back (triplet replaced; backups untouched)";
+    response->restored_from = chosen_backup;
+    response->archived_current_as = "";  // rollback 不归档当前地图（按设计：只有 save_map 改变 backup）
+    RCLCPP_INFO(get_logger(), "rollback_map_to: completed. triplet replaced from %s",
+                chosen_backup.c_str());
   }
 
   bool ValidateMapResources() {

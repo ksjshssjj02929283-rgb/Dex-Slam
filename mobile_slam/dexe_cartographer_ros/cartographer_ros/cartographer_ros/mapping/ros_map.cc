@@ -52,15 +52,22 @@ void WritePgm(const ::cartographer::io::Image& image, const double resolution,
   }
 }
 
-void WriteYaml(const double resolution, const Eigen::Vector2d& origin,      
+void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
                double occ_thresh, double free_thresh)
-{  
-  const std::string pgm_filename = map_file_name + ".png";
-  const std::string line_map_filename = map_file_name + "_line_map.json";
-  const std::string cloud_map_filename = map_file_name + ".pcd";
-  const std::string highlight_cloud_map_filename = map_file_name + "_highlight.pcd";
+{
+  // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
+  // 这样无论地图目录位于何处（staging / 正式 / backup / 被整体移动），
+  // 加载侧（map_loader）都按"yaml 所在目录 + 相对路径"解析，路径恒有效。
+  // 修复：此前用完整 map_file_name 导致 yaml 写入 staging 绝对路径，rename 后失效。
+  const size_t slash = map_file_name.find_last_of('/');
+  const std::string base =
+      (slash == std::string::npos) ? map_file_name : map_file_name.substr(slash + 1);
+  const std::string pgm_filename = base + ".png";
+  const std::string line_map_filename = base + "_line_map.json";
+  const std::string cloud_map_filename = base + ".pcd";
+  const std::string highlight_cloud_map_filename = base + "_highlight.pcd";
 
   // Magic constants taken directly from ros map_saver code:
   // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
