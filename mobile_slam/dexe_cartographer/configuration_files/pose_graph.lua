@@ -102,4 +102,11 @@ POSE_GRAPH = {
   --    min_covered_area = 2,
   --    min_added_submaps_count = 5,
   --  },
+   glc_trimmer_2d = {
+     overlap_high_threshold = 0.8,
+     enable_glc = true,
+     neighbor_count = 3,
+     max_neighbor_dist = 5.0,
+     max_trim_per_check = 1,
+   },
 }

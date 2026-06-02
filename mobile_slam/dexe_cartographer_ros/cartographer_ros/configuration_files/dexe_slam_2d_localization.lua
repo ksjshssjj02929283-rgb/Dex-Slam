@@ -101,5 +101,12 @@ POSE_GRAPH.constraint_builder.min_score = 0.55
 POSE_GRAPH.constraint_builder.max_constraint_distance = 10.
 POSE_GRAPH.optimize_every_n_nodes = 100
 
+-- [[节点裁剪参数]]
+-- glc_trimmer_2d: 基于点云重叠率裁剪冗余节点，GLC 信息补偿
+-- 默认注释掉，取消注释即可启用
+-- POSE_GRAPH.glc_trimmer_2d = {
+--   overlap_high_threshold = 0.8,
+--   enable_glc = true,
+-- }
 
 return options

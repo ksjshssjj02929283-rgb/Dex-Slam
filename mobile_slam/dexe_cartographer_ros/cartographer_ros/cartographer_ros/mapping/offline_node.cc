@@ -30,6 +30,7 @@
 #include "cartographer_ros/mapping/node.h"
 #include "cartographer_ros/mapping/playable_bag.h"
 #include "cartographer_ros/mapping/urdf_reader.h"
+#include "cartographer/utility/include/timer.h"
 #include "gflags/gflags.h"
 #include "rosgraph_msgs/msg/clock.hpp"
 #include "tf2_ros/static_transform_broadcaster.h"
@@ -513,6 +514,8 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     node.SerializeState(state_output_filename,
                         true /* include_unfinished_submaps */);
   }
+
+  cartographer::Timer::PrintAll();
 
   if (FLAGS_keep_running) {
     LOG(INFO) << "Finished processing and waiting for shutdown.";
