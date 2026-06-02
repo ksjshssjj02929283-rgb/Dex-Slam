@@ -56,6 +56,29 @@ std::vector<int> GetValidTrajectoryIds(
   return valid_trajectories;
 }
 
+// 进一步过滤：只保留在 pose_graph 中实际有 submap 或 node 数据的轨迹。
+// GLCTrimmer 可能会删除某条轨迹的所有 submap/node，但状态仍为 ACTIVE，
+// 导致 ToProto() 写入的轨迹数 < GetValidTrajectoryIds() 返回的数量，
+// 加载时 CHECK_EQ 崩溃。
+std::vector<int> GetTrajectoryIdsWithData(
+    const mapping::PoseGraph& pose_graph,
+    const std::vector<int>& valid_trajectory_ids) {
+  std::set<int> ids_with_data;
+  for (const auto& submap_id_data : pose_graph.GetAllSubmapData()) {
+    ids_with_data.insert(submap_id_data.id.trajectory_id);
+  }
+  for (const auto& node_id_data : pose_graph.GetTrajectoryNodes()) {
+    ids_with_data.insert(node_id_data.id.trajectory_id);
+  }
+  std::vector<int> result;
+  for (int id : valid_trajectory_ids) {
+    if (ids_with_data.count(id) > 0) {
+      result.push_back(id);
+    }
+  }
+  return result;
+}
+
 mapping::proto::SerializationHeader CreateHeader() {
   mapping::proto::SerializationHeader header;
   header.set_format_version(kMappingStateSerializationFormatVersion);
@@ -264,9 +287,14 @@ void WritePbStream(
   writer->WriteProto(CreateHeader());
   writer->WriteProto(
       SerializePoseGraph(pose_graph, include_unfinished_submaps));
+  // 只序列化实际有 submap/node 数据的轨迹 options，防止 GLCTrimmer 删空某轨迹后
+  // ToProto() 写入数量 != GetValidTrajectoryIds() 数量，加载时 CHECK_EQ 崩溃。
+  const std::vector<int> valid_ids =
+      GetValidTrajectoryIds(pose_graph.GetTrajectoryStates());
+  const std::vector<int> ids_to_serialize =
+      GetTrajectoryIdsWithData(pose_graph, valid_ids);
   writer->WriteProto(SerializeTrajectoryBuilderOptions(
-      trajectory_builder_options,
-      GetValidTrajectoryIds(pose_graph.GetTrajectoryStates())));
+      trajectory_builder_options, ids_to_serialize));
 
   SerializeSubmaps(pose_graph.GetAllSubmapData(), include_unfinished_submaps,
                    writer);

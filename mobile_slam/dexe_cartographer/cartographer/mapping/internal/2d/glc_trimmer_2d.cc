@@ -1025,7 +1025,7 @@ void GLCTrimmer2D::TrimImpl(Trimmable* pose_graph) {
                 << " dist=" << dist;
 
       if (cand_id.trajectory_id != cur_traj_id) {
-        if (overlap < 0.5) {
+        if (overlap > 0.0) {
           type_a_cands.push_back({cand_id, overlap, true});
         }
       } else {

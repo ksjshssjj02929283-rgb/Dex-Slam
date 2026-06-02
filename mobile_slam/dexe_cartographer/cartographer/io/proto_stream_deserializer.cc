@@ -65,9 +65,23 @@ ProtoStreamDeserializer::ProtoStreamDeserializer(
          "PoseGraph, got field tag "
       << all_trajectory_builder_options_.data_case();
 
-  CHECK_EQ(pose_graph_.pose_graph().trajectory_size(),
-           all_trajectory_builder_options_.all_trajectory_builder_options()
-               .options_with_sensor_ids_size());
+  // 用 WARNING + 截断代替 CHECK_EQ，以兼容旧版 pbstream（GLCTrimmer 删空轨迹时
+  // options 数量可能多于 ToProto() 写入的轨迹数量）。
+  const int traj_size =
+      pose_graph_.pose_graph().trajectory_size();
+  const int opts_size =
+      all_trajectory_builder_options_.all_trajectory_builder_options()
+          .options_with_sensor_ids_size();
+  if (traj_size != opts_size) {
+    LOG(WARNING) << "[ProtoStreamDeserializer] trajectory_size (" << traj_size
+                 << ") != options_with_sensor_ids_size (" << opts_size
+                 << "). Truncating options to match trajectory count.";
+    auto* mutable_opts = all_trajectory_builder_options_
+                             .mutable_all_trajectory_builder_options();
+    while (mutable_opts->options_with_sensor_ids_size() > traj_size) {
+      mutable_opts->mutable_options_with_sensor_ids()->RemoveLast();
+    }
+  }
 }
 
 bool ProtoStreamDeserializer::ReadNextSerializedData(

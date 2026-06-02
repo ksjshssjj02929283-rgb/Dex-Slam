@@ -132,7 +132,7 @@ class LocalizationUpdaterBridge {
   bool SaveMap(const std::string& map_filename,
                const float occ_thresh,
                const float free_thresh,
-               bool is_from_pose_graph = false);
+               bool is_from_pose_graph = true);
 
   std::unique_ptr<::cartographer::io::SubmapTextures>
   FetchSubmapTextures(
