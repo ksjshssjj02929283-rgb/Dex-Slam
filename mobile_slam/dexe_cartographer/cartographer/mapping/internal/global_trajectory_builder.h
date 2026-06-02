@@ -50,7 +50,8 @@ std::unique_ptr<TrajectoryBuilderInterface> CreateGlobalTrajectoryBuilder2D(
     const int trajectory_id, mapping::PoseGraph2D* const pose_graph,
     const TrajectoryBuilderInterface::LocalSlamResultCallback&
         local_slam_result_callback,
-    const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter);
+    const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter,
+    const bool update_pose_graph = true);
 
 void GlobalTrajectoryBuilderRegisterMetrics(
     metrics::FamilyFactory* family_factory);

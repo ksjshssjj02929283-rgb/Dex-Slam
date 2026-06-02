@@ -47,12 +47,14 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
       std::unique_ptr<LocalTrajectoryBuilder> local_trajectory_builder,
       const int trajectory_id, PoseGraph* const pose_graph,
       const LocalSlamResultCallback& local_slam_result_callback,
-      const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter)
+      const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter,
+      const bool update_pose_graph = true)
       : trajectory_id_(trajectory_id),
         pose_graph_(pose_graph),
         local_trajectory_builder_(std::move(local_trajectory_builder)),
         local_slam_result_callback_(local_slam_result_callback),
-        pose_graph_odometry_motion_filter_(pose_graph_odometry_motion_filter)
+        pose_graph_odometry_motion_filter_(pose_graph_odometry_motion_filter),
+        update_pose_graph_(update_pose_graph)
   {
     is_pose_estimator_ = std::is_same<decltype(local_trajectory_builder_),
                                   std::unique_ptr<localization::PoseEstimator2D>>::value;
@@ -110,15 +112,19 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
     if (matching_result->insertion_result != nullptr) {
       kLocalSlamInsertionResults->Increment();  // 增加计数
       // 2. 将匹配结果加入到 pose_graph_ 中
-      // 建图模式（LocalTrajectoryBuilder2D）和定位模式（PoseEstimator2D）均调用
-      // pose_graph_->AddNode()，使定位轨迹节点参与：
-      //   - 跨轨迹节点替换（FindOverlappedOldNodes 搜索所有轨迹）
-      //   - GLCTrimmer 管理 submap 容量
-      //   - 后端约束构建（constraint_builder 搜索回环约束）
-      NodeId node_id = pose_graph_->AddNode(
-          matching_result->insertion_result->constant_data, trajectory_id_,
-          matching_result->insertion_result->insertion_submaps);
-      CHECK_EQ(node_id.trajectory_id, trajectory_id_);
+      // 建图模式恒入图；定位模式仅当地图更新开关 update_pose_graph_ 打开时入图，使定位
+      // 轨迹节点参与：跨轨迹节点替换 / GLCTrimmer 管理 submap 容量 / 回环约束构建。
+      // 关闭时为纯定位：不更新 pose graph，节点用占位 id（回到 commit2 之前行为）。
+      NodeId node_id;
+      if (!is_pose_estimator_ || update_pose_graph_) {
+        node_id = pose_graph_->AddNode(
+            matching_result->insertion_result->constant_data, trajectory_id_,
+            matching_result->insertion_result->insertion_submaps);
+        CHECK_EQ(node_id.trajectory_id, trajectory_id_);
+      } else {
+        static int index = 0;
+        node_id = NodeId(1, index++);
+      }
 
       // 3. 匹配结果保存
       insertion_result = absl::make_unique<InsertionResult>(InsertionResult{
@@ -155,8 +161,10 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
     if (local_trajectory_builder_) {
       local_trajectory_builder_->AddImuData(imu_data);
     }
-    // 2. 将 IMU 数据传入到 pose_graph_ 中（建图和定位均需要）
-    pose_graph_->AddImuData(trajectory_id_, imu_data);
+    // 2. 将 IMU 数据传入到 pose_graph_ 中（建图恒传；定位仅地图更新开关打开时传）
+    if (!is_pose_estimator_ || update_pose_graph_) {
+      pose_graph_->AddImuData(trajectory_id_, imu_data);
+    }
   }
 
   /**
@@ -181,8 +189,10 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
             odometry_data.time, odometry_data.pose)) {
       return;
     }
-    // 3. 将 odom 数据传入到 pose_graph_ 中（建图和定位均需要）
-    pose_graph_->AddOdometryData(trajectory_id_, odometry_data);
+    // 3. 将 odom 数据传入到 pose_graph_ 中（建图恒传；定位仅地图更新开关打开时传）
+    if (!is_pose_estimator_ || update_pose_graph_) {
+      pose_graph_->AddOdometryData(trajectory_id_, odometry_data);
+    }
   }
 
   /**
@@ -238,6 +248,9 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
   absl::optional<MotionFilter> pose_graph_odometry_motion_filter_;
 
   bool is_pose_estimator_ = false;
+  // 地图更新开关：定位模式下是否把节点/IMU/odom 加入 pose graph 做地图更新。
+  // false = 纯定位（不更新 pose graph，回到 commit2 之前行为）；建图模式恒更新（不受此影响）。
+  bool update_pose_graph_ = true;
 };
 
 }  // namespace
@@ -293,12 +306,14 @@ std::unique_ptr<TrajectoryBuilderInterface> CreateGlobalTrajectoryBuilder2D(
     const int trajectory_id, mapping::PoseGraph2D* const pose_graph,
     const TrajectoryBuilderInterface::LocalSlamResultCallback&
         local_slam_result_callback,
-    const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter) {
+    const absl::optional<MotionFilter>& pose_graph_odometry_motion_filter,
+    const bool update_pose_graph) {
   // 直接返回构造结果
   return absl::make_unique<
       GlobalTrajectoryBuilder<localization::PoseEstimator2D, mapping::PoseGraph2D>>(
       std::move(local_trajectory_builder), trajectory_id, pose_graph,
-      local_slam_result_callback, pose_graph_odometry_motion_filter);
+      local_slam_result_callback, pose_graph_odometry_motion_filter,
+      update_pose_graph);
 }
 
 void GlobalTrajectoryBuilderRegisterMetrics(metrics::FamilyFactory* factory) {

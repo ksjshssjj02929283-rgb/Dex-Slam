@@ -18,6 +18,10 @@ LOCALIZATION_UPDATER = {
   num_background_threads = 4,
   pose_graph = POSE_GRAPH,
   collate_by_trajectory = false,
+  -- 地图更新开关：定位时是否把节点/IMU/odom 加入 pose graph 做地图更新
+  -- （lifelong 更新 + 冗余节点剔除 + 二次保存）。
+  -- true  = 开启地图更新（默认）；false = 纯定位，不更新 pose graph、不二次保存。
+  update_pose_graph = true,
   -- chunk 化参数（定位侧据此建 ChunkMap2D::Options）。就地定义，不再共享
   -- chunk_map_options.lua（消除跨文件 include 与二次 include FATAL 风险）。
   chunk_map_options = {

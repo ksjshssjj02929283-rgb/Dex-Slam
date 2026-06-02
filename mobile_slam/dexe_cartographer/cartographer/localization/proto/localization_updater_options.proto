@@ -28,4 +28,7 @@ message LocalizationUpdaterOptions {
   bool collate_by_trajectory = 3;
   // Chunk 化参数（定位保存共用，与建图侧同一 ChunkMapOptions）。
   cartographer.mapping.proto.ChunkMapOptions chunk_map_options = 4;
+  // 地图更新开关：定位时是否把节点/IMU/odom 加入 pose graph 做地图更新（lifelong 更新
+  // + 冗余节点剔除 + 二次保存）。false = 纯定位，不更新 pose graph。默认 true。
+  bool update_pose_graph = 5;
 }

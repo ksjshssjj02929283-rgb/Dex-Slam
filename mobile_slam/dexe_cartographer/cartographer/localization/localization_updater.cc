@@ -260,7 +260,8 @@ int LocalizationUpdater::AddTrajectoryBuilder(
       CreateGlobalTrajectoryBuilder2D(
           std::move(pose_estimator_2d), trajectory_id,
           static_cast<mapping::PoseGraph2D*>(pose_graph_.get()),
-          local_slam_result_callback, pose_graph_odometry_motion_filter)));
+          local_slam_result_callback, pose_graph_odometry_motion_filter,
+          options_.update_pose_graph())));
 
   // 3. 向pose_graph中添加纯定位的trimmer
   MaybeAddPureLocalizationTrimmer(trajectory_id, trajectory_options,
@@ -1161,6 +1162,11 @@ proto::LocalizationUpdaterOptions CreateLocalizationUpdaterOptions(
     *options.mutable_chunk_map_options() = CreateChunkMapOptions(
         parameter_dictionary->GetDictionary("chunk_map_options").get());
   }
+  // 地图更新开关，缺省 true（保持移植后的 lifelong 更新行为）。
+  options.set_update_pose_graph(
+      parameter_dictionary->HasKey("update_pose_graph")
+          ? parameter_dictionary->GetBool("update_pose_graph")
+          : true);
   return options;
 }
 
