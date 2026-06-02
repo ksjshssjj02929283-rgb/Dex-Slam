@@ -417,11 +417,17 @@ void PoseGraph2D::ComputeConstraint(const NodeId& node_id,
     constraint_builder_.MaybeAddConstraint(
         submap_id, submap, node_id, constant_data, initial_relative_pose);
   }
-  // 定位时才有可能执行这块
-  else if (maybe_add_global_constraint) {
-    constraint_builder_.MaybeAddGlobalConstraint(submap_id, submap, node_id,
-                                                 constant_data);
-  }
+  // 定位时才有可能执行这块（建图时同轨迹恒走局部分支，不会到这）。
+  // 【禁用全局约束】定位中活动轨迹的全局位姿已由 PoseEstimator 维护（持续对加载地图
+  // 匹配 + 自带 TriggerGlobalRelocalization 全局重定位，并经 SetInitialTrajectoryPose
+  // 锚定到地图轨迹），node 与 frozen 地图 submap 的相对位姿已知，局部约束即足够且准确。
+  // 此处的全局约束是整图无先验暴力匹配（global_sampling_ratio=1 满触发、min_score=0.6
+  // 偏低），在连接过期后（global_constraint_search_after_n_seconds=10s）于重复结构/地图
+  // 边缘区极易误匹配，产生错误跨轨迹约束 → 优化被拉歪。故定位侧禁用，避免误匹配污染优化。
+  // else if (maybe_add_global_constraint) {
+  //   constraint_builder_.MaybeAddGlobalConstraint(submap_id, submap, node_id,
+  //                                                constant_data);
+  // }
 }
 
 
