@@ -16,6 +16,8 @@
 
 #include "cartographer/localization/localization_updater.h"
 
+#include <cmath>
+
 #include "absl/memory/memory.h"
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
@@ -236,6 +238,17 @@ int LocalizationUpdater::AddTrajectoryBuilder(
       << "Global static submap not available. Please load state from pbstream first.";
   pose_estimator_2d->InitGlobalMapsFromSubmap(global_static_submap_);
   
+  // 注入当前地图目录，使 LocalMapUpdater2D 的 debug data 落到 <map_dir>/ 下。
+  // 须在 SetChunkMap 之前（SetChunkMap 会按此目录落 chunk 调试）。
+  pose_estimator_2d->GetLocalMapUpdater()->SetDebugDir(loaded_map_dir_);
+
+  // chunk map 已在 LoadState 创建/加载（与 global_static_submap_ 等 map 元素一致）；
+  // 这里仅注入 LocalMapUpdater2D（须在 InitGlobalMapsFromSubmap 之前，
+  // 使其初始 local_submap_ 即走 chunk 拼装路径）。
+  if (chunk_map_) {
+    pose_estimator_2d->GetLocalMapUpdater()->SetChunkMap(chunk_map_);
+  }
+
   // 保存 PoseEstimator2D 指针
   pose_estimator_2d_ = pose_estimator_2d.get();
 
@@ -350,11 +363,14 @@ void LocalizationUpdater::ApplyOriginTransform(const transform::Rigid3d& T) {
 
 void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
                                 io::ProtoStreamWriterInterface* const writer) {
-  // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存
+  // 先从 global submap 构建 chunk map（方案 B：与保存的 submap 同源），
+  // 再交给 WritePbStream 在最后统一序列化（chunk 最后写）。
+  auto chunk_for_save = BuildChunkForSave(global_static_submap_);
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
-                    include_unfinished_submaps, global_static_submap_);
-  
-  if (global_static_submap_) {
+                    include_unfinished_submaps, global_static_submap_.get(),
+                    chunk_for_save.get());
+
+  if (global_static_submap_ && chunk_for_save) {
     LOG(INFO) << "=== Global Static Submap Save Statistics ===";
     
     // 获取轨迹节点数量
@@ -399,6 +415,13 @@ void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
     
     // Range data信息
     LOG(INFO) << "Range Data Entries: " << global_static_submap_->num_range_data();
+
+    // Chunk map信息
+    if (chunk_for_save) {
+      LOG(INFO) << "Chunk Map: " << chunk_for_save->NumChunks() << " chunks";
+    } else {
+      LOG(INFO) << "Chunk Map: none";
+    }
     
     LOG(INFO) << "============================================";
   }
@@ -435,13 +458,16 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
     }
   }
   
-  // 保存时传递选定的 submap
+  // 先从 submap_to_save 构建 chunk map（方案 B：chunk 与保存的 global submap 同源一致），
+  // 再交给 WritePbStream 在最后统一序列化（chunk 最后写）。
+  auto chunk_for_save = BuildChunkForSave(submap_to_save);
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps, submap_to_save);
-  
+                    include_unfinished_submaps, submap_to_save.get(),
+                    chunk_for_save.get());
+
   bool success = writer.Close();
   
-  if (success && global_static_submap_) {
+  if (success && global_static_submap_ && chunk_for_save) {
     LOG(INFO) << "Successfully saved state to: " << filename;
     LOG(INFO) << "=== Global Static Submap Save Statistics ===";
     
@@ -487,6 +513,13 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
     
     // Range data信息
     LOG(INFO) << "Range Data Entries: " << global_static_submap_->num_range_data();
+
+    // Chunk map信息
+    if (chunk_for_save) {
+      LOG(INFO) << "Chunk Map: " << chunk_for_save->NumChunks() << " chunks";
+    } else {
+      LOG(INFO) << "Chunk Map: none";
+    }
     
     LOG(INFO) << "============================================";
   }
@@ -870,6 +903,23 @@ std::map<int, int> LocalizationUpdater::LoadState(
         
         break;
       }
+      case SerializedData::kChunkMapInfo: {
+        // 记录 pbstream 携带的 chunk 元信息（chunk_length 用于"复用 or 重建"判断）。
+        has_loaded_chunks_ = true;
+        loaded_chunk_length_ = proto.chunk_map_info().chunk_length();
+        LOG(INFO) << "pbstream chunk map info: chunk_length=" << loaded_chunk_length_
+                  << ", num_chunks=" << proto.chunk_map_info().num_chunks();
+        break;
+      }
+      case SerializedData::kChunkSubmap: {
+        // 反序列化 pbstream 携带的 chunk Submap2D，收集供 AddTrajectoryBuilder 复用。
+        auto sm = std::make_shared<mapping::Submap2D>(
+            proto.chunk_submap().submap(), &conversion_tables_);
+        loaded_chunk_submaps_.emplace_back(proto.chunk_submap().gx(),
+                                           proto.chunk_submap().gy(),
+                                           std::move(sm));
+        break;
+      }
       default:
         LOG(WARNING) << "Skipping unknown message type in stream: "
                      << proto.GetTypeName();
@@ -947,6 +997,10 @@ std::map<int, int> LocalizationUpdater::LoadState(
   // std::string folder = home_dir + "/.dexe/data/submaps/";
   // global_static_submap_->grid()->DrawAsImage(folder, "global_static_submap.png");
 
+  // chunk map 创建/加载（与其他 map 元素一致，在 LoadState 完成）：
+  // pbstream 含 chunk 且 chunk_length 匹配 → 复用；否则从 global static map 重建。
+  CreateOrLoadChunkMap();
+
   return trajectory_remapping;
 }
 
@@ -966,6 +1020,12 @@ std::map<int, int> LocalizationUpdater::LoadStateFromFile(
                     ".pbstream file.";
   }
   LOG(INFO) << "Loading saved state '" << state_filename << "'...";
+  // 记录当前地图目录（= map.pbstream 所在目录），供 LocalMapUpdater2D debug data 落盘。
+  // 仅在调用方未显式 SetMapDir 时兜底（live 路径走 bridge.LoadState 已 SetMapDir）。
+  if (loaded_map_dir_.empty()) {
+    const size_t slash = state_filename.find_last_of('/');
+    if (slash != std::string::npos) loaded_map_dir_ = state_filename.substr(0, slash);
+  }
   io::ProtoStreamReader stream(state_filename);
   
   // 加载状态
@@ -999,19 +1059,92 @@ std::map<int, int> LocalizationUpdater::LoadStateFromFile(
       LOG(INFO) << "Successfully generated global static submap as fallback.";
     }
   }
-  
+
+  // chunk map 创建/加载兜底：旧图走 fallback 生成 global_static_submap_ 后才能建 chunk
+  // （LoadState 内已尝试，幂等；此处覆盖 fallback 路径）。
+  CreateOrLoadChunkMap();
+
   return trajectory_remapping;
+}
+
+void LocalizationUpdater::CreateOrLoadChunkMap() {
+  if (chunk_map_) return;  // 幂等：已创建则跳过
+  const auto& cm_opts = options_.chunk_map_options();
+  if (!cm_opts.use_chunk_map()) return;
+  if (!global_static_submap_) {
+    LOG(WARNING) << "[chunk] global_static_submap_ 为空，跳过 chunk map 创建";
+    return;
+  }
+  ChunkMap2D::Options copt;
+  copt.chunk_length = cm_opts.chunk_length() > 0.0 ? cm_opts.chunk_length() : 20.0;
+  copt.load_radius = cm_opts.load_radius() > 0 ? cm_opts.load_radius() : 2;
+  copt.unload_radius = cm_opts.unload_radius() > copt.load_radius
+                           ? cm_opts.unload_radius()
+                           : copt.load_radius + 1;
+  chunk_map_ = std::make_shared<ChunkMap2D>(copt, &conversion_tables_);
+
+  const bool reuse = has_loaded_chunks_ &&
+                     std::abs(loaded_chunk_length_ - copt.chunk_length) < 1e-6 &&
+                     !loaded_chunk_submaps_.empty();
+  if (reuse) {
+    LOG(INFO) << "[chunk] 复用 pbstream chunk map（" << loaded_chunk_submaps_.size()
+              << " chunks, chunk_length=" << copt.chunk_length << "）";
+    chunk_map_->LoadFromChunkSubmaps(std::move(loaded_chunk_submaps_));
+  } else {
+    LOG(INFO) << "[chunk] "
+              << (has_loaded_chunks_ ? "pbstream chunk_length 不符配置" : "pbstream 无 chunk")
+              << " → 从 global static map 重建 chunk map（chunk_length=" << copt.chunk_length
+              << "）";
+    chunk_map_->BuildFromSubmap(global_static_submap_);
+  }
+  loaded_chunk_submaps_.clear();
+}
+
+std::unique_ptr<ChunkMap2D> LocalizationUpdater::BuildChunkForSave(
+    const std::shared_ptr<mapping::Submap2D>& submap) {
+  const auto& cm = options_.chunk_map_options();
+  if (!cm.use_chunk_map() || !submap) return nullptr;
+  ChunkMap2D::Options copt;
+  copt.chunk_length = cm.chunk_length() > 0.0 ? cm.chunk_length() : 20.0;
+  copt.load_radius = cm.load_radius() > 0 ? cm.load_radius() : 2;
+  copt.unload_radius = cm.unload_radius() > copt.load_radius
+                           ? cm.unload_radius()
+                           : copt.load_radius + 1;
+  auto temp = std::make_unique<ChunkMap2D>(copt, &conversion_tables_);
+  temp->BuildFromSubmap(submap);  // 方案 B：从待保存的 global submap 切分，保证一致
+  return temp;
 }
 
 /**
  * @brief Create a Map Builder object
- * 
- * @param options 
- * @return std::unique_ptr<LocalizationUpdaterInterface> 
+ *
+ * @param options
+ * @return std::unique_ptr<LocalizationUpdaterInterface>
  */
 std::unique_ptr<LocalizationUpdater> CreateLocalizationUpdater(
     const proto::LocalizationUpdaterOptions& options) {
   return absl::make_unique<LocalizationUpdater>(options);
+}
+
+// 解析共享的 chunk 化参数（chunk 现完全归定位侧，建图侧不再涉及）。
+// 字段缺省安全：use_chunk_map=false / chunk_length=20 / load=2 / unload=3。
+mapping::proto::ChunkMapOptions CreateChunkMapOptions(
+    common::LuaParameterDictionary* const parameter_dictionary) {
+  mapping::proto::ChunkMapOptions options;
+  options.set_use_chunk_map(
+      parameter_dictionary->HasKey("use_chunk_map")
+          ? parameter_dictionary->GetBool("use_chunk_map")
+          : false);
+  options.set_chunk_length(parameter_dictionary->HasKey("chunk_length")
+                             ? parameter_dictionary->GetDouble("chunk_length")
+                             : 20.0);
+  options.set_load_radius(parameter_dictionary->HasKey("load_radius")
+                              ? parameter_dictionary->GetInt("load_radius")
+                              : 2);
+  options.set_unload_radius(parameter_dictionary->HasKey("unload_radius")
+                                ? parameter_dictionary->GetInt("unload_radius")
+                                : 3);
+  return options;
 }
 
 proto::LocalizationUpdaterOptions CreateLocalizationUpdaterOptions(
@@ -1024,6 +1157,10 @@ proto::LocalizationUpdaterOptions CreateLocalizationUpdaterOptions(
       parameter_dictionary->GetBool("collate_by_trajectory"));
   *options.mutable_pose_graph_options() = mapping::CreatePoseGraphOptions(
       parameter_dictionary->GetDictionary("pose_graph").get());
+  if (parameter_dictionary->HasKey("chunk_map_options")) {
+    *options.mutable_chunk_map_options() = CreateChunkMapOptions(
+        parameter_dictionary->GetDictionary("chunk_map_options").get());
+  }
   return options;
 }
 

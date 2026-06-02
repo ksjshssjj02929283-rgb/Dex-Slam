@@ -216,6 +216,47 @@ bool Grid2D::DrawAsImage(
   return true;
 }
 
+bool Grid2D::DrawAsImageOnCanvas(
+  const std::string& folder,
+  const std::string& filename,
+  const MapLimits& canvas) const
+{
+  if (!boost::filesystem::is_directory(folder)) {
+    if (!boost::filesystem::create_directories(folder)) {
+      LOG(ERROR) << "DrawAsImageOnCanvas: " << folder << " is not a directory.";
+      return false;
+    }
+  }
+
+  const CellLimits& cl = canvas.cell_limits();
+  const int nx = cl.num_x_cells;
+  const int ny = cl.num_y_cells;
+  const double res = canvas.resolution();
+  const double min_x = canvas.max().x() - nx * res;  // 画布左边界（最小 X / 西）
+  const double max_y = canvas.max().y();             // 画布上边界（最大 Y / 北）
+
+  // 标准"北朝上"图：行 py=0 在最上(最大 Y/北)，列 px=0 在最左(最小 X/西)，无额外旋转。
+  // 各 chunk tile 同此约定 → 按"gx 向右、gy 向上(翻转 y)"摆放即可无缝拼接。
+  cv::Mat img(ny, nx, CV_8UC1, cv::Scalar(127));  // 初始全灰=未知
+  for (int py = 0; py < ny; ++py) {
+    for (int px = 0; px < nx; ++px) {
+      const Eigen::Vector2f world(
+          static_cast<float>(min_x + (px + 0.5) * res),
+          static_cast<float>(max_y - (py + 0.5) * res));
+      const Eigen::Array2i gi = limits().GetCellIndex(world);
+      if (!limits().Contains(gi) || !IsKnown(gi)) {
+        continue;  // 画布内但本 grid 未覆盖/未知 → 保持灰
+      }
+      const int value = correspondence_cost_cells()[ToFlatIndex(gi)];
+      img.at<uchar>(py, px) =
+          static_cast<uchar>(ValueToProbability(value) * 255);
+    }
+  }
+
+  cv::imwrite(folder + filename, img);
+  return true;
+}
+
 proto::Grid2D Grid2D::ToProto() const {
   proto::Grid2D result;
   *result.mutable_limits() = mapping::ToProto(limits_);

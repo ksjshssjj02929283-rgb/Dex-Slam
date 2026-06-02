@@ -177,3 +177,15 @@ install(TARGETS merge_maps_tool
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+# pbstream 快速检查：ros2 run cartographer_ros pbstream_inspector <map.pbstream>
+google_binary(pbstream_inspector
+  SRCS
+    tools/pbstream_inspector_main.cc
+)
+
+install(TARGETS pbstream_inspector
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)

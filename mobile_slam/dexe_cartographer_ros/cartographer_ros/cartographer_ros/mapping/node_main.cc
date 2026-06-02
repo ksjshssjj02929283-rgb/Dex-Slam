@@ -167,6 +167,12 @@ private:
       return;
     }
     const std::string this_map_folder = FLAGS_map_folder + "/" + map_name_;
+    // 重建图：若该 map name 对应的文件夹已存在，先清空，避免与旧地图数据（map.pbstream、
+    // map 栅格文件、旧 chunk 残留等）混合。
+    if (!ClearDirectoryIfExists(this_map_folder, res->message)) {
+      res->success = false;
+      return;
+    }
     if (!EnsureDirectoryExists(this_map_folder)) {
       res->success = false;
       res->message = "Failed to create map subfolder";
@@ -340,6 +346,21 @@ private:
       LOG(ERROR) << "Filesystem error for path '" << path << "': " << e.what();
       return false;
     }
+  }
+
+  // 若目录已存在则清空，返回 true 表示成功（不存在也算成功）。
+  // 失败时将错误描述写入 error_msg。
+  bool ClearDirectoryIfExists(const std::string& path, std::string& error_msg) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return true;
+    std::filesystem::remove_all(path, ec);
+    if (ec) {
+      error_msg = "Failed to clear existing map folder";
+      LOG(ERROR) << "Failed to clear existing map folder '" << path << "': " << ec.message();
+      return false;
+    }
+    LOG(INFO) << "Cleared existing map folder before mapping: " << path;
+    return true;
   }
 
   // 同步调用 Trigger（等待存在 + 调用）

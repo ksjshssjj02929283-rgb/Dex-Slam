@@ -164,6 +164,14 @@ class LocalizationUpdaterBridge {
   GetTrajectoryPoses() const;
 
   visualization_msgs::msg::MarkerArray GetFeatureMap();
+
+  // chunk map 可视化（map_frame）：
+  //  - GetChunkGridMarkers：全部 chunk 的方格边框（LINE_STRIP）+ id 文字 → 看分格情况（静态，发一次即可）。
+  //  - GetActiveChunkMarkers：当前 active（load_radius 方块内）chunk 的高亮边框 → 每帧发；首项 DELETEALL 清旧。
+  // chunk map 未启用（chunk_map()==nullptr）时返回空。
+  visualization_msgs::msg::MarkerArray GetChunkGridMarkers();
+  visualization_msgs::msg::MarkerArray GetActiveChunkMarkers();
+
   // std::vector<visualization_msgs::Marker> GetCodeMap(int& marker_id);
   sensor_msgs::msg::PointCloud2 GetCloudMap();
   std::vector<visualization_msgs::msg::Marker> GetLineMap(int& marker_id);

@@ -55,6 +55,9 @@ constexpr char kLocalFeatureMapTopic[] = "local_feature_map";
 constexpr char kMatchedFeatureTopic[] = "matched_feature";
 constexpr char kScanMatchedPointCloudTopic[] = "scan_matched_points2";
 constexpr char kLocalizationStateTopic[] = "localization_state";
+// chunk map 可视化：全部 chunk 方格（看分格）/ 当前 active chunk 高亮。
+constexpr char kChunkMapGridTopic[] = "chunk_map_grid";
+constexpr char kActiveChunkMapTopic[] = "active_chunk_map";
 constexpr char kParticlePosesTopic[] = "particle_poses";
 
 constexpr double kConstraintPublishPeriodSec = 0.5;

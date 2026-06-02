@@ -152,7 +152,7 @@ LocalizationNode::LocalizationNode(
   global_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
       kGlobalPointCloudTopic, qos_latched);
   global_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kGlobalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+      kGlobalFeatureMapTopic, qos_latched);
   local_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
       kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
   local_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -163,6 +163,11 @@ LocalizationNode::LocalizationNode(
       kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
   localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
       kLocalizationStateTopic, kLatestOnlyPublisherQueueSize);
+  // chunk map 分格（latched：静态、发一次，RViz 后接入也能看到）+ active chunk（每帧）。
+  chunk_map_grid_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kChunkMapGridTopic, qos_latched);
+  active_chunk_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+      kActiveChunkMapTopic, kLatestOnlyPublisherQueueSize);
 
   // 服务  
   submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
@@ -396,7 +401,17 @@ void LocalizationNode::PublishLocalTrajectoryData()
                                      line_map_msg.begin(), line_map_msg.end());
       global_feature_map_publisher_->publish(feature_map_msg);
 
+      // chunk 分格（静态）：latched 发一次即可。
+      chunk_map_grid_publisher_->publish(
+          localization_updater_bridge_.GetChunkGridMarkers());
+
       first_publish_map = false;
+    }
+
+    // active chunk（当前 load_radius 方块内的 chunk）：每次更新发一次。
+    if (active_chunk_map_publisher_->get_subscription_count() > 0) {
+      active_chunk_map_publisher_->publish(
+          localization_updater_bridge_.GetActiveChunkMarkers());
     }
 
   // 获得不同轨迹的数据，并进行插值

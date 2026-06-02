@@ -834,6 +834,16 @@ void Submap2D::Finish() {
   set_insertion_finished(true);
 }
 
+void Submap2D::FinishStatic() {
+  CHECK(grid_);
+  CHECK(!insertion_finished());
+  // 只裁剪 grid 到已知 cell 包围盒（省序列化/内存）；cloud_/line 已是最终数据，保持不动。
+  // 不建/不碰 ikd-tree——避免 Finish() 的 FreshCloudData 用空树刷空直填的 cloud_，
+  // 也避免为只读 chunk 建树再销毁的无谓开销。
+  grid_ = grid_->ComputeCroppedGrid();
+  set_insertion_finished(true);
+}
+
 ActiveSubmaps2D::ActiveSubmaps2D(const proto::SubmapsOptions2D& options)
     : options_(options), range_data_inserter_(CreateRangeDataInserter()) {}
 

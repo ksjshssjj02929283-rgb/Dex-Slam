@@ -15,14 +15,17 @@
 syntax = "proto3";
 
 import "cartographer/mapping/proto/pose_graph_options.proto";
+import "cartographer/mapping/proto/chunk_map_options.proto";
 
 package cartographer.localization.proto;
 
 message LocalizationUpdaterOptions {
   // Number of threads to use for background computations.
   int32 num_background_threads = 1;
-  
+
   cartographer.mapping.proto.PoseGraphOptions pose_graph_options = 2;
   // Sort sensor input independently for each trajectory.
   bool collate_by_trajectory = 3;
+  // Chunk 化参数（定位保存共用，与建图侧同一 ChunkMapOptions）。
+  cartographer.mapping.proto.ChunkMapOptions chunk_map_options = 4;
 }

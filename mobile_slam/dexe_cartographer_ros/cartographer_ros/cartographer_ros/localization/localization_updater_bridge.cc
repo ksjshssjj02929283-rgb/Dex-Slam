@@ -146,6 +146,11 @@ void LocalizationUpdaterBridge::LoadState(const std::string& state_filename,
       << "The file containing the state to be loaded must be a "
          ".pbstream file.";
   LOG(INFO) << "Loading saved state '" << state_filename << "'...";
+  // 注入当前地图目录（= map.pbstream 所在目录），供 LocalMapUpdater2D 落 debug data 到地图目录下。
+  const size_t last_slash = state_filename.find_last_of('/');
+  if (last_slash != std::string::npos) {
+    localization_updater_->SetMapDir(state_filename.substr(0, last_slash));
+  }
   cartographer::io::ProtoStreamReader stream(state_filename);
   localization_updater_->LoadState(&stream, load_frozen_state);
 }
@@ -757,6 +762,131 @@ visualization_msgs::msg::MarkerArray LocalizationUpdaterBridge::GetFeatureMap()
     map_list.markers.push_back(marker);
   }
   return map_list;
+}
+
+namespace {
+// 在 markers 里追加一个 chunk 方格边框（LINE_STRIP 闭合 5 点）。
+void AppendChunkBox(visualization_msgs::msg::MarkerArray* arr,
+                    const std::string& frame, const rclcpp::Time& stamp,
+                    const std::string& ns, int id, double cx, double cy,
+                    double half, double width, float r, float g, float b,
+                    float a, double z) {
+  visualization_msgs::msg::Marker box;
+  box.header.frame_id = frame;
+  box.header.stamp = stamp;
+  box.ns = ns;
+  box.id = id;
+  box.type = visualization_msgs::msg::Marker::LINE_STRIP;
+  box.action = visualization_msgs::msg::Marker::ADD;
+  box.scale.x = width;
+  box.color.r = r; box.color.g = g; box.color.b = b; box.color.a = a;
+  box.pose.orientation.w = 1.0;
+  const double xs[5] = {cx - half, cx + half, cx + half, cx - half, cx - half};
+  const double ys[5] = {cy - half, cy - half, cy + half, cy + half, cy - half};
+  for (int i = 0; i < 5; ++i) {
+    geometry_msgs::msg::Point p;
+    p.x = xs[i]; p.y = ys[i]; p.z = z;
+    box.points.push_back(p);
+  }
+  arr->markers.push_back(box);
+}
+}  // namespace
+
+visualization_msgs::msg::MarkerArray
+LocalizationUpdaterBridge::GetChunkGridMarkers() {
+  visualization_msgs::msg::MarkerArray arr;
+  if (!localization_updater_) return arr;
+  const auto chunk_map = localization_updater_->chunk_map();
+  if (!chunk_map || chunk_map->empty()) return arr;
+  const double L = chunk_map->chunk_length();
+  const double half = 0.5 * L;
+  const auto stamp = rclcpp::Clock().now();
+  int id = 0;
+  for (const auto& gxy : chunk_map->ChunkIds()) {
+    const double cx = gxy.first * L;
+    const double cy = gxy.second * L;
+    // 灰色半透明填充（CUBE，整块 chunk）：表示该处有 chunk（分格底色）。在最底层（z=0）。
+    visualization_msgs::msg::Marker fill;
+    fill.header.frame_id = node_options_.map_frame;
+    fill.header.stamp = stamp;
+    fill.ns = "chunk_grid_fill";
+    fill.id = id;
+    fill.type = visualization_msgs::msg::Marker::CUBE;
+    fill.action = visualization_msgs::msg::Marker::ADD;
+    fill.pose.position.x = cx;
+    fill.pose.position.y = cy;
+    fill.pose.position.z = 0.0;
+    fill.pose.orientation.w = 1.0;
+    fill.scale.x = L;
+    fill.scale.y = L;
+    fill.scale.z = 0.01;
+    fill.color.r = 0.5f; fill.color.g = 0.5f; fill.color.b = 0.5f; fill.color.a = 0.10f;
+    arr.markers.push_back(fill);
+    // 绿色细边框（看分格）。略抬高以盖在灰底之上。
+    AppendChunkBox(&arr, node_options_.map_frame, stamp, "chunk_grid", id++,
+                   cx, cy, half, 0.05, 0.2f, 0.8f, 0.2f, 0.8f, 0.01);
+    // chunk id 文字。
+    visualization_msgs::msg::Marker txt;
+    txt.header.frame_id = node_options_.map_frame;
+    txt.header.stamp = stamp;
+    txt.ns = "chunk_grid_id";
+    txt.id = id++;
+    txt.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    txt.action = visualization_msgs::msg::Marker::ADD;
+    txt.pose.position.x = cx;
+    txt.pose.position.y = cy;
+    txt.pose.position.z = 0.01;
+    txt.pose.orientation.w = 1.0;
+    txt.scale.z = 0.6;
+    txt.color.r = 0.2f; txt.color.g = 0.8f; txt.color.b = 0.2f; txt.color.a = 0.9f;
+    txt.text = std::to_string(gxy.first) + "," + std::to_string(gxy.second);
+    arr.markers.push_back(txt);
+  }
+  return arr;
+}
+
+visualization_msgs::msg::MarkerArray
+LocalizationUpdaterBridge::GetActiveChunkMarkers() {
+  visualization_msgs::msg::MarkerArray arr;
+  // 首项 DELETEALL：active 集随机器人移动变化，先清掉上一帧的高亮。
+  visualization_msgs::msg::Marker clear;
+  clear.header.frame_id = node_options_.map_frame;
+  clear.action = visualization_msgs::msg::Marker::DELETEALL;
+  arr.markers.push_back(clear);
+
+  if (!localization_updater_) return arr;
+  const auto chunk_map = localization_updater_->chunk_map();
+  if (!chunk_map || chunk_map->empty()) return arr;
+  const double L = chunk_map->chunk_length();
+  const double half = 0.5 * L;
+  const auto stamp = rclcpp::Clock().now();
+  int id = 0;
+  for (const auto& gxy : chunk_map->ActiveChunkIds()) {
+    const double cx = gxy.first * L;
+    const double cy = gxy.second * L;
+    // 绿色半透明填充（CUBE，flat 整块 chunk）：表示该 chunk 正在使用中。
+    // z 略高于地图、低于红框 → 显示在地图上、被红框压在下层。
+    visualization_msgs::msg::Marker fill;
+    fill.header.frame_id = node_options_.map_frame;
+    fill.header.stamp = stamp;
+    fill.ns = "active_chunk_fill";
+    fill.id = id;
+    fill.type = visualization_msgs::msg::Marker::CUBE;
+    fill.action = visualization_msgs::msg::Marker::ADD;
+    fill.pose.position.x = cx;
+    fill.pose.position.y = cy;
+    fill.pose.position.z = 0.02;  // 高于 chunk 灰底(0.0)/绿框(0.01)
+    fill.pose.orientation.w = 1.0;
+    fill.scale.x = L;
+    fill.scale.y = L;
+    fill.scale.z = 0.01;
+    fill.color.r = 0.1f; fill.color.g = 0.8f; fill.color.b = 0.1f; fill.color.a = 0.2f;
+    arr.markers.push_back(fill);
+    // 红色粗边框、最上层（看当前 active 区边界）。
+    AppendChunkBox(&arr, node_options_.map_frame, stamp, "active_chunk", id++,
+                   cx, cy, half, 0.25, 0.9f, 0.1f, 0.1f, 0.95f, 0.03);
+  }
+  return arr;
 }
 
 sensor_msgs::msg::PointCloud2 LocalizationUpdaterBridge::GetCloudMap()

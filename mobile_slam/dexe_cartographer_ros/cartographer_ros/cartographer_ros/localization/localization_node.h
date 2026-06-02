@@ -229,6 +229,9 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr matched_feature_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_matched_point_cloud_publisher_;
   rclcpp::Publisher<nav_interfaces::msg::LocalizationState>::SharedPtr localization_state_publisher_;
+  // chunk map 可视化：全部 chunk 方格（分格，latched 发一次）/ 当前 active chunk（每帧发）。
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr chunk_map_grid_publisher_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr active_chunk_map_publisher_;
 
   // Services (kept alive as members)
   rclcpp::Service<cartographer_ros_msgs::srv::SubmapQuery>::SharedPtr submap_query_service_;

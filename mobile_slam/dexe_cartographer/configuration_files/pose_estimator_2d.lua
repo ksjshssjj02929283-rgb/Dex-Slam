@@ -120,6 +120,10 @@ POSE_ESTIMATOR_2D = {
     -- 3 (PERSISTENT): 更长时间的保留，会存盘，下次运行也会读取
     dynamic_map_policy = 3,  -- 默认使用 PERSISTENT 策略
     save_debug_data = true,
+    -- ===== Chunk 化（Phase 4-a）=====
+    -- 无 chunk 选项：开关/尺寸全归 localization_updater.lua 的 chunk_map_options（单一来源）；
+    -- LocalMapUpdater2D 由注入的 chunk_map_ 启用。debug 落盘由上面的 save_debug_data 统一开关，
+    -- 落到当前地图目录下（用 chunk：<map_dir>/debug/all_chunks/ + <map_dir>/debug/；不用：<map_dir>/debug/）。
   },
 
   use_online_correlative_scan_matching = true,
