@@ -99,25 +99,44 @@ std::vector<SubmapId> PoseGraph2D::InitializeGlobalSubmapPoses(
   const auto& submap_data = optimization_problem_->submap_data();
   // 如果是插入第一帧submap，设定初始的连接（如果是多个轨迹，则设定与目标轨迹的连接）
   if (insertion_submaps.size() == 1) {
-    // If we don't already have an entry for the first submap, add one.
-    if (submap_data.SizeOfTrajectoryOrZero(trajectory_id) == 0) {
-      if (data_.initial_trajectory_poses.count(trajectory_id) > 0) {
+    // AppendNode() 已把 insertion_submaps.front() 作为该轨迹在 data_.submap_data
+    // 中最后一个 submap。两种情形：
+    //   - 正常首帧：它是 {trajectory_id, 0}。
+    //   - 定位中 active_submaps_ 被 clear 后重建（ScanMatch 匹配失败兜底 / recovery，
+    //     见 pose_estimator_2d.cc 的 active_submaps_.clear()）：local map 重启，insertion
+    //     退回 size==1，但此时 front() 是出现在已有 submap 之后的"重启 submap"，
+    //     位于该轨迹的最后一个 submap id（index > 0）。
+    // 统一处理：取 data_ 中该轨迹的实际最后 submap id，而非硬编码 {trajectory_id, 0}。
+    // 这样把每次 local map 重启当作该轨迹内的新 submap 段，避免 InitializeGlobalSubmapPoses
+    // 不变量被打破（旧实现硬编码 {traj,0} 会与重启 submap 不匹配而 FATAL）。
+    const SubmapId data_last_submap_id =
+        std::prev(data_.submap_data.EndOfTrajectory(trajectory_id))->id;
+    // 若优化问题中尚无该 submap，则加入（首帧 or 重启帧均需要）。
+    if (!submap_data.Contains(data_last_submap_id)) {
+      if (submap_data.SizeOfTrajectoryOrZero(trajectory_id) == 0 &&
+          data_.initial_trajectory_poses.count(trajectory_id) > 0) {
         data_.trajectory_connectivity_state.Connect(
             trajectory_id,
             data_.initial_trajectory_poses.at(trajectory_id).to_trajectory_id,
             time);
       }
-      // 向优化问题中加入一个submap，submap在global frame中的位姿
+      if (data_last_submap_id.submap_index != 0) {
+        LOG(WARNING) << "[PoseGraph2D] local map restart on trajectory "
+                     << trajectory_id << ": new submap " << data_last_submap_id
+                     << " starts a fresh segment (active_submaps_ cleared).";
+      }
+      // submap 全局位姿 = 轨迹 local→global × submap local_pose。
+      // local 帧在 clear 前后连续（local_pose_ 不随 active_submaps_ 重置），
+      // 故重启 submap 也落到正确全局位姿。
       optimization_problem_->AddSubmap(
           trajectory_id, transform::Project2D(
                              ComputeLocalToGlobalTransform(
                                  data_.global_submap_poses_2d, trajectory_id) *
                              insertion_submaps[0]->local_pose()));
     }
-    CHECK_EQ(1, submap_data.SizeOfTrajectoryOrZero(trajectory_id));
-    const SubmapId submap_id{trajectory_id, 0};
-    CHECK(data_.submap_data.at(submap_id).submap == insertion_submaps.front());
-    return {submap_id};
+    CHECK(data_.submap_data.at(data_last_submap_id).submap ==
+          insertion_submaps.front());
+    return {data_last_submap_id};
   }
   // 除了第一次插入submap，insertion_submaps的size就是2
   CHECK_EQ(2, insertion_submaps.size());
