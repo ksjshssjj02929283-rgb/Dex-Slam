@@ -379,7 +379,9 @@ void PoseGraph2D::ComputeConstraint(const NodeId& node_id,
       auto* mutable_submap = const_cast<Submap2D*>(submap);
       LOG(INFO) << "[PoseGraph2D] Rebuilding ikd-tree for submap " << submap_id
                 << " before constraint computation.";
-      mutable_submap->RebuildIkdTrees();
+      return;
+      // mutable_submap->RebuildIkdTrees();
+      // mutable_submap->Finish();
     }
   }
 
@@ -471,13 +473,6 @@ WorkItem::Result PoseGraph2D::ComputeConstraintsForNode(
     // trajectories scheduled for deletion.
     // TODO(danielsievers): Add a member variable and avoid having to copy
     // them out here.
-    // 向finished_submap_ids中加入已经插入完毕的submap的id
-    for (const auto& submap_id_data : data_.submap_data) {
-      if (submap_id_data.data.state == SubmapState::kFinished) {
-        CHECK_EQ(submap_id_data.data.node_ids.count(node_id), 0);
-        finished_submap_ids.emplace_back(submap_id_data.id);
-      }
-    }
     // 如果是刚刚finished的submap
     if (newly_finished_submap) {
       const SubmapId newly_finished_submap_id = submap_ids.front();
@@ -489,6 +484,25 @@ WorkItem::Result PoseGraph2D::ComputeConstraintsForNode(
       finished_submap_data.state = SubmapState::kFinished;
       // 刚结束的这个子图里包含的所有节点
       newly_finished_submap_node_ids = finished_submap_data.node_ids;
+    }
+
+    // 更新 active submap 集合（选最近的 kMaxActiveSubmaps 个 kFinished submap）。
+    // 若本次有 newly_finished_submap，额外将其加入 active 集合确保当前帧参与约束计算。
+    {
+      absl::optional<SubmapId> nfs_id;
+      if (newly_finished_submap) {
+        nfs_id = submap_ids.front();
+      }
+      UpdateActiveSubmaps(node_id, nfs_id);
+    }
+
+    // 将 active submap 中未包含当前 node 的 submap 加入约束候选列表
+    // （只对激活的 submap 计算约束，不再遍历所有 finished submap）
+    for (const auto& sid : active_submap_ids_) {
+      if (!data_.submap_data.Contains(sid)) continue;
+      if (data_.submap_data.at(sid).node_ids.count(node_id) == 0) {
+        finished_submap_ids.emplace_back(sid);
+      }
     }
   }
 
@@ -512,6 +526,7 @@ WorkItem::Result PoseGraph2D::ComputeConstraintsForNode(
       }
     }
   }
+
   constraint_builder_.NotifyEndOfNode();
   absl::MutexLock locker(&mutex_);
   ++num_nodes_since_last_loop_closure_;
@@ -523,6 +538,115 @@ WorkItem::Result PoseGraph2D::ComputeConstraintsForNode(
   return WorkItem::Result::kDoNotRunOptimization;
 }
 
+/**
+ * @brief 更新 active submap 集合：
+ *        - 按当前 node 到 kFinished submap 的距离排序，取最近 kMaxActiveSubmaps 个。
+ *        - 若指定了 newly_finished_submap_id，额外将其加入 active 集合（不占距离槽位）。
+ *          当该 submap 后续因距离过远退出 active 集合时，其 ikd-tree 会被正常销毁。
+ *        - 新进入集合的 submap：重建 ikd-tree 并 Finish（切换为 PCL 只读后端）
+ *        - 离开集合的 submap：销毁 ikd-tree 以释放内存
+ * 必须在持有 mutex_ 的情况下调用。
+ */
+void PoseGraph2D::UpdateActiveSubmaps(
+    const NodeId& node_id,
+    const absl::optional<SubmapId>& newly_finished_submap_id) {
+  // 1. 获取当前 node 的 global pose（2D）
+  const auto& node_data = optimization_problem_->node_data();
+  if (!node_data.Contains(node_id)) return;
+  const Eigen::Vector2d node_pos =
+      node_data.at(node_id).global_pose_2d.translation();
+
+  // 2. 收集所有 kFinished 的 submap 及其到当前 node 的距离
+  const auto& submap_data_opt = optimization_problem_->submap_data();
+  std::vector<std::pair<double, SubmapId>> dist_and_id;
+  for (const auto& submap_id_data : data_.submap_data) {
+    if (submap_id_data.data.state != SubmapState::kFinished) continue;
+    const SubmapId& sid = submap_id_data.id;
+    if (!submap_data_opt.Contains(sid)) continue;
+    const Eigen::Vector2d submap_pos =
+        submap_data_opt.at(sid).global_pose.translation();
+    const double dist = (node_pos - submap_pos).norm();
+    dist_and_id.emplace_back(dist, sid);
+  }
+
+  // 3. 按距离排序，取最近 kMaxActiveSubmaps 个
+  std::sort(dist_and_id.begin(), dist_and_id.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+
+  // 4. 构建 new_active：距离最近的 kMaxActiveSubmaps 个
+  std::set<SubmapId> new_active;
+  for (int i = 0; i < std::min(kMaxActiveSubmaps, (int)dist_and_id.size()); ++i) {
+    new_active.insert(dist_and_id[i].second);
+  }
+  // newly_finished_submap_id 额外插入（不占距离槽位），确保刚完成的 submap
+  // 在当前帧一定参与约束计算；后续帧若距离过远则会正常退出 active 集合并销毁 ikd-tree。
+  if (newly_finished_submap_id.has_value() &&
+      data_.submap_data.Contains(*newly_finished_submap_id) &&
+      data_.submap_data.at(*newly_finished_submap_id).state ==
+          SubmapState::kFinished) {
+    new_active.insert(*newly_finished_submap_id);
+  }
+  LOG(INFO) << "new_active size: " << new_active.size() << ", active_submap_ids_ size: "
+            << active_submap_ids_.size();
+  LOG(INFO) << "newly finshed submap id: "
+            <<(newly_finished_submap_id.has_value() ?
+               std::to_string(newly_finished_submap_id->trajectory_id) +
+               "_" + std::to_string(newly_finished_submap_id->submap_index) : "nullopt");
+  // 5. 计算进入/离开集合的 submap
+  //    注意：active_submap_ids_ 中的 sid 可能已被 trimmer 从 data_.submap_data 删除，
+  //    必须先用 Contains() 检查，避免 at() 抛出 out_of_range。
+  std::vector<SubmapId> entering, leaving;
+  for (const auto& sid : new_active) {
+    if (active_submap_ids_.count(sid) == 0) entering.push_back(sid);
+  }
+  for (const auto& sid : active_submap_ids_) {
+    if (new_active.count(sid) == 0) leaving.push_back(sid);
+  }
+
+  // 6. 处理离开集合的 submap：销毁 ikd-tree 节省内存
+  for (const auto& sid : leaving) {
+    if (!data_.submap_data.Contains(sid)) continue;
+    const Submap2D* submap_const =
+        static_cast<const Submap2D*>(data_.submap_data.at(sid).submap.get());
+    if (submap_const == nullptr) continue;
+    auto* mutable_submap = const_cast<Submap2D*>(submap_const);
+    if (mutable_submap->cloud_ikdtree() != nullptr) {
+      mutable_submap->DestroyIkdTrees();
+      LOG(INFO) << "[ActiveSubmaps] Destroyed ikd-tree for submap " << sid;
+    }
+  }
+
+  // 7. 处理新进入集合的 submap：若 ikd-tree 为空则重建并 Finish（PCL 只读后端）
+  //    注意：newly_finished_submap 在 Submap2D::Finish() 中已对 ikdtree 调用过
+  //    iKdTree::Finish()，cloud_ikdtree() != nullptr，此处跳过重建，直接使用。
+  //    对于其他历史 submap（从 proto 加载，cloud_ikdtree() == nullptr），需要重建。
+  for (const auto& sid : entering) {
+    if (!data_.submap_data.Contains(sid)) continue;
+    const Submap2D* submap_const =
+        static_cast<const Submap2D*>(data_.submap_data.at(sid).submap.get());
+    if (submap_const == nullptr) continue;
+    auto* mutable_submap = const_cast<Submap2D*>(submap_const);
+    if (mutable_submap->cloud_ikdtree() == nullptr) {
+      LOG(INFO) << "[ActiveSubmaps] Rebuilding ikd-tree for submap " << sid;
+      mutable_submap->RebuildIkdTrees();
+      mutable_submap->FinishIkdTrees();
+    }
+  }
+
+  // 8. 更新集合：只保留 data_.submap_data 中仍然存在的条目
+  std::set<SubmapId> valid_active;
+  for (const auto& sid : new_active) {
+    if (data_.submap_data.Contains(sid)) valid_active.insert(sid);
+  }
+  active_submap_ids_ = std::move(valid_active);
+  std::string active_sids_str;
+  for (const auto& sid : active_submap_ids_) {
+    active_sids_str += std::to_string(sid.trajectory_id) + "_" +
+                       std::to_string(sid.submap_index) + " ";
+  }
+  LOG(INFO) << "[ActiveSubmaps] Updated active submaps for node " << node_id
+            << ": " << active_sids_str;
+}
 /**
  * @brief 获取该 node 和该 submap 中的 node 中较新的时间
  * 
@@ -857,6 +981,20 @@ void PoseGraph2D::AddSubmapFromProto(
     const std::shared_ptr<const Submap2D> submap_ptr =
         std::make_shared<const Submap2D>(submap.submap_2d(),
                                          &conversion_tables_);
+    // 诊断日志：检查反序列化后的 submap 是否含有 grid 数据
+    // 若 grid_ 为 nullptr（proto 中无 grid 字段），则 ToResponseProto 将返回空 textures，
+    // 导致 RViz 无法渲染该 submap（submap 存在于 SubmapList 但无纹理显示）。
+    if (!submap_ptr->grid()) {
+      LOG(WARNING) << "Submap " << submap_id.trajectory_id << "/"
+                   << submap_id.submap_index
+                   << " loaded from pbstream has NO grid data. "
+                   << "It will appear in SubmapList but cannot be rendered in RViz. "
+                   << "Possible cause: serialized with include_grid_data=false.";
+    } else {
+      LOG(INFO) << "Submap " << submap_id.trajectory_id << "/"
+                << submap_id.submap_index
+                << " loaded from pbstream with grid data OK.";
+    }
     AddTrajectoryIfNeeded(submap_id.trajectory_id);
     if (!CanAddWorkItemModifying(submap_id.trajectory_id)) return;
     data_.submap_data.Insert(submap_id, InternalSubmapData());
