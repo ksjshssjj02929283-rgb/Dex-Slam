@@ -106,6 +106,15 @@ class Grid2D : public GridInterface {
     const std::string& folder,
     const std::string& filename) const;
 
+  // 在给定画布范围（canvas）上渲染本 grid 的已知 cell（未知=灰 127），输出固定大小图片。
+  // 与 DrawAsImage 的区别：DrawAsImage 按 ComputeCroppedLimits（已知 cell 包围盒）画，
+  // 空/稀疏 grid 会得到空/可变小图；本方法按外部给定的 canvas（如 chunk 完整 footprint）画，
+  // 保证每张图都是完整 canvas 大小的 tile。已知 cell 按世界坐标映射到画布像素。
+  bool DrawAsImageOnCanvas(
+    const std::string& folder,
+    const std::string& filename,
+    const MapLimits& canvas) const;
+
  protected:
   void GrowLimits(const Eigen::Vector2f& point,
                   const std::vector<std::vector<uint16>*>& grids,

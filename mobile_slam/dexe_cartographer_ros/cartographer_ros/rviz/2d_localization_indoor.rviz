@@ -11,6 +11,7 @@ Panels:
         - /SubmapsDisplay1/Submaps1
         - /Trajectories1/Namespaces1
         - /Constraints1/Namespaces1
+        - /FeatureMap1
         - /Odometry1/ChassisOdom1/Shape1
         - /Odometry1/FilteredOdom1/Shape1
       Splitter Ratio: 0.42203986644744873
@@ -80,11 +81,19 @@ Visualization Manager:
           Value: true
         buttock:
           Value: true
+        camera_l_link:
+          Value: true
+        camera_r_link:
+          Value: true
         chassis_base_link:
           Value: true
-        front_depth:
+        chassis_camera_front_link:
           Value: true
-        front_rgb:
+        chassis_camera_rear_link:
+          Value: true
+        chassis_depth_front_link:
+          Value: true
+        chassis_depth_rear_link:
           Value: true
         head_base_link:
           Value: true
@@ -92,9 +101,9 @@ Visualization Manager:
           Value: true
         knee:
           Value: true
-        laser_back_link:
+        laser_front_link:
           Value: true
-        laser_forward_link:
+        laser_rear_link:
           Value: true
         left_arm_base:
           Value: true
@@ -142,8 +151,6 @@ Visualization Manager:
           Value: true
         map:
           Value: true
-        merged_laser_link:
-          Value: true
         neck1:
           Value: true
         neck2:
@@ -151,10 +158,6 @@ Visualization Manager:
         neck_base:
           Value: true
         odom:
-          Value: true
-        rear_depth:
-          Value: true
-        rear_rgb:
           Value: true
         right_arm_base:
           Value: true
@@ -215,7 +218,90 @@ Visualization Manager:
       Show Names: true
       Tree:
         map:
-          {}
+          odom:
+            base_footprint:
+              base_link:
+                chassis_base_link:
+                  torso_base_link:
+                    ankle:
+                      knee:
+                        buttock:
+                          waist:
+                            head_base_link:
+                              neck_base:
+                                neck1:
+                                  neck2:
+                                    {}
+                            left_base_link:
+                              left_base_to_left_arm_connector:
+                                left_arm_base:
+                                  left_j1:
+                                    left_j2:
+                                      left_j3:
+                                        left_j4:
+                                          left_j5:
+                                            left_j6:
+                                              left_j7:
+                                                left_ee:
+                                                  left_l_base_link:
+                                                    left_l_index_prox:
+                                                      left_l_index_dist:
+                                                        {}
+                                                    left_l_little_prox:
+                                                      left_l_little_dist:
+                                                        {}
+                                                    left_l_middle_prox:
+                                                      left_l_middle_dist:
+                                                        {}
+                                                    left_l_ring_prox:
+                                                      left_l_ring_dist:
+                                                        {}
+                                                    left_l_thumb_prox:
+                                                      left_l_thumb_dist:
+                                                        {}
+                            right_base_link:
+                              right_base_to_right_arm_connector:
+                                right_arm_base:
+                                  right_j1:
+                                    right_j2:
+                                      right_j3:
+                                        right_j4:
+                                          right_j5:
+                                            right_j6:
+                                              right_j7:
+                                                right_ee:
+                                                  right_r_base_link:
+                                                    right_r_index_prox:
+                                                      right_r_index_dist:
+                                                        {}
+                                                    right_r_little_prox:
+                                                      right_r_little_dist:
+                                                        {}
+                                                    right_r_middle_prox:
+                                                      right_r_middle_dist:
+                                                        {}
+                                                    right_r_ring_prox:
+                                                      right_r_ring_dist:
+                                                        {}
+                                                    right_r_thumb_prox:
+                                                      right_r_thumb_dist:
+                                                        {}
+                  wheel_left:
+                    {}
+                  wheel_right:
+                    {}
+                chassis_camera_front_link:
+                  chassis_depth_front_link:
+                    {}
+                chassis_camera_rear_link:
+                  chassis_depth_rear_link:
+                    {}
+                imu_chassis_link:
+                  {}
+                laser_front_link:
+                  {}
+                laser_rear_link:
+                  {}
       Update Interval: 0
       Value: true
     - Alpha: 0.699999988079071
@@ -255,11 +341,46 @@ Visualization Manager:
           10.100: true
           11.100: true
           12.100: true
-          13.97: true
-          14.47: true
+          13.100: true
+          14.100: true
+          15.100: true
+          16.100: true
+          17.100: true
+          18.100: true
+          19.100: true
           2.100: true
+          20.100: true
+          21.100: true
+          22.100: true
+          23.100: true
+          24.100: true
+          25.100: true
+          26.100: true
+          27.100: true
+          28.100: true
+          29.100: true
           3.100: true
+          30.100: true
+          31.100: true
+          32.100: true
+          33.100: true
+          34.100: true
+          35.100: true
+          36.100: true
+          37.100: true
+          38.100: true
+          39.100: true
           4.100: true
+          40.100: true
+          41.100: true
+          42.100: true
+          43.100: true
+          44.100: true
+          45.100: true
+          46.100: true
+          47.100: true
+          48.97: true
+          49.47: true
           5.100: true
           6.100: true
           7.100: true
@@ -334,9 +455,9 @@ Visualization Manager:
           Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
-          Max Intensity: 165
+          Max Intensity: 255
           Min Color: 0; 0; 0
-          Min Intensity: 4
+          Min Intensity: 2
           Name: LaserFront
           Position Transformer: XYZ
           Selectable: true
@@ -370,7 +491,7 @@ Visualization Manager:
           Max Color: 255; 255; 255
           Max Intensity: 255
           Min Color: 0; 0; 0
-          Min Intensity: 3
+          Min Intensity: 2
           Name: LaserRear
           Position Transformer: XYZ
           Selectable: true
@@ -648,6 +769,36 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /loc_pose
       Value: true
+    - Class: rviz_common/Group
+      Displays:
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: GlobalChunkGrid
+          Namespaces:
+            chunk_grid: true
+            chunk_grid_fill: true
+            chunk_grid_id: true
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /chunk_map_grid
+          Value: true
+        - Class: rviz_default_plugins/MarkerArray
+          Enabled: true
+          Name: ActiveChunkGrid
+          Namespaces:
+            active_chunk: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /active_chunk_map
+          Value: true
+      Enabled: true
+      Name: ChunkMapGrid
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -694,7 +845,7 @@ Visualization Manager:
   Value: true
   Views:
     Current:
-      Angle: -1.5200004577636719
+      Angle: -1.5650004148483276
       Class: rviz_default_plugins/TopDownOrtho
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
@@ -704,11 +855,11 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Scale: 97.27742767333984
+      Scale: 18.03604507446289
       Target Frame: map
       Value: TopDownOrtho (rviz_default_plugins)
-      X: -2.878105878829956
-      Y: -2.7867188453674316
+      X: 12.982945442199707
+      Y: 2.751119613647461
     Saved: ~
 Window Geometry:
   Displays:

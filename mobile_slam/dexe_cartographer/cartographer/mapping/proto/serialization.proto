@@ -73,6 +73,19 @@ message SerializationHeader {
   uint32 format_version = 1;
 }
 
+// Chunk map（Phase 4）：建图 finalize 时把 global static submap 按固定网格切分，
+// 每个 chunk 以 Submap2D（grid 子块 + 点云 + line 子集）承载。
+message ChunkMapInfo {
+  float chunk_length = 1;  // 单 chunk 边长（米），寻址 + 复用判断必需
+  int32 num_chunks = 2;    // chunk 总数（信息性/校验）
+}
+
+message ChunkSubmap2D {
+  int32 gx = 1;        // 网格坐标（Pos2Grid 结果）
+  int32 gy = 2;
+  Submap2D submap = 3; // 该 chunk 的 Submap2D（grid 子块 + 点云 + line 子集）
+}
+
 message SerializedData {
   oneof data {
     PoseGraph pose_graph = 1;
@@ -85,5 +98,7 @@ message SerializedData {
     FixedFramePoseData fixed_frame_pose_data = 8;
     LandmarkData landmark_data = 9;
     Submap2D global_static_submap = 10;  // Global static submap generated from all nodes
+    ChunkMapInfo chunk_map_info = 11;    // Chunk map 元信息
+    ChunkSubmap2D chunk_submap = 12;     // 单个 chunk（grid 子块 + 点云 + line 子集）
   }
 }

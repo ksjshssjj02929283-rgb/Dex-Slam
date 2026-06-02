@@ -16,6 +16,7 @@
 
 #include "cartographer/io/internal/mapping_state_serialization.h"
 
+#include "cartographer/localization/2d/chunk_map_2d.h"
 #include "cartographer/mapping/proto/serialization.pb.h"
 #include "cartographer/transform/transform.h"
 
@@ -210,12 +211,12 @@ void SerializeLandmarkNodes(
 }
 
 void SerializeGlobalStaticSubmap(
-    std::shared_ptr<mapping::Submap2D> global_static_submap,
+    const mapping::Submap2D* global_static_submap,
     ProtoStreamWriterInterface* const writer) {
-  if (!global_static_submap) {
+  if (global_static_submap == nullptr) {
     return;
   }
-  
+
   LOG(INFO) << "Serializing global static submap to pbstream";
   SerializedData proto;
   auto submap_proto = global_static_submap->ToProto(
@@ -225,6 +226,32 @@ void SerializeGlobalStaticSubmap(
   LOG(INFO) << "Global static submap serialized successfully";
 }
 
+// chunk map 最后写：把 ChunkMap2D 产出的 proto 包装成 SerializedData 写入——
+// 先写 ChunkMapInfo，再写各 ChunkSubmap2D。chunk map 由调用方
+// （LocalizationUpdater::SerializeState）先 BuildFromSubmap 构建好再传入。
+// 风格对齐 SerializeGlobalStaticSubmap：ChunkMap2D 只产 proto（ToProto 形式），
+// 本函数负责包装 + WriteProto；空指针/空 chunk 直接返回。
+void SerializeChunkMap(const localization::ChunkMap2D* chunk_map,
+                       ProtoStreamWriterInterface* const writer) {
+  if (chunk_map == nullptr || chunk_map->empty()) {
+    return;
+  }
+
+  LOG(INFO) << "Serializing chunk map to pbstream";
+  // 先写 ChunkMapInfo（chunk_length + num_chunks）。
+  SerializedData info_data;
+  info_data.mutable_chunk_map_info()->CopyFrom(chunk_map->ToInfoProto());
+  writer->WriteProto(info_data);
+  // 再写各 ChunkSubmap2D（gx/gy + 自包含 Submap2D）。
+  const auto chunk_protos = chunk_map->ToChunkProtos();
+  for (const auto& chunk_proto : chunk_protos) {
+    SerializedData data;
+    data.mutable_chunk_submap()->CopyFrom(chunk_proto);
+    writer->WriteProto(data);
+  }
+  LOG(INFO) << "Chunk map serialized: " << chunk_protos.size() << " chunks";
+}
+
 }  // namespace
 
 void WritePbStream(
@@ -232,7 +259,8 @@ void WritePbStream(
     const std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>&
         trajectory_builder_options,
     ProtoStreamWriterInterface* const writer, bool include_unfinished_submaps,
-    std::shared_ptr<mapping::Submap2D> global_static_submap) {
+    const mapping::Submap2D* global_static_submap,
+    const localization::ChunkMap2D* chunk_map) {
   writer->WriteProto(CreateHeader());
   writer->WriteProto(
       SerializePoseGraph(pose_graph, include_unfinished_submaps));
@@ -253,6 +281,9 @@ void WritePbStream(
   
   // Serialize global static submap if available
   SerializeGlobalStaticSubmap(global_static_submap, writer);
+
+  // chunk map 最后写：在所有 map 元素（含 global_static_submap）之后追加。
+  SerializeChunkMap(chunk_map, writer);
 }
 
 }  // namespace io

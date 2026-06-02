@@ -23,6 +23,9 @@
 #include "cartographer/mapping/proto/trajectory_builder_options.pb.h"
 
 namespace cartographer {
+namespace localization {
+class ChunkMap2D;  // 前向声明：WritePbStream 末尾序列化（chunk 最后写），避免强依赖。
+}  // namespace localization
 namespace io {
 
 // The current serialization format version.
@@ -30,12 +33,16 @@ static constexpr int kMappingStateSerializationFormatVersion = 2;
 static constexpr int kFormatVersionWithoutSubmapHistograms = 1;
 
 // Serialize mapping state to a pbstream.
+// chunk_map 非空时，在所有 map 元素（含 global_static_submap）之后追加 chunk map
+// （ChunkMapInfo + 各 ChunkSubmap2D），即 chunk 最后写。chunk map 由调用方
+// （LocalizationUpdater::SerializeState）先 BuildFromSubmap 构建好再传入。
 void WritePbStream(
     const mapping::PoseGraph& pose_graph,
     const std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>&
         builder_options,
     ProtoStreamWriterInterface* const writer, bool include_unfinished_submaps,
-    std::shared_ptr<mapping::Submap2D> global_static_submap = nullptr);
+    const mapping::Submap2D* global_static_submap = nullptr,
+    const localization::ChunkMap2D* chunk_map = nullptr);
 
 }  // namespace io
 }  // namespace cartographer

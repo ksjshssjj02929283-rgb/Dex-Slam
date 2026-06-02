@@ -1,4 +1,8 @@
 #include "cartographer/localization/2d/local_map_updater_2d.h"
+
+#include <filesystem>
+
+#include "cartographer/common/task.h"
 #include "cartographer/common/tic_toc.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
@@ -35,7 +39,12 @@ proto::LocalMapUpdaterOptions2D CreateLocalMapUpdaterOptions2D(
     // 默认不保存调试数据
     options.set_save_debug_data(false);
   }
-  
+
+  // ===== Chunk 化（Phase 4-a）=====
+  // 无任何 chunk 选项：开关/尺寸归 LocalizationUpdaterOptions.chunk_map_options 单一来源，
+  // LocalMapUpdater2D 以“是否被注入 chunk_map_”为门控；debug 落盘由 save_debug_data 统一开关、
+  // 落到注入的当前地图目录下（SetDebugDir），无需独立 chunk_debug_dir。
+
   return options;
 }
 
@@ -64,11 +73,16 @@ LocalMapUpdater2D::LocalMapUpdater2D(
     default:
       LOG(FATAL) << "Unknown RangeDataInserterType for LocalMapUpdater2D.";
   }
+
+  // ===== Chunk 化 =====
+  // chunk_map_ 不在此创建，也无独立开关——由 LocalizationUpdater::LoadState 创建/加载后
+  // 经 SetChunkMap 注入；注入即启用（gate = chunk_map_ 非空）。
   LOG(INFO) << "Created LocalMapUpdater2D with range_data_inserter";
 }
 
 LocalMapUpdater2D::~LocalMapUpdater2D() {
   if (build_future_.valid()) build_future_.wait();
+  // insert_thread_pool_ 析构时会自动 drain 队列并 join 线程，无需手动停止
 }
 
 void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> global_submap)
@@ -152,6 +166,10 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
     LOG(INFO) << "Dynamic map initialized from static map, ready for updates";
   }
 
+  // ===== Chunk 化 =====
+  // chunk_map_ 由 LocalizationUpdater::LoadState 创建/加载，经 SetChunkMap 在本函数之前注入；
+  // 本类不再在此切分/重建 chunk。若 chunk_map_ 已就位，下方初始 local_submap_ 即走 chunk 拼装路径。
+
   // 同步构建初始 local_submap_（以全局地图原点为中心），保证之后 local_submap() 永不返回空
   transform::Rigid2d init_origin(origin.cast<double>(), Eigen::Rotation2Dd(0.0));
   local_submap_     = BuildLocalSubmap(global_dynamic_submap_, init_origin);
@@ -165,6 +183,15 @@ void LocalMapUpdater2D::UpdateRobotPose(const transform::Rigid2d& robot_pose)
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     robot_pose_ = std::make_shared<transform::Rigid2d>(robot_pose);
+  }
+
+  // ===== Chunk 化（Phase 4-a）：按位姿滞回更新活跃 chunk 集；跨 chunk 才标记重建 =====
+  if (chunk_map_ && !chunk_map_->empty()) {
+    if (chunk_map_->LoadOnPose(robot_pose)) {  // 中心 chunk 变化（或首次）才返回 true
+      pending_chunk_rebuild_ = true;
+      VLOG(2) << "ChunkMap2D active chunks: " << chunk_map_->NumActiveChunks()
+              << " / " << chunk_map_->NumChunks();
+    }
   }
 
   is_local_map_updated_ = false;
@@ -182,7 +209,16 @@ void LocalMapUpdater2D::UpdateRobotPose(const transform::Rigid2d& robot_pose)
     is_building_ = false;
   }
 
-  if (NeedRebuildLocalMap()) {
+  // 重建触发：
+  // - chunk 模式：local map = 以当前 chunk 为中心的 3×3 方块，**未跨 chunk 时内容不变 → 不重组**；
+  //   仅跨 chunk（pending_chunk_rebuild_）才重建。不再用 box-edge（那会在同一 chunk 内每 ~7.5m 重组一次）。
+  // - 非 chunk 模式：沿用 box-edge（NeedRebuildLocalMap）。
+  if (chunk_map_ && !chunk_map_->empty()) {
+    if (pending_chunk_rebuild_ && !is_building_.load()) {
+      pending_chunk_rebuild_ = false;
+      TriggerAsyncRebuild();
+    }
+  } else if (NeedRebuildLocalMap()) {
     TriggerAsyncRebuild();
   }
 }
@@ -237,6 +273,33 @@ void LocalMapUpdater2D::TriggerAsyncRebuild()
 }
 
 // ============================================================
+// SetChunkMap：接收 LocalizationUpdater 创建/加载好的 chunk map（本类不自建）。
+// ============================================================
+void LocalMapUpdater2D::SetChunkMap(std::shared_ptr<ChunkMap2D> chunk_map) {
+  chunk_map_ = std::move(chunk_map);
+  if (!chunk_map_) return;
+  LOG(INFO) << "LocalMapUpdater2D: chunk map injected, "
+            << chunk_map_->NumChunks() << " chunks.";
+  // 调试落盘：save_debug_data 开启 + 当前地图目录已注入时，把**全部** chunk 落到
+  // <map_dir>/debug/all_chunks/（注入时一次性 dump 整张 chunk map，便于离线核对）。
+  // 当前已加载（active）chunk 的可视化由 BuildLocalSubmap 随栅格地图逐次落到 <map_dir>/debug/。
+  if (options_.save_debug_data() && !map_dir_.empty() && !chunk_map_->empty()) {
+    chunk_map_->SaveDebugDir(map_dir_ + "/debug/all_chunks/", /*active_only=*/false);
+  }
+}
+
+// ============================================================
+// SaveChunkMap：把 chunk map 落盘到 chunks_dir/（pbstream，仅 chunk_map_ 已注入时）
+// ============================================================
+bool LocalMapUpdater2D::SaveChunkMap(const std::string& chunks_dir) const {
+  if (!chunk_map_ || chunk_map_->empty()) {
+    LOG(WARNING) << "LocalMapUpdater2D::SaveChunkMap: chunk map not available, skip";
+    return false;
+  }
+  return chunk_map_->SaveToDir(chunks_dir);
+}
+
+// ============================================================
 // BuildLocalSubmap：纯计算，无锁，可在后台线程安全调用
 // ============================================================
 
@@ -244,21 +307,59 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
     std::shared_ptr<mapping::Submap2D> source_submap,
     transform::Rigid2d origin)
 {
-  const auto* prob_grid = dynamic_cast<const mapping::ProbabilityGrid*>(
-      source_submap->grid());
-  if (!prob_grid) {
-    LOG(ERROR) << "BuildLocalSubmap: source grid is not ProbabilityGrid.";
-    return nullptr;
-  }
-  auto global_cloud = source_submap->cloud();
-  if (!global_cloud) {
-    LOG(ERROR) << "BuildLocalSubmap: source cloud is null.";
-    return nullptr;
+  // ===== Chunk 化（Phase 4-a）：直接用 load_radius 内的 chunk 整块组合 submap（不再 box 二次裁剪）=====
+  // ChunkMap 自包含纯读，无需持 submap_mutex_（其 grid/line/点云均为 BuildFromSubmap 时的快照）。
+  if (chunk_map_ && !chunk_map_->empty()) {
+    auto local = chunk_map_->AssembleLocalSubmap(origin);
+    // 调试落盘（save_debug_data + 已注入地图目录）：把当前已加载（active）chunk 与拼装出的
+    // 栅格地图/点云一起落到 <map_dir>/debug/（与 SetChunkMap 落的全量 all_chunks/ 区分）。
+    if (options_.save_debug_data() && !map_dir_.empty()) {
+      const std::string dir = map_dir_ + "/debug/";
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      chunk_map_->SaveDebugDir(dir, /*active_only=*/true);
+      if (local && local->grid()) {
+        // 用与 merged.png / chunk tile 相同的"北朝上"朝向渲染（按本 grid 自身 limits 作画布），
+        // 而非 DrawAsImage 的 ROTATE_90 约定——否则 local_map 与 merged 朝向不一致，叠图看着像错位。
+        local->grid()->DrawAsImageOnCanvas(dir, "local_map.png",
+                                           local->grid()->limits());
+        local->SaveSubmapCloud(dir, "local_submap.pcd");
+      }
+    }
+    return local;
   }
 
+  // ============ Phase 1: 持共享锁做快照（尽量短）============
+  std::unique_ptr<mapping::ProbabilityGrid> grid_snapshot;
+  sensor::PointCloud cloud_snapshot;
+  int latest_line_id = 0;
+  std::map<int, mapping::MapLine2D> active_line_data;
+  {
+    std::shared_lock<std::shared_mutex> read_lock(submap_mutex_);
+    const auto* prob_grid = dynamic_cast<const mapping::ProbabilityGrid*>(
+        source_submap->grid());
+    if (!prob_grid) {
+      LOG(ERROR) << "BuildLocalSubmap: source grid is not ProbabilityGrid.";
+      return nullptr;
+    }
+    const auto* raw_cloud = source_submap->cloud();
+    if (!raw_cloud) {
+      LOG(ERROR) << "BuildLocalSubmap: source cloud is null.";
+      return nullptr;
+    }
+    // 深拷贝 grid 和 cloud（持锁期间完成，保证一致性）
+    grid_snapshot = std::make_unique<mapping::ProbabilityGrid>(*prob_grid);
+    cloud_snapshot = *raw_cloud;
+    if (auto* lm = source_submap->line_map_2d_list()) {
+      latest_line_id   = lm->latest_local_id();
+      active_line_data = lm->GetLineMapData2DList();
+    }
+  }  // read_lock 释放，writer 可继续插入
+
+  // ============ Phase 2: 无锁计算（使用快照，与 worker 并发安全）============
   const double ox  = origin.translation().x();
   const double oy  = origin.translation().y();
-  const double res = prob_grid->limits().resolution();
+  const double res = grid_snapshot->limits().resolution();
   const int    nx  = static_cast<int>((box_.max_x - box_.min_x) / res);
   const int    ny  = static_cast<int>((box_.max_y - box_.min_y) / res);
 
@@ -269,15 +370,15 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
       mapping::CellLimits(nx, ny));
   auto local_grid = std::make_unique<mapping::ProbabilityGrid>(
       map_limits, &conversion_tables_);
-  const auto& gl = prob_grid->limits();
+  const auto& gl = grid_snapshot->limits();
   for (int row = 0; row < ny; ++row) {
     for (int col = 0; col < nx; ++col) {
       Eigen::Array2i li(row, col);
       Eigen::Array2i gi = gl.GetCellIndex(map_limits.GetCellCenter(li));
       if (!gl.Contains(gi)) {
         local_grid->SetProbability(li, mapping::kMinProbability);
-      } else if (prob_grid->IsKnown(gi)) {
-        local_grid->SetProbability(li, prob_grid->GetProbability(gi));
+      } else if (grid_snapshot->IsKnown(gi)) {
+        local_grid->SetProbability(li, grid_snapshot->GetProbability(gi));
       }
     }
   }
@@ -287,17 +388,9 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
   tmp_filter.SetOrigin(Eigen::Vector3f(static_cast<float>(ox),
                                        static_cast<float>(oy), 0.0f));
   auto local_cloud = std::make_unique<sensor::PointCloud>();
-  tmp_filter.Filter(*global_cloud, *local_cloud);
+  tmp_filter.Filter(cloud_snapshot, *local_cloud);
 
-  // ============ 3. 线地图 ============
-  int latest_line_id = 0;
-  std::map<int, mapping::MapLine2D> active_line_data;
-  if (auto* lm = source_submap->line_map_2d_list()) {
-    latest_line_id   = lm->latest_local_id();
-    active_line_data = lm->GetLineMapData2DList();
-  }
-
-  // ============ 4. 组装并构建 ikd-tree ============
+  // ============ 3. 组装并构建 ikd-tree ============
   auto new_submap = std::make_shared<mapping::Submap2D>(
       Eigen::Vector2f(static_cast<float>(ox), static_cast<float>(oy)),
       std::move(local_grid),
@@ -307,10 +400,11 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
   new_submap->RebuildIkdTrees();
   new_submap->Finish();
 
-  // 调试：如果启用，将 submap 的 grid map 保存为图片和点云文件
-  if (options_.save_debug_data()) {
-    const std::string dir =
-        std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/.dexe/data/";
+  // 调试：如果启用，将 submap 的 grid map 保存为图片和点云文件，落到当前地图目录下 <map_dir>/debug/。
+  if (options_.save_debug_data() && !map_dir_.empty()) {
+    const std::string dir = map_dir_ + "/debug/";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
     new_submap->grid()->DrawAsImage(dir, "local_map.png");
     new_submap->SaveSubmapCloud(dir, "local_submap.pcd");
   }
@@ -323,41 +417,53 @@ void LocalMapUpdater2D::UpdateDynamicMap(
     const sensor::PointCloud& highlight_cloud,
     const std::map<int, std::vector<sensor::LineData>>& line_data)
 {
-  std::lock_guard<std::mutex> lock(data_mutex_);
-  
-  // 策略1: NONE - 不更新dynamic map
+  // 策略1: NONE - 不更新dynamic map（无需锁，options_ 只读）
   if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
     return;
   }
-  
-  if (!global_dynamic_submap_) {
-    LOG(ERROR) << "Global dynamic submap is not initialized, cannot update dynamic map.";
-    return;
+
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    if (!global_dynamic_submap_) {
+      LOG(ERROR) << "Global dynamic submap is not initialized, cannot update dynamic map.";
+      return;
+    }
   }
-  
-  // 策略2/3/4: 更新dynamic map
-  // 确保global_dynamic_submap_允许插入数据
-  if (global_dynamic_submap_->insertion_finished()) {
-    global_dynamic_submap_->set_insertion_finished(false);
+
+  // 构造 batch（拷贝数据）并提交到低优先级线程池，微秒级，不阻塞当前线程
+  auto task = std::make_unique<common::Task>();
+  task->SetWorkItem(
+      [this, batch = DynamicUpdateBatch{range_data_vector, cloud, highlight_cloud, line_data}]() {
+        ApplyDynamicUpdate(batch);
+      });
+  insert_thread_pool_.Schedule(std::move(task));
+}
+
+void LocalMapUpdater2D::ApplyDynamicUpdate(const DynamicUpdateBatch& batch)
+{
+  // 先在 data_mutex_ 下捕获 shared_ptr（避免与 SetGlobalSubmap 的指针赋值竞争）
+  std::shared_ptr<mapping::Submap2D> submap;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    submap = global_dynamic_submap_;
+  }
+  if (!submap) return;
+
+  // 独占锁保护 submap 内部数据（grid/ikdtree/line_map）写入
+  std::unique_lock<std::shared_mutex> write_lock(submap_mutex_);
+
+  if (submap->insertion_finished()) {
+    submap->set_insertion_finished(false);
     LOG(INFO) << "Reopened global_dynamic_submap_ for data insertion";
   }
-  
-  // 1. 插入所有range data到global_dynamic_submap_（更新栅格地图）
+
   CHECK(range_data_inserter_ != nullptr);
-  for (const auto& range_data : range_data_vector) {
-    global_dynamic_submap_->InsertRangeData(range_data, range_data_inserter_.get());
+  for (const auto& range_data : batch.range_data_vector) {
+    submap->InsertRangeData(range_data, range_data_inserter_.get());
   }
-  
-  // 2. 插入点云数据到global_dynamic_submap_
-  // InsertCloudData内部会自动增量更新ikd-tree，不需要手动rebuild
-  global_dynamic_submap_->InsertCloudData(cloud, highlight_cloud);
-  
-  // 3. 插入线数据到global_dynamic_submap_
-  global_dynamic_submap_->InsertLineData(line_data);
-  
-  // LOG(INFO) << "UpdateDynamicMap: inserted " << range_data_vector.size() 
-  //           << " range_datas, " << cloud.size() << " cloud points, "
-  //           << line_data.size() << " line groups";
+
+  submap->InsertCloudData(batch.cloud, batch.highlight_cloud);
+  submap->InsertLineData(batch.line_data);
 }
 
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetGlobalSubmap() const
@@ -371,7 +477,9 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetGlobalSubmap() const
 
 void LocalMapUpdater2D::ApplyOriginTransform(const transform::Rigid3d& T)
 {
+  // data_mutex_ 先于 submap_mutex_（与 ApplyDynamicUpdate 加锁顺序一致，无死锁风险）
   std::lock_guard<std::mutex> lock(data_mutex_);
+  std::unique_lock<std::shared_mutex> submap_lock(submap_mutex_);
 
   // dynamic map 参与保存和定位匹配，需要同步到新坐标系。
   if (global_dynamic_submap_) {

@@ -18,9 +18,11 @@
 #define CARTOGRAPHER_ROS_LOCALIZATION_MAP_PERSISTENCE_MANAGER_H_
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -104,12 +106,32 @@ class MapPersistenceManager {
 
     // Step 2: 写文件到 staging
     const std::string pbstream_in_staging = staging + "/map.pbstream";
-    const std::string image_base_in_staging = staging + "/map";  // 会生成 map.png + map.yaml
+    const std::string image_base_in_staging = staging + "/map";  // 会生成 map.png + map.yaml(+pcd/line_map)
     if (!SavePbstream(loc, pbstream_in_staging)) return false;
     if (!SaveMapImage(loc, image_base_in_staging)) return false;
 
-    // Step 3: Commit（fsync + sentinel）
-    if (!swap.CommitStage({"map.pbstream", "map.png", "map.yaml"})) {
+    // Step 2.5（已废弃）：chunk map 现已随 SavePbstream 整合进 staging/map.pbstream
+    //   （见 LocalizationUpdater::SerializeStateToFile → io::WritePbStream chunk 参数），
+    //   与建图侧一致，不再单独落盘 staging/chunks/。
+
+    // Step 3: Commit（fsync + sentinel）。动态枚举 staging 下所有文件，
+    //         全部纳入 SHA256 校验，确保三件套 + pcd/line 版本一致。
+    namespace fs = std::filesystem;
+    std::vector<std::string> commit_files;
+    std::error_code ec_scan;
+    for (auto& entry : fs::recursive_directory_iterator(staging, ec_scan)) {
+      if (ec_scan) break;
+      if (!entry.is_regular_file()) continue;
+      const std::string rel = fs::relative(entry.path(), staging).string();
+      if (rel == AtomicDirSwap::kSentinelName) continue;  // sentinel 自身不纳入
+      commit_files.push_back(rel);
+    }
+    if (commit_files.empty()) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "[MapPersistenceManager] no files in staging to commit");
+      return false;
+    }
+    if (!swap.CommitStage(commit_files)) {
       RCLCPP_ERROR(node_->get_logger(),
                    "[MapPersistenceManager] CommitStage failed");
       return false;

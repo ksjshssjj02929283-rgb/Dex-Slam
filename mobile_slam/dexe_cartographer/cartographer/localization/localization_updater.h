@@ -18,6 +18,8 @@
 #define CARTOGRAPHER_LOCALIZATION_LOCALIZATION_UPDATER_H_
 
 #include <memory>
+#include <tuple>
+#include <vector>
 
 #include "cartographer/common/thread_pool.h"
 #include "cartographer/mapping/trajectory_builder_interface.h"
@@ -25,6 +27,7 @@
 #include "cartographer/mapping/pose_graph.h"
 #include "cartographer/localization/proto/localization_updater_options.pb.h"
 #include "cartographer/localization/internal/2d/pose_estimator_2d.h"
+#include "cartographer/localization/2d/chunk_map_2d.h"
 #include "cartographer/sensor/collator_interface.h"
 #include "cartographer/sensor/line_data.h"
 
@@ -119,10 +122,27 @@ public:
     return pose_estimator_2d_;
   }
 
+  // 获取 chunk map（可视化/调试用；未启用 chunk 时为 nullptr）。
+  std::shared_ptr<ChunkMap2D> chunk_map() const { return chunk_map_; }
+
+  // 注入当前地图目录（= 加载的 map.pbstream 所在目录），供 LocalMapUpdater2D 落 debug data。
+  // 由 bridge / offline 在 LoadState 前调用；AddTrajectoryBuilder 时透传给 LocalMapUpdater2D。
+  void SetMapDir(const std::string& map_dir) { loaded_map_dir_ = map_dir; }
+
 private:
   // 从 pose_graph_ 的所有轨迹节点重新生成 global_static_submap_
   // 当旧格式 pbstream（不含 kGlobalStaticSubmap 字段）被加载时，作为 fallback
   std::shared_ptr<mapping::Submap2D> GenerateGlobalStaticSubmap(double resolution);
+
+  // 创建/加载 chunk map（在 LoadState 调用，与其他 map 元素一致）：
+  // pbstream 含 chunk 且 chunk_length 匹配 → LoadFromChunkSubmaps 复用；
+  // 否则从 global_static_submap_ BuildFromSubmap 重建。幂等（chunk_map_ 已建则跳过）。
+  void CreateOrLoadChunkMap();
+
+  // 保存时（SerializeState）从给定 submap 临时构建 chunk map（方案 B：与保存的 global
+  // submap 同源一致）；返回的 chunk map 交给 WritePbStream 在最后统一序列化（chunk 最后写）。
+  std::unique_ptr<ChunkMap2D> BuildChunkForSave(
+      const std::shared_ptr<mapping::Submap2D>& submap);
   const proto::LocalizationUpdaterOptions options_;
   common::ThreadPool thread_pool_;
 
@@ -133,6 +153,20 @@ private:
   mapping::ValueConversionTables conversion_tables_;
   
   std::shared_ptr<mapping::Submap2D> global_static_submap_;
+
+  // chunk map（chunk 完全归定位侧：LoadState 收集 pbstream chunk，AddTrajectoryBuilder
+  // 创建/加载 chunk_map_ 并经 SetChunkMap 注入 LocalMapUpdater2D）。
+  bool has_loaded_chunks_ = false;
+  double loaded_chunk_length_ = 0.0;
+  // LoadState 反序列化收集的 pbstream chunk submap：(gx, gy, 完整 Submap2D)。
+  std::vector<std::tuple<int, int, std::shared_ptr<mapping::Submap2D>>>
+      loaded_chunk_submaps_;
+  // LoadState/AddTrajectoryBuilder 创建的 chunk map，传给 LocalMapUpdater2D 消费。
+  std::shared_ptr<ChunkMap2D> chunk_map_;
+
+  // 当前地图目录（SetMapDir 注入 / LoadStateFromFile 推导）：AddTrajectoryBuilder 时
+  // 经 LocalMapUpdater2D::SetDebugDir 透传，debug data 落到该目录下。
+  std::string loaded_map_dir_;
 
   std::shared_ptr<std::vector<Eigen::Vector2d>> global_reflector_map_;
 

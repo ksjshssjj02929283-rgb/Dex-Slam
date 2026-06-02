@@ -103,6 +103,12 @@ class Submap2D : public Submap {
 
   void Finish();
 
+  // 静态只读 submap（如 chunk map 的 chunk）的轻量收尾：只裁剪 grid（省序列化/内存）+
+  // 标记 insertion_finished。**不碰 cloud_/line**（构造时已是最终数据）、**不建/不销毁 ikd-tree**。
+  // 与 Finish() 的区别：Finish() 以 ikd-tree 为 cloud_ 权威源（FreshCloudData 会用空树刷空直填的
+  // cloud_），且建树/剔除/同步开销大；FinishStatic 适用于"cloud_ 已是权威数据、无需 ikd-tree"的场景。
+  void FinishStatic();
+
   bool SaveSubmapCloud(const std::string& folder,
                        const std::string& filename);
 

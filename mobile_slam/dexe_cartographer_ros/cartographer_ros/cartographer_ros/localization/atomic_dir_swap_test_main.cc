@@ -642,6 +642,46 @@ static void TestReplaceCurrentMapFrom() {
   EXPECT(after2.size() == 2, "still 2 backups after 2nd rollback");
 }
 
+// T19: chunk map 场景 —— commit 含 chunks/ 子目录文件（验证子目录路径在
+//      CommitStage(SHA256) + ActivateAndCleanup(rename) 整条链路正常）
+static void TestCommitWithChunksSubdir() {
+  const std::string root = MakeTestRoot();
+  const std::string target = root + "/map_chunks";
+
+  AtomicDirSwap swap(target, 5);
+  std::string staging = swap.BeginStage();
+  WriteFakeMapToStaging(staging, "v1");
+  // 模拟 SaveChunkMap：在 staging/chunks/ 写若干文件
+  fs::create_directories(staging + "/chunks");
+  WriteFile(staging + "/chunks/chunk_index.json", "{\"chunk_size\":20}");
+  WriteFile(staging + "/chunks/chunk_0_0.pcd", "pcd-content-0-0");
+  WriteFile(staging + "/chunks/chunk_1_0.pcd", "pcd-content-1-0");
+
+  // commit 用含子目录前缀的相对路径（模拟 SaveNow 的动态枚举）
+  EXPECT(swap.CommitStage({"map.pbstream", "map.png", "map.yaml",
+                           "chunks/chunk_index.json",
+                           "chunks/chunk_0_0.pcd", "chunks/chunk_1_0.pcd"}),
+         "CommitStage with chunks/ subdir paths");
+
+  // sentinel 应含子目录文件的 sha256 行
+  const std::string sentinel = staging + "/" + AtomicDirSwap::kSentinelName;
+  const std::string scontent = ReadFile(sentinel);
+  EXPECT(scontent.find("sha256_chunks/chunk_0_0.pcd=") != std::string::npos,
+         "sentinel has sha256 for chunks/chunk_0_0.pcd");
+
+  EXPECT(swap.ActivateAndCleanup(), "activate with chunks");
+
+  // activate 后 target 含 chunks/ 子目录 + 内容完整
+  EXPECT(fs::exists(target + "/chunks/chunk_index.json"), "chunks index in target");
+  EXPECT(fs::exists(target + "/chunks/chunk_0_0.pcd"), "chunk pcd in target");
+  EXPECT(ReadFile(target + "/chunks/chunk_0_0.pcd") == "pcd-content-0-0",
+         "chunk pcd content correct");
+
+  // 启动恢复对含 chunks 的 target 正常（正常状态直接加载）
+  EXPECT(AtomicDirSwap::RecoverIfInterrupted(target), "recover ok with chunks");
+  EXPECT(fs::exists(target + "/chunks/chunk_1_0.pcd"), "chunks survive recover");
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -671,6 +711,7 @@ int main(int argc, char** argv) {
   RUN_TEST(TestRollbackMarkerChosenGone);
   RUN_TEST(TestSelfContainedBackups);
   RUN_TEST(TestReplaceCurrentMapFrom);
+  RUN_TEST(TestCommitWithChunksSubdir);
 
   std::cout << "\n═══ 结果：" << g_pass << " pass / " << g_fail << " fail ═══\n";
   return g_fail == 0 ? 0 : 1;

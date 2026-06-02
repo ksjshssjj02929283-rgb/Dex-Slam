@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package cartographer.mapping.proto;
+
+// Chunk 化参数（建图保存 + 定位保存共用一套）。
+// 由共享 lua 表 CHUNK_MAP_OPTIONS 配置，嵌入 MapBuilderOptions（建图）
+// 与 LocalizationUpdaterOptions（定位）。
+message ChunkMapOptions {
+  // 是否启用 chunk 化（保存时整合 chunk map 进 pbstream）。
+  bool use_chunk_map = 1;
+  // 单个 chunk 边长（米），默认 20。
+  float chunk_length = 2;
+  // chunk 加载半径（曼哈顿距离，单位 chunk），默认 2。
+  int32 load_radius = 3;
+  // chunk 卸载半径（曼哈顿距离，单位 chunk），默认 3；需 > load_radius 形成滞回。
+  int32 unload_radius = 4;
+}

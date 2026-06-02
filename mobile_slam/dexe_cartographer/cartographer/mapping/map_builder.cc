@@ -21,6 +21,8 @@
 #include "absl/memory/memory.h"
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
+#include <filesystem>
+
 #include "cartographer/io/internal/mapping_state_serialization.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
@@ -254,16 +256,21 @@ void MapBuilder::SerializeState(bool include_unfinished_submaps,
                       .resolution();
       }
     }
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t00 = std::chrono::steady_clock::now();
     GenerateGlobalStaticSubmap(resolution);
-    const auto t1 = std::chrono::steady_clock::now();
+    const auto t01 = std::chrono::steady_clock::now();
     LOG(INFO) << "[Timing] GenerateGlobalStaticSubmap (SerializeState): "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t01 - t00).count()
               << " ms";
   }
   
+  const auto t10 = std::chrono::steady_clock::now();
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, global_static_submap_.get());
+  const auto t11 = std::chrono::steady_clock::now();
+  LOG(INFO) << "[Timing] WritePbStream (SerializeState): "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(t11 - t10).count()
+            << " ms";
 }
 
 bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
@@ -282,18 +289,23 @@ bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
                       .resolution();
       }
     }
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t00 = std::chrono::steady_clock::now();
     GenerateGlobalStaticSubmap(resolution);
-    const auto t1 = std::chrono::steady_clock::now();
+    const auto t01 = std::chrono::steady_clock::now();
     LOG(INFO) << "[Timing] GenerateGlobalStaticSubmap (SerializeStateToFile): "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t01 - t00).count()
               << " ms";
   }
   
+  const auto t10 = std::chrono::steady_clock::now();
   io::ProtoStreamWriter writer(filename);
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps, global_static_submap_);
-  return (writer.Close());
+                    include_unfinished_submaps, global_static_submap_.get());
+  const auto t11 = std::chrono::steady_clock::now();
+  LOG(INFO) << "[Timing] WritePbStream (SerializeStateToFile): "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(t11 - t10).count()
+            << " ms";
+  return writer.Close();
 }
 
 std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resolution) {
@@ -671,6 +683,8 @@ std::map<int, int> MapBuilder::LoadState(
         break;
       }
       default:
+        // 旧 pbstream 可能含 kChunkMapInfo/kChunkSubmap（DEC-007 前的产物），建图侧不再处理，
+        // 落到 default 仅打告警跳过；定位侧也不读，统一运行时重生。
         LOG(WARNING) << "Skipping unknown message type in stream: "
                      << proto.GetTypeName();
     }
