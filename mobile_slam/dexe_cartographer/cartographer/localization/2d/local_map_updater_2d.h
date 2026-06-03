@@ -147,6 +147,14 @@ private:
   // 用标记而非一次性条件，自愈"建图过程中又跨格被跳过"的情况（标记保留到下次能建为止）。
   bool pending_chunk_rebuild_ = false;
 
+  // ===== 性能统计（PerfRegistry）辅助 =====
+  // 累计机器人行程（用于"重建频率 = 重建次数 / 行程"），UpdateRobotPose 中按相邻位姿增量累加。
+  bool   has_prev_pose_for_dist_ = false;
+  double prev_dist_x_ = 0.0;
+  double prev_dist_y_ = 0.0;
+  // BuildLocalSubmap 调用计数，用于每 N 次周期性 Dump（防硬杀丢统计）。
+  std::atomic<long> build_call_count_{0};
+
   // ===== Chunk 化 =====
   // chunk_map_ 非空（被注入）时，local submap 改由 ChunkMap2D 从覆盖窗口的 chunk 拼装，
   // 替代对全局点云的 O(N) 全量 BoxFilter；为空则退回原 BoxFilter 路径。

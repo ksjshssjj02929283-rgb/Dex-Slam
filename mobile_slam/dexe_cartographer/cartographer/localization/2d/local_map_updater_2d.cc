@@ -1,7 +1,9 @@
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 
+#include <cmath>
 #include <filesystem>
 
+#include "cartographer/common/perf_stat.h"  // 运行时间统计（A/B 计时与重建频率）
 #include "cartographer/common/task.h"
 #include "cartographer/common/tic_toc.h"
 #include "cartographer/mapping/2d/probability_grid.h"
@@ -82,6 +84,8 @@ LocalMapUpdater2D::LocalMapUpdater2D(
 
 LocalMapUpdater2D::~LocalMapUpdater2D() {
   if (build_future_.valid()) build_future_.wait();
+  // 退出前打印最终运行时间统计（回放到 bag 末尾或节点关闭时触发）。
+  common::PerfRegistry::Get().Dump("final@LocalMapUpdater2D::dtor");
   // insert_thread_pool_ 析构时会自动 drain 队列并 join 线程，无需手动停止
 }
 
@@ -185,6 +189,20 @@ void LocalMapUpdater2D::UpdateRobotPose(const transform::Rigid2d& robot_pose)
     robot_pose_ = std::make_shared<transform::Rigid2d>(robot_pose);
   }
 
+  // 累计机器人行程（重建频率统计用：次/米）。
+  {
+    const double x = robot_pose.translation().x();
+    const double y = robot_pose.translation().y();
+    if (has_prev_pose_for_dist_) {
+      const double dx = x - prev_dist_x_, dy = y - prev_dist_y_;
+      common::PerfRegistry::Get().AddScalar("robot_distance_m",
+                                             std::sqrt(dx * dx + dy * dy));
+    }
+    prev_dist_x_ = x;
+    prev_dist_y_ = y;
+    has_prev_pose_for_dist_ = true;
+  }
+
   // ===== Chunk 化（Phase 4-a）：按位姿滞回更新活跃 chunk 集；跨 chunk 才标记重建 =====
   if (chunk_map_ && !chunk_map_->empty()) {
     if (chunk_map_->LoadOnPose(robot_pose)) {  // 中心 chunk 变化（或首次）才返回 true
@@ -248,6 +266,7 @@ bool LocalMapUpdater2D::NeedRebuildLocalMap() const
 void LocalMapUpdater2D::TriggerAsyncRebuild()
 {
   if (is_building_.exchange(true)) return;  // 已有后台任务，跳过
+  common::PerfRegistry::Get().AddScalar("rebuild_count", 1);  // 实际触发的重建计数
 
   std::shared_ptr<mapping::Submap2D> source_snapshot;
   transform::Rigid2d origin_snapshot;
@@ -307,6 +326,14 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
     std::shared_ptr<mapping::Submap2D> source_submap,
     transform::Rigid2d origin)
 {
+  // local map 单次组装总耗时（chunk on / off 两路径都计），A/B 头号指标。
+  // 注：save_debug_data 开启时这里含 PNG/PCD 落盘 I/O，性能实验请关 save_debug_data。
+  CARTO_PERF_SCOPE("BuildLocalSubmap.total");
+  // 每 100 次 BuildLocalSubmap 周期性打印一次统计（防进程被硬杀丢失最终 Dump）。
+  if ((build_call_count_.fetch_add(1) + 1) % 1 == 0) {
+    common::PerfRegistry::Get().Dump("periodic");
+  }
+
   // ===== Chunk 化（Phase 4-a）：直接用 load_radius 内的 chunk 整块组合 submap（不再 box 二次裁剪）=====
   // ChunkMap 自包含纯读，无需持 submap_mutex_（其 grid/line/点云均为 BuildFromSubmap 时的快照）。
   if (chunk_map_ && !chunk_map_->empty()) {
@@ -329,12 +356,16 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
     return local;
   }
 
+  // off 路径整体（与 chunk on 的 AssembleLocalSubmap 对位的 A/B 基准）。
+  CARTO_PERF_SCOPE("BoxFilter.assemble(off)");
+
   // ============ Phase 1: 持共享锁做快照（尽量短）============
   std::unique_ptr<mapping::ProbabilityGrid> grid_snapshot;
   sensor::PointCloud cloud_snapshot;
   int latest_line_id = 0;
   std::map<int, mapping::MapLine2D> active_line_data;
   {
+    CARTO_PERF_SCOPE("BoxFilter.snapshot_deepcopy(off)");
     std::shared_lock<std::shared_mutex> read_lock(submap_mutex_);
     const auto* prob_grid = dynamic_cast<const mapping::ProbabilityGrid*>(
         source_submap->grid());
@@ -371,24 +402,32 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
   auto local_grid = std::make_unique<mapping::ProbabilityGrid>(
       map_limits, &conversion_tables_);
   const auto& gl = grid_snapshot->limits();
-  for (int row = 0; row < ny; ++row) {
-    for (int col = 0; col < nx; ++col) {
-      Eigen::Array2i li(row, col);
-      Eigen::Array2i gi = gl.GetCellIndex(map_limits.GetCellCenter(li));
-      if (!gl.Contains(gi)) {
-        local_grid->SetProbability(li, mapping::kMinProbability);
-      } else if (grid_snapshot->IsKnown(gi)) {
-        local_grid->SetProbability(li, grid_snapshot->GetProbability(gi));
+  {
+    // 全图栅格逐 cell 反查（O(nx*ny)，大图随规模增长的主成本之一）。
+    CARTO_PERF_SCOPE("BoxFilter.grid_crop(off)");
+    for (int row = 0; row < ny; ++row) {
+      for (int col = 0; col < nx; ++col) {
+        Eigen::Array2i li(row, col);
+        Eigen::Array2i gi = gl.GetCellIndex(map_limits.GetCellCenter(li));
+        if (!gl.Contains(gi)) {
+          local_grid->SetProbability(li, mapping::kMinProbability);
+        } else if (grid_snapshot->IsKnown(gi)) {
+          local_grid->SetProbability(li, grid_snapshot->GetProbability(gi));
+        }
       }
     }
   }
 
   // ============ 2. 裁剪点云（临时 BoxFilter，线程安全）============
-  sensor::BoxFilter tmp_filter(box_);
-  tmp_filter.SetOrigin(Eigen::Vector3f(static_cast<float>(ox),
-                                       static_cast<float>(oy), 0.0f));
   auto local_cloud = std::make_unique<sensor::PointCloud>();
-  tmp_filter.Filter(cloud_snapshot, *local_cloud);
+  {
+    // 全图点云 BoxFilter（O(N_global)，大图随规模增长的另一主成本）。
+    CARTO_PERF_SCOPE("BoxFilter.cloud_filter(off)");
+    sensor::BoxFilter tmp_filter(box_);
+    tmp_filter.SetOrigin(Eigen::Vector3f(static_cast<float>(ox),
+                                         static_cast<float>(oy), 0.0f));
+    tmp_filter.Filter(cloud_snapshot, *local_cloud);
+  }
 
   // ============ 3. 组装并构建 ikd-tree ============
   auto new_submap = std::make_shared<mapping::Submap2D>(
@@ -397,8 +436,11 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
       nullptr,  // local_submap 只用于匹配，不需要 conversion_tables
       std::move(local_cloud), std::make_unique<sensor::PointCloud>(),
       latest_line_id, active_line_data);
-  new_submap->RebuildIkdTrees();
-  new_submap->Finish();
+  {
+    CARTO_PERF_SCOPE("BoxFilter.RebuildIkd+Finish(off)");
+    new_submap->RebuildIkdTrees();
+    new_submap->Finish();
+  }
 
   // 调试：如果启用，将 submap 的 grid map 保存为图片和点云文件，落到当前地图目录下 <map_dir>/debug/。
   if (options_.save_debug_data() && !map_dir_.empty()) {

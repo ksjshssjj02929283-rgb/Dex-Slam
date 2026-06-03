@@ -37,7 +37,7 @@ def generate_launch_description():
     
     map_name_arg = DeclareLaunchArgument(
         'map_name',
-        default_value='offline_map_2',
+        default_value='offline_map',
         description='Name of the map to load'
     )
     

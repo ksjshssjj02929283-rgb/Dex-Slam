@@ -236,18 +236,18 @@ int LocalizationUpdater::AddTrajectoryBuilder(
 
   CHECK(global_static_submap_ != nullptr)
       << "Global static submap not available. Please load state from pbstream first.";
-  pose_estimator_2d->InitGlobalMapsFromSubmap(global_static_submap_);
-  
-  // 注入当前地图目录，使 LocalMapUpdater2D 的 debug data 落到 <map_dir>/ 下。
-  // 须在 SetChunkMap 之前（SetChunkMap 会按此目录落 chunk 调试）。
-  pose_estimator_2d->GetLocalMapUpdater()->SetDebugDir(loaded_map_dir_);
 
-  // chunk map 已在 LoadState 创建/加载（与 global_static_submap_ 等 map 元素一致）；
-  // 这里仅注入 LocalMapUpdater2D（须在 InitGlobalMapsFromSubmap 之前，
-  // 使其初始 local_submap_ 即走 chunk 拼装路径）。
+  // 注入顺序关键：SetDebugDir + SetChunkMap 必须在 InitGlobalMapsFromSubmap 之前。
+  // InitGlobalMapsFromSubmap 内部会调 LocalMapUpdater2D::SetGlobalSubmap → 同步构建初始
+  // local_submap_。若此时 chunk_map_ 尚未注入，初始构建会走 BoxFilter(off) 路径——既与
+  // chunk 设计不符（初始 local map 本应由 chunk 拼装），又会污染 A/B 计时（chunk 模式下
+  // off 路径被计 1 次）。SetDebugDir 须在 SetChunkMap 之前（后者按此目录落 chunk 调试）。
+  pose_estimator_2d->GetLocalMapUpdater()->SetDebugDir(loaded_map_dir_);
   if (chunk_map_) {
     pose_estimator_2d->GetLocalMapUpdater()->SetChunkMap(chunk_map_);
   }
+
+  pose_estimator_2d->InitGlobalMapsFromSubmap(global_static_submap_);
 
   // 保存 PoseEstimator2D 指针
   pose_estimator_2d_ = pose_estimator_2d.get();

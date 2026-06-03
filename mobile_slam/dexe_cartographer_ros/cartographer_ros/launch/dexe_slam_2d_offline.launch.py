@@ -16,7 +16,7 @@ def generate_launch_description():
     # Launch arguments
     bag_path_arg = DeclareLaunchArgument(
         'bag_path',
-        default_value=os.path.join(home_dir,'datasets/mapping_new'),
+        default_value=os.path.join(home_dir,'datasets/dongguan/bags/mapping_big_filtered'),
         description='Path to the ROS2 bag file for offline mapping')
     
     map_folder_arg = DeclareLaunchArgument(

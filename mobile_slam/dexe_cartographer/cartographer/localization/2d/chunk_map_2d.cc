@@ -6,6 +6,7 @@
 #include <tuple>
 #include <utility>
 
+#include "cartographer/common/perf_stat.h"  // 运行时间统计（chunk on 路径）
 #include "cartographer/io/internal/mapping_state_serialization.h"  // kMappingStateSerializationFormatVersion
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/mapping/2d/map_limits.h"
@@ -275,6 +276,8 @@ bool ChunkMap2D::LoadOnPose(const transform::Rigid2d& pose) {
   if (last_grid_set_ && gx == last_gx_ && gy == last_gy_) {
     return false;
   }
+  // 仅对真正发生重算（跨格）的调用计时，避免被大量廉价早返回稀释。
+  CARTO_PERF_SCOPE("ChunkMap.LoadOnPose(recompute)");
   last_gx_ = gx;
   last_gy_ = gy;
   last_grid_set_ = true;
@@ -325,6 +328,7 @@ std::vector<std::pair<int, int>> ChunkMap2D::ActiveChunkIds() const {
 
 std::shared_ptr<mapping::Submap2D> ChunkMap2D::AssembleLocalSubmap(
     const transform::Rigid2d& origin) const {
+  CARTO_PERF_SCOPE("ChunkMap.AssembleLocalSubmap(on)");
   if (chunks_.empty()) {
     LOG(ERROR) << "ChunkMap2D::AssembleLocalSubmap: no chunks built.";
     return nullptr;
@@ -440,8 +444,11 @@ std::shared_ptr<mapping::Submap2D> ChunkMap2D::AssembleLocalSubmap(
       nullptr,  // local submap 只用于匹配，不需要 conversion_tables
       std::move(local_cloud), std::make_unique<sensor::PointCloud>(),
       latest_line_id, std::move(line_data));
-  new_submap->RebuildIkdTrees();
-  new_submap->Finish();
+  {
+    CARTO_PERF_SCOPE("ChunkMap.RebuildIkd+Finish(on)");
+    new_submap->RebuildIkdTrees();
+    new_submap->Finish();
+  }
   return new_submap;
 }
 
