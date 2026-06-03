@@ -1,4 +1,8 @@
-.github
 /build
-/install
 /log
+/install
+/.vscode
+/.claude
+/.gitnexus
+/.gitlab
+/.openwolf
