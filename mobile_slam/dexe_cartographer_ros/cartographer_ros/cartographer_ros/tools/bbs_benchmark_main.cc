@@ -73,6 +73,7 @@
 #include "tf2/exceptions.h"
 #include "tf2_msgs/msg/tf_message.hpp"
 
+#include "cartographer/mapping/internal/2d/scan_matching/batch_fast_correlative_scan_matcher_2d.h"
 #include "cartographer_ros/tools/bbs_benchmark/instrumented_fast_correlative_scan_matcher_2d.h"
 
 // --- 地图与匹配参数 ---
@@ -91,6 +92,14 @@ DEFINE_double(min_score, 0.5,
 DEFINE_int32(branch_and_bound_depth, 7,
              "BBS 金字塔层数（lua 模式下被 lua 值覆盖）");
 DEFINE_int32(pyramid_rebuilds, 3, "金字塔重复构建次数（测构建耗时稳定性）");
+
+// --- matcher 版本（A/B 对照）---
+DEFINE_string(matcher, "v0",
+              "v0=原生 BBS（instrumented 副本）| v1=Phase A 加速版"
+              "（best-first + 攒批 OpenMP 并行打分，BatchFastCorrelativeScanMatcher2D）");
+DEFINE_int32(num_threads, 4, "v1 并行打分线程数");
+DEFINE_int32(batch_size, 8192, "v1 攒批大小");
+DEFINE_double(timeout_ms, 0., "v1 超时（ms，<=0 不限时，超时返回当前最优）");
 
 // --- 模式 ---
 DEFINE_string(mode, "synth", "synth | bag | both");
@@ -391,7 +400,48 @@ carto::sensor::PointCloud ApplyMergedCloudFilters(
   return out;
 }
 
-RunRecord RunMatch(const InstrumentedFastCorrelativeScanMatcher2D& matcher,
+// matcher 版本适配：v0 = 原生 instrumented 副本；v1 = Phase A 加速版。
+// v1 的 BatchMatchStats 映射到 BbsProfile，两版本共用同一套统计与报告。
+struct MatcherHolder {
+  std::unique_ptr<InstrumentedFastCorrelativeScanMatcher2D> v0;
+  std::unique_ptr<
+      carto::mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>
+      v1;
+
+  double precomputation_ms() const {
+    return v0 ? v0->precomputation_ms() : v1->precomputation_ms();
+  }
+
+  bool Match(const carto::sensor::PointCloud& cloud, const float min_score,
+             float* score, carto::transform::Rigid2d* pose,
+             BbsProfile* profile) const {
+    if (v0) {
+      return v0->MatchFullSubmap(cloud, min_score, score, pose, profile);
+    }
+    carto::mapping::scan_matching::BatchMatchStats stats;
+    const bool ok = v1->MatchFullSubmap(cloud, min_score, score, pose, &stats);
+    profile->t_rotate_ms = stats.t_rotate_ms;
+    profile->t_discretize_ms = stats.t_discretize_ms;
+    profile->t_gen_lowres_ms = stats.t_gen_lowres_ms;
+    profile->t_score_lowres_ms = stats.t_score_lowres_ms;
+    profile->t_bnb_ms = stats.t_search_ms;
+    profile->t_total_ms = stats.t_total_ms;
+    profile->num_rotated_scans = stats.num_rotated_scans;
+    profile->points_per_scan = stats.points_per_scan;
+    profile->num_initial_candidates = stats.num_initial_candidates;
+    profile->num_expanded_nodes = stats.num_expanded_nodes;
+    profile->num_scored_candidates = stats.num_scored_candidates;
+    profile->num_point_lookups =
+        stats.num_scored_candidates * stats.points_per_scan;
+    profile->scored_per_depth = stats.scored_per_depth;
+    profile->best_score = stats.best_score;
+    profile->matched = stats.matched;
+    if (stats.timed_out) LOG(WARNING) << "v1 匹配超时，返回当前最优";
+    return ok;
+  }
+};
+
+RunRecord RunMatch(const MatcherHolder& matcher,
                    const carto::sensor::PointCloud& cloud,
                    const float min_score, const std::string& mode,
                    const int id) {
@@ -400,8 +450,7 @@ RunRecord RunMatch(const InstrumentedFastCorrelativeScanMatcher2D& matcher,
   rec.id = id;
   float score = 0.f;
   carto::transform::Rigid2d pose_estimate;
-  matcher.MatchFullSubmap(cloud, min_score, &score, &pose_estimate,
-                          &rec.profile);
+  matcher.Match(cloud, min_score, &score, &pose_estimate, &rec.profile);
   if (rec.profile.matched) {
     rec.est_x = pose_estimate.translation().x();
     rec.est_y = pose_estimate.translation().y();
@@ -591,14 +640,26 @@ void Run() {
     options.set_branch_and_bound_depth(FLAGS_branch_and_bound_depth);
   }
 
-  std::unique_ptr<InstrumentedFastCorrelativeScanMatcher2D> matcher;
-  LOG(INFO) << "===== 金字塔构建（branch_and_bound_depth="
-            << FLAGS_branch_and_bound_depth << "）=====";
+  CHECK(FLAGS_matcher == "v0" || FLAGS_matcher == "v1")
+      << "--matcher 仅支持 v0 | v1";
+  MatcherHolder matcher;
+  LOG(INFO) << "===== 金字塔构建（matcher=" << FLAGS_matcher
+            << ", branch_and_bound_depth=" << options.branch_and_bound_depth()
+            << "）=====";
   for (int i = 0; i < std::max(1, FLAGS_pyramid_rebuilds); ++i) {
-    matcher = std::make_unique<InstrumentedFastCorrelativeScanMatcher2D>(
-        *grid, options);
+    if (FLAGS_matcher == "v0") {
+      matcher.v0 = std::make_unique<InstrumentedFastCorrelativeScanMatcher2D>(
+          *grid, options);
+    } else {
+      matcher.v1 = std::make_unique<
+          carto::mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>(
+          *grid, options);
+      matcher.v1->set_num_threads(FLAGS_num_threads);
+      matcher.v1->set_batch_size(FLAGS_batch_size);
+      matcher.v1->set_timeout_ms(FLAGS_timeout_ms);
+    }
     LOG(INFO) << "  第 " << (i + 1) << " 次构建: "
-              << matcher->precomputation_ms() << " ms";
+              << matcher.precomputation_ms() << " ms";
   }
 
   std::vector<RunRecord> records;
@@ -620,7 +681,7 @@ void Run() {
         // 与线上 merged_filtered_cloud 同样的滤波，保证输入点密度一致
         cloud = ApplyMergedCloudFilters(cloud, lua.dp_options);
       }
-      RunRecord rec = RunMatch(*matcher, cloud, min_score, "synth", generated);
+      RunRecord rec = RunMatch(matcher, cloud, min_score, "synth", generated);
       rec.gt_x = gt_pose.translation().x();
       rec.gt_y = gt_pose.translation().y();
       rec.gt_yaw = gt_pose.rotation().angle();
@@ -835,7 +896,7 @@ void Run() {
         cloud = carto::sensor::PointCloud(std::move(merged));
       }
       if (cloud.empty()) continue;
-      RunRecord rec = RunMatch(*matcher, cloud, min_score, "bag", tested);
+      RunRecord rec = RunMatch(matcher, cloud, min_score, "bag", tested);
       rec.success = rec.profile.matched;
       records.push_back(rec);
       ++tested;
@@ -865,6 +926,13 @@ void Run() {
          << cells.num_x_cells * grid->limits().resolution() << " m\n"
          << "cell 统计: total=" << stats.total << " known=" << stats.known
          << " free=" << stats.free << " occupied=" << stats.occupied << "\n"
+         << "matcher: " << FLAGS_matcher
+         << (FLAGS_matcher == "v1"
+                 ? "（Phase A: best-first+攒批并行, threads=" +
+                       std::to_string(FLAGS_num_threads) + " batch=" +
+                       std::to_string(FLAGS_batch_size) + "）"
+                 : "（原生 BBS）")
+         << "\n"
          << "参数: min_score=" << min_score << " branch_and_bound_depth="
          << options.branch_and_bound_depth()
          << (lua.enabled ? "（线上对齐模式: " + FLAGS_configuration_basename +
@@ -874,7 +942,7 @@ void Run() {
          << "scan: 双雷达=" << FLAGS_scan_topics
          << " tracking_frame=" << FLAGS_tracking_frame
          << " | synth beams=" << FLAGS_beams << " seed=" << FLAGS_seed << "\n"
-         << "金字塔构建（最后一次）: " << matcher->precomputation_ms()
+         << "金字塔构建（最后一次）: " << matcher.precomputation_ms()
          << " ms（线上为懒构造，计入首次全局定位延迟）\n";
 
   LOG(INFO) << "";
@@ -897,7 +965,7 @@ void Run() {
     if (summary.empty()) continue;
     LOG(INFO) << "\n" << summary;
     const std::string path = out_dir + "/" + map_tag + "_" + timestamp + "_" +
-                             mode + ".txt";
+                             FLAGS_matcher + "_" + mode + ".txt";
     WriteReport(path, header.str(), summary, records, mode);
   }
 }
