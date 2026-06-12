@@ -75,6 +75,13 @@ class PrecomputationGrid2D {
     return min_score_ + value * ((max_score_ - min_score_) / 255.f);
   }
 
+  // 只读访问器：GPU 加速匹配器把各层栅格整体上传显存时使用。
+  const Eigen::Array2i& offset() const { return offset_; }
+  const CellLimits& wide_limits() const { return wide_limits_; }
+  const std::vector<uint8>& cells() const { return cells_; }
+  float min_score() const { return min_score_; }
+  float max_score() const { return max_score_; }
+
  private:
   uint8 ComputeCellValue(float probability) const;
 

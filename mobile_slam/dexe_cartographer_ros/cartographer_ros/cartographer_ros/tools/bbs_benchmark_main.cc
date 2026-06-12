@@ -74,6 +74,7 @@
 #include "tf2_msgs/msg/tf_message.hpp"
 
 #include "cartographer/mapping/internal/2d/scan_matching/batch_fast_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/gpu_batch_fast_correlative_scan_matcher_2d.h"
 #include "cartographer_ros/tools/bbs_benchmark/instrumented_fast_correlative_scan_matcher_2d.h"
 
 // --- 地图与匹配参数 ---
@@ -95,11 +96,13 @@ DEFINE_int32(pyramid_rebuilds, 3, "金字塔重复构建次数（测构建耗时
 
 // --- matcher 版本（A/B 对照）---
 DEFINE_string(matcher, "v0",
-              "v0=原生 BBS（instrumented 副本）| v1=Phase A 加速版"
-              "（best-first + 攒批 OpenMP 并行打分，BatchFastCorrelativeScanMatcher2D）");
+              "v0=原生 BBS（instrumented 副本）| v1=Phase A CPU 加速版"
+              "（best-first + 攒批 OpenMP 并行）| v2=Phase B GPU 加速版"
+              "（best-first + CUDA 攒批 kernel，需 BUILD_GPU_MATCHER=ON）");
 DEFINE_int32(num_threads, 4, "v1 并行打分线程数");
-DEFINE_int32(batch_size, 8192, "v1 攒批大小");
-DEFINE_double(timeout_ms, 0., "v1 超时（ms，<=0 不限时，超时返回当前最优）");
+DEFINE_int32(batch_size, 0,
+             "攒批大小；0=按版本默认（v1: 8192, v2: 32768）");
+DEFINE_double(timeout_ms, 0., "v1/v2 超时（ms，<=0 不限时，超时返回当前最优）");
 
 // --- 模式 ---
 DEFINE_string(mode, "synth", "synth | bag | both");
@@ -407,9 +410,14 @@ struct MatcherHolder {
   std::unique_ptr<
       carto::mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>
       v1;
+  std::unique_ptr<
+      carto::mapping::scan_matching::GpuBatchFastCorrelativeScanMatcher2D>
+      v2;
 
   double precomputation_ms() const {
-    return v0 ? v0->precomputation_ms() : v1->precomputation_ms();
+    if (v0) return v0->precomputation_ms();
+    if (v1) return v1->precomputation_ms();
+    return v2->precomputation_ms();
   }
 
   bool Match(const carto::sensor::PointCloud& cloud, const float min_score,
@@ -419,7 +427,9 @@ struct MatcherHolder {
       return v0->MatchFullSubmap(cloud, min_score, score, pose, profile);
     }
     carto::mapping::scan_matching::BatchMatchStats stats;
-    const bool ok = v1->MatchFullSubmap(cloud, min_score, score, pose, &stats);
+    const bool ok =
+        v1 ? v1->MatchFullSubmap(cloud, min_score, score, pose, &stats)
+           : v2->MatchFullSubmap(cloud, min_score, score, pose, &stats);
     profile->t_rotate_ms = stats.t_rotate_ms;
     profile->t_discretize_ms = stats.t_discretize_ms;
     profile->t_gen_lowres_ms = stats.t_gen_lowres_ms;
@@ -436,7 +446,7 @@ struct MatcherHolder {
     profile->scored_per_depth = stats.scored_per_depth;
     profile->best_score = stats.best_score;
     profile->matched = stats.matched;
-    if (stats.timed_out) LOG(WARNING) << "v1 匹配超时，返回当前最优";
+    if (stats.timed_out) LOG(WARNING) << "v1/v2 匹配超时，返回当前最优";
     return ok;
   }
 };
@@ -640,8 +650,9 @@ void Run() {
     options.set_branch_and_bound_depth(FLAGS_branch_and_bound_depth);
   }
 
-  CHECK(FLAGS_matcher == "v0" || FLAGS_matcher == "v1")
-      << "--matcher 仅支持 v0 | v1";
+  CHECK(FLAGS_matcher == "v0" || FLAGS_matcher == "v1" ||
+        FLAGS_matcher == "v2")
+      << "--matcher 仅支持 v0 | v1 | v2";
   MatcherHolder matcher;
   LOG(INFO) << "===== 金字塔构建（matcher=" << FLAGS_matcher
             << ", branch_and_bound_depth=" << options.branch_and_bound_depth()
@@ -650,13 +661,19 @@ void Run() {
     if (FLAGS_matcher == "v0") {
       matcher.v0 = std::make_unique<InstrumentedFastCorrelativeScanMatcher2D>(
           *grid, options);
-    } else {
+    } else if (FLAGS_matcher == "v1") {
       matcher.v1 = std::make_unique<
           carto::mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>(
           *grid, options);
       matcher.v1->set_num_threads(FLAGS_num_threads);
-      matcher.v1->set_batch_size(FLAGS_batch_size);
+      if (FLAGS_batch_size > 0) matcher.v1->set_batch_size(FLAGS_batch_size);
       matcher.v1->set_timeout_ms(FLAGS_timeout_ms);
+    } else {
+      matcher.v2 = std::make_unique<
+          carto::mapping::scan_matching::GpuBatchFastCorrelativeScanMatcher2D>(
+          *grid, options);
+      if (FLAGS_batch_size > 0) matcher.v2->set_batch_size(FLAGS_batch_size);
+      matcher.v2->set_timeout_ms(FLAGS_timeout_ms);
     }
     LOG(INFO) << "  第 " << (i + 1) << " 次构建: "
               << matcher.precomputation_ms() << " ms";
@@ -928,10 +945,11 @@ void Run() {
          << " free=" << stats.free << " occupied=" << stats.occupied << "\n"
          << "matcher: " << FLAGS_matcher
          << (FLAGS_matcher == "v1"
-                 ? "（Phase A: best-first+攒批并行, threads=" +
-                       std::to_string(FLAGS_num_threads) + " batch=" +
-                       std::to_string(FLAGS_batch_size) + "）"
-                 : "（原生 BBS）")
+                 ? "（Phase A: best-first+攒批 OpenMP, threads=" +
+                       std::to_string(FLAGS_num_threads) + "）"
+                 : FLAGS_matcher == "v2"
+                       ? "（Phase B: best-first+CUDA 攒批 kernel）"
+                       : "（原生 BBS）")
          << "\n"
          << "参数: min_score=" << min_score << " branch_and_bound_depth="
          << options.branch_and_bound_depth()
