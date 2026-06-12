@@ -97,7 +97,8 @@ DEFINE_int32(pyramid_rebuilds, 3, "金字塔重复构建次数（测构建耗时
 // --- matcher 版本（A/B 对照）---
 DEFINE_string(matcher, "v0",
               "v0=原生 BBS（instrumented 副本）| v1=Phase A CPU 加速版"
-              "（best-first + 攒批 OpenMP 并行）| v2=Phase B GPU 加速版"
+              "（best-first + 攒批 OpenMP 并行）| v1.1=v1+角度金字塔分支"
+              "（2D roto-translational branching，近似上界）| v2=Phase B GPU"
               "（best-first + CUDA 攒批 kernel，需 BUILD_GPU_MATCHER=ON）");
 DEFINE_int32(num_threads, 4, "v1 并行打分线程数");
 DEFINE_int32(batch_size, 0,
@@ -651,8 +652,9 @@ void Run() {
   }
 
   CHECK(FLAGS_matcher == "v0" || FLAGS_matcher == "v1" ||
-        FLAGS_matcher == "v2")
-      << "--matcher 仅支持 v0 | v1 | v2";
+        FLAGS_matcher == "v1.1" || FLAGS_matcher == "v2" ||
+        FLAGS_matcher == "v2.1")
+      << "--matcher 仅支持 v0 | v1 | v1.1 | v2 | v2.1";
   MatcherHolder matcher;
   LOG(INFO) << "===== 金字塔构建（matcher=" << FLAGS_matcher
             << ", branch_and_bound_depth=" << options.branch_and_bound_depth()
@@ -661,19 +663,21 @@ void Run() {
     if (FLAGS_matcher == "v0") {
       matcher.v0 = std::make_unique<InstrumentedFastCorrelativeScanMatcher2D>(
           *grid, options);
-    } else if (FLAGS_matcher == "v1") {
+    } else if (FLAGS_matcher == "v1" || FLAGS_matcher == "v1.1") {
       matcher.v1 = std::make_unique<
           carto::mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>(
           *grid, options);
       matcher.v1->set_num_threads(FLAGS_num_threads);
       if (FLAGS_batch_size > 0) matcher.v1->set_batch_size(FLAGS_batch_size);
       matcher.v1->set_timeout_ms(FLAGS_timeout_ms);
+      matcher.v1->set_use_angular_branching(FLAGS_matcher == "v1.1");
     } else {
       matcher.v2 = std::make_unique<
           carto::mapping::scan_matching::GpuBatchFastCorrelativeScanMatcher2D>(
           *grid, options);
       if (FLAGS_batch_size > 0) matcher.v2->set_batch_size(FLAGS_batch_size);
       matcher.v2->set_timeout_ms(FLAGS_timeout_ms);
+      matcher.v2->set_use_angular_branching(FLAGS_matcher == "v2.1");
     }
     LOG(INFO) << "  第 " << (i + 1) << " 次构建: "
               << matcher.precomputation_ms() << " ms";

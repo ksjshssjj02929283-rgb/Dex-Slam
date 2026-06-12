@@ -48,6 +48,12 @@ class GpuBatchFastCorrelativeScanMatcher2D {
 
   void set_batch_size(std::size_t n) { batch_size_ = n; }
   void set_timeout_ms(double ms) { timeout_ms_ = ms; }
+  // V2.1 角度金字塔分支：与 V1.1 同一机制与同一近似上界约定
+  //（shift 默认 2，依据 V1.1 的 200 位姿压测定参，见 DEC-005）。
+  void set_use_angular_branching(bool enable) {
+    use_angular_branching_ = enable;
+  }
+  void set_angular_block_shift(int shift) { angular_block_shift_ = shift; }
 
   // 含金字塔 CPU 构建 + 显存上传两段。
   double precomputation_ms() const { return precomputation_ms_; }
@@ -69,6 +75,8 @@ class GpuBatchFastCorrelativeScanMatcher2D {
 
   std::size_t batch_size_ = 32768;
   double timeout_ms_ = 0.;
+  bool use_angular_branching_ = false;
+  int angular_block_shift_ = 2;
 };
 
 }  // namespace scan_matching

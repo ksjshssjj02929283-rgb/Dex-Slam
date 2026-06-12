@@ -57,14 +57,19 @@ struct GpuCandidate {
 // 每线程一个候选：按候选 depth 取层元数据，遍历对应离散 scan 查表求和。
 // sum 为整数累加，换算与 CPU 同一公式 → 结果与 CPU 逐位一致。
 __global__ void ScoreKernel(const GpuGridMeta* metas, const int2* scan_points,
-                            const int* scan_offsets, GpuCandidate* candidates,
+                            const int* scan_offsets,
+                            const int* angular_blocks, const int num_scans,
+                            GpuCandidate* candidates,
                             const int num_candidates) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_candidates) return;
   GpuCandidate c = candidates[i];
   const GpuGridMeta m = metas[c.depth];
-  const int begin = scan_offsets[c.scan_index];
-  const int end = scan_offsets[c.scan_index + 1];
+  // 角度块中心为代表角度（块大小 1 时即自身，V2 行为）。
+  const int rep = min(c.scan_index + angular_blocks[c.depth] / 2,
+                      num_scans - 1);
+  const int begin = scan_offsets[rep];
+  const int end = scan_offsets[rep + 1];
   int sum = 0;
   for (int j = begin; j < end; ++j) {
     const int x = scan_points[j].x + c.x_index_offset - m.offset_x;
@@ -91,6 +96,10 @@ struct GpuBatchFastCorrelativeScanMatcher2D::GpuData {
   std::size_t scan_points_capacity = 0;
   std::size_t scan_offsets_capacity = 0;
 
+  // 每层角度块表（每次匹配上传，max_depth+1 个 int）
+  int* angular_blocks = nullptr;
+  std::size_t angular_blocks_capacity = 0;
+
   // 候选批（pinned host + device，容量复用）
   GpuCandidate* h_candidates = nullptr;  // pinned
   GpuCandidate* d_candidates = nullptr;
@@ -103,6 +112,7 @@ struct GpuBatchFastCorrelativeScanMatcher2D::GpuData {
     if (metas) cudaFree(metas);
     if (scan_points) cudaFree(scan_points);
     if (scan_offsets) cudaFree(scan_offsets);
+    if (angular_blocks) cudaFree(angular_blocks);
     if (h_candidates) cudaFreeHost(h_candidates);
     if (d_candidates) cudaFree(d_candidates);
     if (stream) cudaStreamDestroy(stream);
@@ -180,6 +190,23 @@ bool GpuBatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
   stats->points_per_scan = point_cloud.size();
   stats->scored_per_depth.assign(max_depth + 1, 0);
 
+  // V2.1 角度块表（与 V1.1 同一公式与安全系数约定）。
+  std::vector<int> angular_blocks(max_depth + 1, 1);
+  if (use_angular_branching_) {
+    for (int d = 1; d <= max_depth; ++d) {
+      angular_blocks[d] = std::max(1, 1 << (d - angular_block_shift_));
+    }
+  }
+  if (angular_blocks.size() > gpu_->angular_blocks_capacity) {
+    if (gpu_->angular_blocks) cudaFree(gpu_->angular_blocks);
+    CUDA_CHECK(cudaMalloc(&gpu_->angular_blocks,
+                          angular_blocks.size() * sizeof(int)));
+    gpu_->angular_blocks_capacity = angular_blocks.size();
+  }
+  CUDA_CHECK(cudaMemcpyAsync(gpu_->angular_blocks, angular_blocks.data(),
+                             angular_blocks.size() * sizeof(int),
+                             cudaMemcpyHostToDevice, gpu_->stream));
+
   // 旋转展开与离散化：与原版/V1 一致（CPU）。
   const auto t_rotate = Clock::now();
   const Eigen::Rotation2Dd initial_rotation = initial_pose_estimate.rotation();
@@ -248,7 +275,8 @@ bool GpuBatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
     const int block = 128;
     const int grid_dim = static_cast<int>((n + block - 1) / block);
     ScoreKernel<<<grid_dim, block, 0, gpu_->stream>>>(
-        gpu_->metas, gpu_->scan_points, gpu_->scan_offsets, gpu_->d_candidates,
+        gpu_->metas, gpu_->scan_points, gpu_->scan_offsets,
+        gpu_->angular_blocks, search_parameters.num_scans, gpu_->d_candidates,
         static_cast<int>(n));
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaMemcpyAsync(gpu_->h_candidates, gpu_->d_candidates,
@@ -260,13 +288,16 @@ bool GpuBatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
     for (const auto& c : *batch) stats->scored_per_depth[c.depth] += 1;
   };
 
-  // 初始层全枚举（与 V1 相同）→ GPU 打分。
+  // 初始层枚举（角度分支开启时按顶层角度块步进）→ GPU 打分。
   const auto t_gen = Clock::now();
   const int linear_step_size = 1 << max_depth;
+  const int top_block = angular_blocks[max_depth];
   std::vector<GpuCandidate> initial;
-  for (int scan_index = 0; scan_index != search_parameters.num_scans;
-       ++scan_index) {
-    const auto& bounds = search_parameters.linear_bounds[scan_index];
+  for (int scan_index = 0; scan_index < search_parameters.num_scans;
+       scan_index += top_block) {
+    const int rep = std::min(scan_index + top_block / 2,
+                             search_parameters.num_scans - 1);
+    const auto& bounds = search_parameters.linear_bounds[rep];
     for (int x = bounds.min_x; x <= bounds.max_x; x += linear_step_size) {
       for (int y = bounds.min_y; y <= bounds.max_y; y += linear_step_size) {
         initial.push_back(GpuCandidate{0.f, max_depth, scan_index, x, y});
@@ -324,15 +355,29 @@ bool GpuBatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
     }
     ++stats->num_expanded_nodes;
     const int half_width = 1 << (candidate.depth - 1);
-    const auto& bounds = search_parameters.linear_bounds[candidate.scan_index];
-    for (int x_offset : {0, half_width}) {
-      if (candidate.x_index_offset + x_offset > bounds.max_x) break;
-      for (int y_offset : {0, half_width}) {
-        if (candidate.y_index_offset + y_offset > bounds.max_y) break;
-        stock.push_back(GpuCandidate{
-            0.f, candidate.depth - 1, candidate.scan_index,
-            candidate.x_index_offset + x_offset,
-            candidate.y_index_offset + y_offset});
+    const int parent_block = angular_blocks[candidate.depth];
+    const int child_block = angular_blocks[candidate.depth - 1];
+    int angle_children[2] = {candidate.scan_index, 0};
+    int num_angle_children = 1;
+    if (child_block < parent_block &&
+        candidate.scan_index + child_block < search_parameters.num_scans) {
+      angle_children[1] = candidate.scan_index + child_block;
+      num_angle_children = 2;
+    }
+    for (int a = 0; a < num_angle_children; ++a) {
+      const int angle_start = angle_children[a];
+      const int rep = std::min(angle_start + child_block / 2,
+                               search_parameters.num_scans - 1);
+      const auto& bounds = search_parameters.linear_bounds[rep];
+      for (int x_offset : {0, half_width}) {
+        if (candidate.x_index_offset + x_offset > bounds.max_x) break;
+        for (int y_offset : {0, half_width}) {
+          if (candidate.y_index_offset + y_offset > bounds.max_y) break;
+          stock.push_back(GpuCandidate{
+              0.f, candidate.depth - 1, angle_start,
+              candidate.x_index_offset + x_offset,
+              candidate.y_index_offset + y_offset});
+        }
       }
     }
     if (stock.size() >= batch_size_) {

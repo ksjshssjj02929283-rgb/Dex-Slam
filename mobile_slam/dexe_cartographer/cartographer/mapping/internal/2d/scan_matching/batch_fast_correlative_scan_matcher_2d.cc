@@ -70,6 +70,16 @@ bool BatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
   stats->points_per_scan = point_cloud.size();
   stats->scored_per_depth.assign(max_depth + 1, 0);
 
+  // V1.1 角度块表：block[d] = 该层一个角度节点覆盖的底层角度数（2 的幂）。
+  // 小角度近似下该层允许的角度步长 ∝ 层等效格尺寸（2^d），取 2x 安全系数
+  // → block[d] = 2^(d-1)；L0 恒为 1（最终角度精度与 V1/V0 完全一致）。
+  std::vector<int> angular_blocks(max_depth + 1, 1);
+  if (use_angular_branching_) {
+    for (int d = 1; d <= max_depth; ++d) {
+      angular_blocks[d] = std::max(1, 1 << (d - angular_block_shift_));
+    }
+  }
+
   // 旋转展开与离散化：与原版一致。
   const auto t_rotate = Clock::now();
   const Eigen::Rotation2Dd initial_rotation = initial_pose_estimate.rotation();
@@ -90,13 +100,17 @@ bool BatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
   search_parameters.ShrinkToFit(discrete_scans, limits_.cell_limits());
   stats->t_discretize_ms = ElapsedMs(t_discretize);
 
-  // 初始层（最粗分辨率）候选全枚举：与原版一致。
+  // 初始层（最粗分辨率）候选枚举。角度分支开启时按顶层角度块步进
+  // （scan_index 存块起始，bounds 用块中心代表角度的）。
   const auto t_gen = Clock::now();
   const int linear_step_size = 1 << max_depth;
+  const int top_block = angular_blocks[max_depth];
   std::vector<BatchCandidate> initial;
-  for (int scan_index = 0; scan_index != search_parameters.num_scans;
-       ++scan_index) {
-    const auto& bounds = search_parameters.linear_bounds[scan_index];
+  for (int scan_index = 0; scan_index < search_parameters.num_scans;
+       scan_index += top_block) {
+    const int rep = std::min(scan_index + top_block / 2,
+                             search_parameters.num_scans - 1);
+    const auto& bounds = search_parameters.linear_bounds[rep];
     for (int x = bounds.min_x; x <= bounds.max_x; x += linear_step_size) {
       for (int y = bounds.min_y; y <= bounds.max_y; y += linear_step_size) {
         initial.push_back(BatchCandidate{0.f, max_depth, scan_index, x, y});
@@ -107,7 +121,7 @@ bool BatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
   stats->num_initial_candidates = initial.size();
 
   const auto t_init_score = Clock::now();
-  ScoreBatch(discrete_scans, &initial, stats);
+  ScoreBatch(discrete_scans, angular_blocks, &initial, stats);
   stats->t_score_lowres_ms = ElapsedMs(t_init_score);
 
   // best-first 主循环 + 攒批并行打分。
@@ -128,7 +142,7 @@ bool BatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
 
   // flush：批打分后只把仍可能超过 best_score 的候选入队（剪枝）。
   const auto flush_stock = [&]() {
-    ScoreBatch(discrete_scans, &stock, stats);
+    ScoreBatch(discrete_scans, angular_blocks, &stock, stats);
     for (const auto& c : stock) {
       if (c.score > best_score) queue.push(c);
     }
@@ -159,18 +173,32 @@ bool BatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
       continue;
     }
 
-    // 分支：与原版相同的 2x2 细分与边界检查。
+    // 分支：平移 2x2 细分；角度分支开启时角度块同步二分（最多 2x2x2 子候选）。
     ++stats->num_expanded_nodes;
     const int half_width = 1 << (candidate.depth - 1);
-    const auto& bounds = search_parameters.linear_bounds[candidate.scan_index];
-    for (int x_offset : {0, half_width}) {
-      if (candidate.x_index_offset + x_offset > bounds.max_x) break;
-      for (int y_offset : {0, half_width}) {
-        if (candidate.y_index_offset + y_offset > bounds.max_y) break;
-        stock.push_back(BatchCandidate{
-            0.f, candidate.depth - 1, candidate.scan_index,
-            candidate.x_index_offset + x_offset,
-            candidate.y_index_offset + y_offset});
+    const int parent_block = angular_blocks[candidate.depth];
+    const int child_block = angular_blocks[candidate.depth - 1];
+    int angle_children[2] = {candidate.scan_index, 0};
+    int num_angle_children = 1;
+    if (child_block < parent_block &&
+        candidate.scan_index + child_block < search_parameters.num_scans) {
+      angle_children[1] = candidate.scan_index + child_block;
+      num_angle_children = 2;
+    }
+    for (int a = 0; a < num_angle_children; ++a) {
+      const int angle_start = angle_children[a];
+      const int rep = std::min(angle_start + child_block / 2,
+                               search_parameters.num_scans - 1);
+      const auto& bounds = search_parameters.linear_bounds[rep];
+      for (int x_offset : {0, half_width}) {
+        if (candidate.x_index_offset + x_offset > bounds.max_x) break;
+        for (int y_offset : {0, half_width}) {
+          if (candidate.y_index_offset + y_offset > bounds.max_y) break;
+          stock.push_back(BatchCandidate{
+              0.f, candidate.depth - 1, angle_start,
+              candidate.x_index_offset + x_offset,
+              candidate.y_index_offset + y_offset});
+        }
       }
     }
 
@@ -210,14 +238,19 @@ bool BatchFastCorrelativeScanMatcher2D::MatchWithSearchParameters(
 
 void BatchFastCorrelativeScanMatcher2D::ScoreBatch(
     const std::vector<DiscreteScan2D>& discrete_scans,
+    const std::vector<int>& angular_blocks,
     std::vector<BatchCandidate>* batch, BatchMatchStats* stats) const {
   const int n = static_cast<int>(batch->size());
+  const int num_scans = static_cast<int>(discrete_scans.size());
 #pragma omp parallel for schedule(dynamic, 256) num_threads(num_threads_)
   for (int i = 0; i < n; ++i) {
     BatchCandidate& c = (*batch)[i];
     const PrecomputationGrid2D& grid =
         precomputation_grid_stack_->Get(c.depth);
-    const DiscreteScan2D& scan = discrete_scans[c.scan_index];
+    // 角度块中心为代表角度打分（块大小 1 时即自身，V1 行为）。
+    const int rep =
+        std::min(c.scan_index + angular_blocks[c.depth] / 2, num_scans - 1);
+    const DiscreteScan2D& scan = discrete_scans[rep];
     int sum = 0;
     for (const Eigen::Array2i& xy_index : scan) {
       sum += grid.GetValue(Eigen::Array2i(xy_index.x() + c.x_index_offset,
