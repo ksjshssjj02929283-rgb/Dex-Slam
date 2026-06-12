@@ -70,6 +70,18 @@ class Submap2D : public Submap {
                        proto::SubmapQuery::Response* response) const override;
 
   const Grid2D* grid() const { return grid_.get(); }
+  // 静态 chunk 动态更新（4-b）：返回可变 grid 指针。
+  Grid2D* mutable_grid() { return grid_.get(); }
+  // 静态 chunk 动态更新（4-b）：整体替换 grid。split-back 时不能对已有 grid 的已知 cell 调
+  // SetProbability（ProbabilityGrid 不变量：SetProbability 只能写 unknown cell，否则 CHECK 崩），
+  // 故用 merged 结果重建一张新 grid（全 unknown→SetProbability 合法）后整体换入。
+  void SetGrid(std::unique_ptr<Grid2D> grid) { grid_ = std::move(grid); }
+  // chunk 动态更新（DEC-023）：整体替换 cloud_（直填权威，不经 ikd-tree）。split live → chunk 时
+  // 用 live 中该 chunk 的点（VoxelFilter 后）替换 chunk cloud。
+  void SetCloud(std::unique_ptr<sensor::PointCloud> cloud) {
+    cloud_ = std::move(cloud);
+    is_dirty_cloud_ = false;
+  }
   const sensor::PointCloud* cloud() const {
     if (is_dirty_cloud_) {
       FreshCloudData();
@@ -90,6 +102,10 @@ class Submap2D : public Submap {
 
   void InsertCloudData(const sensor::PointCloud & cloud_data,
                        const sensor::PointCloud & highlight_cloud_in_local);
+
+  // 静态 chunk 动态更新（4-b）：把新观测点追加到 cloud_（直填，不经 ikd-tree），并按 grid 分辨率
+  // 体素下采样以防无界增长。仅用于无 ikd-tree 的静态 chunk（FinishStatic 后）；不更新 highlight。
+  void AppendCloudPointsStatic(const sensor::PointCloud& pts);
 
   // void InsertNormalData(const sensor::NormalPointCloud & normals,
   //                       const RangeDataInserterInterface * range_data_inserter);

@@ -91,6 +91,11 @@ public:
   // 仅 chunk_map_ 非空时有效，否则返回 false（非致命，调用方按"无 chunk map"处理）。
   bool SaveChunkMap(const std::string& chunks_dir) const;
 
+  // DEC-024：保存前把当前 live submap 的累积更新切回所有覆盖 chunk + 整合进 global_static
+  // （= UpdateRobotPose 跨格做的同款），使 chunk_map_ + global_static 都包含当前 active 区最新状态。
+  // chunk 模式无 live 时为 no-op。⚠️ v1 假定保存时系统静止（不与匹配线程并发）。
+  void FlushForSave();
+
 private:
   // 判断是否需要触发局部地图重建（机器人接近当前 local map 边界）
   bool NeedRebuildLocalMap() const;
@@ -119,6 +124,10 @@ private:
   std::shared_ptr<mapping::Submap2D> global_static_submap_;
   std::shared_ptr<mapping::Submap2D> global_dynamic_submap_;
 
+  // chunk 模式（DEC-025）：匹配 + 更新**合一**的单张 active submap（不 Finish，可插入）。
+  // 匹配走 Nearest_Search（未 Finish 树的 Root_Node 即可查，不依赖 finished_flag）+ 未裁剪 grid；
+  // 更新走每帧 InsertRangeData/Cloud（同线程顺序在 ScanMatch 之后，无并发）。跨格时本 submap 的
+  // 累积更新经 FlushLiveSubmap 切回 chunk + 整合 global_static，再从 chunk 重拼一张新的。
   std::shared_ptr<mapping::Submap2D> local_submap_;
 
   std::shared_ptr<transform::Rigid2d> robot_pose_;
@@ -134,11 +143,13 @@ private:
   // RangeDataInserter用于插入range data到global_dynamic_submap_
   std::unique_ptr<mapping::RangeDataInserterInterface> range_data_inserter_;
 
-  // data_mutex_ 保护元数据（robot_pose_, local_map_origin_, local_submap_, 等）
-  // submap_mutex_ 保护 global_dynamic_submap_ 的内部数据（grid/ikdtree/line_map）
-  // 两者独立，避免插入操作阻塞元数据读写
+  // data_mutex_ 保护元数据指针（robot_pose_, local_map_origin_, local_submap_, global_*_submap_）
+  // submap_mutex_ 保护 active submap 内部数据（grid/ikdtree/line_map）的写入：
+  //   chunk 模式 writer = UpdateDynamicMap 同步插入 + 跨格 FlushLiveSubmap + FlushForSave（save 线程）；
+  //   off 模式 writer = ApplyDynamicUpdate（insert 线程）。匹配/跨格与插入同线程顺序执行不竞争，
+  //   该锁主要隔离 save 线程与主线程。
   mutable std::mutex data_mutex_;
-  mutable std::shared_mutex submap_mutex_;  // 读写锁：writer=InsertWorker，reader=BuildLocalSubmap
+  mutable std::shared_mutex submap_mutex_;
 
   std::future<std::shared_ptr<mapping::Submap2D>> build_future_;
   std::atomic<bool> is_building_{false};
@@ -152,8 +163,6 @@ private:
   bool   has_prev_pose_for_dist_ = false;
   double prev_dist_x_ = 0.0;
   double prev_dist_y_ = 0.0;
-  // BuildLocalSubmap 调用计数，用于每 N 次周期性 Dump（防硬杀丢统计）。
-  std::atomic<long> build_call_count_{0};
 
   // ===== Chunk 化 =====
   // chunk_map_ 非空（被注入）时，local submap 改由 ChunkMap2D 从覆盖窗口的 chunk 拼装，

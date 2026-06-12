@@ -46,10 +46,10 @@ def generate_launch_description():
         'dexe_localization.launch.py'
     )
 
-    # Include dexe_localization.launch.py
+    # Include dexe_localization_2d.launch.py（原 dexe_localization.launch.py 已改名为 _2d）
     include_cartographer = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            PathJoinSubstitution([carto_share, 'launch', 'dexe_localization.launch.py'])
+            PathJoinSubstitution([carto_share, 'launch', 'dexe_localization_2d.launch.py'])
         )
     )
 

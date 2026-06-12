@@ -94,11 +94,25 @@ class ChunkMap2D {
   // 依据位姿用滞回策略更新活跃 chunk 集；活跃集变化返回 true。
   bool LoadOnPose(const transform::Rigid2d& pose);
 
-  // 把 origin 所在 chunk 的 load_radius（曼哈顿）内所有 chunk **整块**组合成 local submap：
-  // 直接拷贝这些 chunk 的 grid 已知 cell + 点云 + line（不再用 box filter 二次裁剪）。
-  // 范围 = 这些 chunk 的 bbox。纯读、自包含，可在后台线程无锁调用。
+  // 把 origin 所在 chunk 的 load_radius（切比雪夫方块）内所有 chunk **整块**组合成 submap：
+  // 拷贝这些 chunk 的 grid 已知 cell + 点云 + line，建 ikd-tree。
+  // finish_submap=true（默认）：Finish 成只读匹配 submap（截取式静态用法）。
+  // finish_submap=false：不 Finish，保持可插入——即 **live submap**（DEC-023/024：active 区直接更新）。
   std::shared_ptr<mapping::Submap2D> AssembleLocalSubmap(
-      const transform::Rigid2d& origin) const;
+      const transform::Rigid2d& origin, bool finish_submap = true) const;
+
+  // DEC-023：拼装 live submap（= AssembleLocalSubmap 不 Finish，保持可插入）。
+  std::shared_ptr<mapping::Submap2D> AssembleLiveSubmap(
+      const transform::Rigid2d& origin) const {
+    return AssembleLocalSubmap(origin, /*finish_submap=*/false);
+  }
+
+  // DEC-023/024：把 live submap 的累积更新切回它覆盖的 chunk（每个被覆盖 chunk **新建** grid 从 live
+  // 已知 cell 填入 + SetGrid 换入，cloud 按 Pos2Grid 分回 + VoxelFilter；新建空 grid → SetProbability
+  // 合法，规避 bug-592）。若 global_grid 非空，同时把这些 chunk 的 grid 用 SetProbabilityOverwrite
+  // **整合进 global_static**（保持全局图新鲜，供重定位 + 保存）。
+  void FlushLiveSubmap(const mapping::Submap2D& live,
+                       mapping::ProbabilityGrid* global_grid);
 
  private:
   // 每 chunk = 一块完整的小 Submap2D（grid 子块 + 点云 + line 子集）。
@@ -124,6 +138,7 @@ class ChunkMap2D {
   int last_gx_ = 0;
   int last_gy_ = 0;
   bool last_grid_set_ = false;
+  // DEC-023：chunk 路径全同步（更新/跨格/拼装都在匹配线程），无并发，故无需 chunks_mutex_。
 };
 
 }  // namespace localization

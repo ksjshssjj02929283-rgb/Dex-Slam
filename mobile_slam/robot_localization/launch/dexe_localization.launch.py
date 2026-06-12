@@ -35,7 +35,10 @@ def launch_setup(context, *args, **kwargs):
     # Get launch configuration values
     filter_type = LaunchConfiguration('filter_type').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
-    
+    # gdb 调试开关（默认关）：gdb:=true 时用 gdb 包装融合节点，并禁用 respawn（否则崩溃退出后反复重启）。
+    gdb_on = LaunchConfiguration('gdb').perform(context).lower() in ('true', '1', 'yes')
+    gdb_prefix = LaunchConfiguration('gdb_prefix').perform(context)
+
     # Determine executable and params file based on filter type
     if filter_type.lower() == 'ekf':
         executable = 'ekf_node'
@@ -52,13 +55,13 @@ def launch_setup(context, *args, **kwargs):
     else:
         raise ValueError(f"Invalid filter_type: {filter_type}. Must be 'ekf', 'ukf', or 'eskf'")
     
-    # Localization node
-    localization_node = Node(
+    # Localization node（gdb 开时禁用 respawn + 加 gdb prefix）
+    node_kwargs = dict(
         package='robot_localization',
         executable=executable,
         name='robot_localization',
         output='screen',
-        respawn=True,
+        respawn=not gdb_on,
         respawn_delay=2.0,
         parameters=[
             params_file,
@@ -69,7 +72,10 @@ def launch_setup(context, *args, **kwargs):
             # ('odometry/filtered', '/odometry/local'),
         ]
     )
-    
+    if gdb_on:
+        node_kwargs['prefix'] = gdb_prefix
+    localization_node = Node(**node_kwargs)
+
     return [localization_node]
 
 
@@ -89,9 +95,23 @@ def generate_launch_description():
         default_value='false',
         description='Use simulation time'
     )
-    
+
+    gdb_arg = DeclareLaunchArgument(
+        'gdb',
+        default_value='false',
+        description='Run the robot_localization filter node under gdb (true/false). Default false.'
+    )
+    gdb_prefix_arg = DeclareLaunchArgument(
+        'gdb_prefix',
+        default_value='gdb -ex run --args',
+        description="Command prefix used to wrap the node when gdb:=true "
+                    "(e.g. 'xterm -e gdb -ex run --args' or 'gdb -batch -ex run -ex bt --args')."
+    )
+
     return LaunchDescription([
         filter_type_arg,
         use_sim_time_arg,
+        gdb_arg,
+        gdb_prefix_arg,
         OpaqueFunction(function=launch_setup)
     ])

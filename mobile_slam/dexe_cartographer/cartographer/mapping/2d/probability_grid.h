@@ -43,6 +43,11 @@ class ProbabilityGrid : public Grid2D {
   void SetProbability(const Eigen::Array2i& cell_index,
                       const float probability);
 
+  // 覆盖写：把 cell 概率直接设为 'probability'，**允许 cell 已知**（不做 SetProbability 的
+  // CHECK(cell==unknown)）。用于 chunk unload 时把已更新 chunk 整合回 global_static（其 cell 已知）。
+  void SetProbabilityOverwrite(const Eigen::Array2i& cell_index,
+                               const float probability);
+
   // Applies the 'odds' specified when calling ComputeLookupTableToApplyOdds()
   // to the probability of the cell at 'cell_index' if the cell has not already
   // been updated. Multiple updates of the same cell will be ignored until

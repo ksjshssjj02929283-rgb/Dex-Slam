@@ -317,6 +317,26 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     return nullptr;
   }
 
+  // [chunk-trace MATCH] 诊断：匹配时 local_submap（chunk 拼装图）是否覆盖初始位姿 + 有内容。
+  {
+    static int m_n = 0;
+    if ((m_n++ % 30) == 0) {
+      const auto* g = dynamic_cast<const mapping::ProbabilityGrid*>(local_submap->grid());
+      const auto& cl = g->limits().cell_limits();
+      const Eigen::Vector2d gmax = g->limits().max();
+      const double res = g->limits().resolution();
+      const double gminx = gmax.x() - cl.num_x_cells * res, gminy = gmax.y() - cl.num_y_cells * res;
+      const double px = initial_ceres_pose.translation().x(), py = initial_ceres_pose.translation().y();
+      const bool covers = (px >= gminx && px <= gmax.x() && py >= gminy && py <= gmax.y());
+      LOG(INFO) << "[chunk-trace MATCH] #" << m_n << " init_pose(" << px << "," << py << ")"
+                << " local_submap world_x[" << gminx << "," << gmax.x() << "] world_y[" << gminy << "," << gmax.y() << "]"
+                << " covers=" << covers
+                << " local_pose(" << local_submap->local_pose().translation().x() << "," << local_submap->local_pose().translation().y() << ")"
+                << " cloud=" << (local_submap->cloud() ? local_submap->cloud()->size() : 0)
+                << " active_submaps=" << active_submaps_.submaps().size();
+    }
+  }
+
   common::TicToc tic_toc;
 
   Eigen::Matrix3d cov;

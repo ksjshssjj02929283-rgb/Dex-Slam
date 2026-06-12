@@ -201,6 +201,12 @@ void LocalizationUpdater::TriggerGlobalRelocalization()
 std::optional<LocalizationState> LocalizationUpdater::GetLocalizationState()
 {
   const int last_trajectory_id = num_trajectory_builders() - 1;
+  // 定位未启动/启动失败时 trajectory_builders_ 为空，last_trajectory_id = -1 →
+  // trajectory_builders_[-1] 是 vector 越界访问（SIGSEGV）。PublishLocalizationState 定时器
+  // 不管启动成功与否都会周期触发，故此处必须守卫：无 builder 或槽位为空时返回 nullopt。
+  if (last_trajectory_id < 0 || !trajectory_builders_[last_trajectory_id]) {
+    return std::nullopt;
+  }
   return trajectory_builders_[last_trajectory_id]->GetLocalizationState();
 }
 
@@ -363,12 +369,23 @@ void LocalizationUpdater::ApplyOriginTransform(const transform::Rigid3d& T) {
 
 void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
                                 io::ProtoStreamWriterInterface* const writer) {
-  // 先从 global submap 构建 chunk map（方案 B：与保存的 submap 同源），
-  // 再交给 WritePbStream 在最后统一序列化（chunk 最后写）。
-  auto chunk_for_save = BuildChunkForSave(global_static_submap_);
+  // DEC-024：保存前把 live submap 切回 chunk + 整合进 global_static，使两者含当前 active 区最新状态。
+  if (pose_estimator_2d_ && pose_estimator_2d_->GetLocalMapUpdater()) {
+    pose_estimator_2d_->GetLocalMapUpdater()->FlushForSave();
+  }
+  // 4-b（方案 A）：chunk 模式下 chunk_map_ 已被 active chunk 动态更新，是权威地图 → 直接序列化它；
+  // 否则（无 chunk_map_）回退方案 B：从 global submap 重切。
+  std::unique_ptr<ChunkMap2D> rebuilt_chunk;
+  const ChunkMap2D* chunk_for_save = nullptr;
+  if (chunk_map_ && !chunk_map_->empty()) {
+    chunk_for_save = chunk_map_.get();
+  } else {
+    rebuilt_chunk = BuildChunkForSave(global_static_submap_);
+    chunk_for_save = rebuilt_chunk.get();
+  }
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
                     include_unfinished_submaps, global_static_submap_.get(),
-                    chunk_for_save.get());
+                    chunk_for_save);
 
   if (global_static_submap_ && chunk_for_save) {
     LOG(INFO) << "=== Global Static Submap Save Statistics ===";
@@ -430,7 +447,12 @@ void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
 bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
                                       const std::string& filename) {
   io::ProtoStreamWriter writer(filename);
-  
+
+  // DEC-024：保存前把 live submap 切回 chunk + 整合进 global_static，使两者含当前 active 区最新状态。
+  if (pose_estimator_2d_ && pose_estimator_2d_->GetLocalMapUpdater()) {
+    pose_estimator_2d_->GetLocalMapUpdater()->FlushForSave();
+  }
+
   // 根据动态地图策略获取要保存的 submap
   // 策略判断逻辑在 LocalMapUpdater2D::GetGlobalSubmap() 中实现
   std::shared_ptr<mapping::Submap2D> submap_to_save = global_static_submap_;
@@ -458,12 +480,19 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
     }
   }
   
-  // 先从 submap_to_save 构建 chunk map（方案 B：chunk 与保存的 global submap 同源一致），
-  // 再交给 WritePbStream 在最后统一序列化（chunk 最后写）。
-  auto chunk_for_save = BuildChunkForSave(submap_to_save);
+  // 4-b（方案 A）：chunk 模式下 chunk_map_ 已被 active chunk 动态更新，是权威地图 → 直接序列化它；
+  // 否则（无 chunk_map_）回退方案 B：从 submap_to_save 重切。
+  std::unique_ptr<ChunkMap2D> rebuilt_chunk;
+  const ChunkMap2D* chunk_for_save = nullptr;
+  if (chunk_map_ && !chunk_map_->empty()) {
+    chunk_for_save = chunk_map_.get();
+  } else {
+    rebuilt_chunk = BuildChunkForSave(submap_to_save);
+    chunk_for_save = rebuilt_chunk.get();
+  }
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
                     include_unfinished_submaps, submap_to_save.get(),
-                    chunk_for_save.get());
+                    chunk_for_save);
 
   bool success = writer.Close();
   

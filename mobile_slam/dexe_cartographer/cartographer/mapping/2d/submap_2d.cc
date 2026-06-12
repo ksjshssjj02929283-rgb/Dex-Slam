@@ -518,16 +518,26 @@ bool Submap2D::SaveSubmapCloud(const std::string& folder,
 
   // save as pcl::PointCloud
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-  for (const auto& point : this->cloud()->points()) {
-    pcl::PointXYZ p;
-    p.x = point.position.x();
-    p.y = point.position.y();
-    p.z = 0.0;
-    cloud->push_back(p);
+  if (this->cloud()) {
+    for (const auto& point : this->cloud()->points()) {
+      pcl::PointXYZ p;
+      p.x = point.position.x();
+      p.y = point.position.y();
+      p.z = 0.0;
+      cloud->push_back(p);
+    }
+  }
+
+  // 空点云会让 pcl::io::savePCDFileBinary 抛 "Input point cloud has no data!"。
+  // 调试落盘是 best-effort，空云直接跳过 + 警告，避免异常冒泡害死定位启动（曾导致
+  // chunk 模式 auto-start 失败 → trajectory_builders_ 为空 → GetLocalizationState 越界崩溃）。
+  if (cloud->empty()) {
+    LOG(WARNING) << "SaveSubmapCloud: empty cloud, skip writing " << filename;
+    return false;
   }
 
   int res = pcl::io::savePCDFileBinary(folder + "/" + filename, *cloud);
-  return res > 0;
+  return res == 0;  // pcl 成功返回 0（原 res>0 恒为 false，顺带修正）
 }
 
 void Submap2D::InsertRangeData(
@@ -842,6 +852,41 @@ void Submap2D::FinishStatic() {
   // 也避免为只读 chunk 建树再销毁的无谓开销。
   grid_ = grid_->ComputeCroppedGrid();
   set_insertion_finished(true);
+  // ⭐ 销毁构造时分配的两个 ikd-tree（cloud + highlight）。
+  // 静态 chunk 永不使用 ikd-tree：AssembleLocalSubmap 只读 cloud()，匹配用的 ikd-tree 由拼装出
+  // 的 local submap 自建。但 Submap2D 构造函数给每个实例都 new 了 2 个 iKdTree，而每个 iKdTree
+  // 构造即 start_thread() 起一个 trylock 自旋的后台重建线程。成百上千个静态 chunk 会累积 2N 个
+  // 空转线程 → 持续高 CPU + 海量线程栈/ikd 缓冲内存（实测 chunk 模式 CPU 137%/RSS 6GB 的主因）。
+  // cloud_ 为构造时直填（is_dirty_cloud_=false），DestroyIkdTrees 不会触碰/刷空它，安全。
+  DestroyIkdTrees();
+}
+
+void Submap2D::AppendCloudPointsStatic(const sensor::PointCloud& pts) {
+  if (pts.empty()) return;
+  // 合并现有 cloud_ + 新点 → 按 grid 分辨率体素下采样（去重 + 控点数，防无界增长）。
+  std::vector<sensor::RangefinderPoint> merged_pts;
+  std::vector<float> merged_int;
+  bool keep_int = true;
+  auto add = [&](const sensor::PointCloud& c) {
+    const auto& p = c.points();
+    merged_pts.insert(merged_pts.end(), p.begin(), p.end());
+    if (!c.intensities().empty() && c.intensities().size() == p.size()) {
+      merged_int.insert(merged_int.end(), c.intensities().begin(),
+                        c.intensities().end());
+    } else {
+      keep_int = false;
+    }
+  };
+  if (cloud_) add(*cloud_);
+  add(pts);
+  sensor::PointCloud combined =
+      (keep_int && merged_int.size() == merged_pts.size())
+          ? sensor::PointCloud(std::move(merged_pts), std::move(merged_int))
+          : sensor::PointCloud(std::move(merged_pts));
+  const float res =
+      grid_ ? static_cast<float>(grid_->limits().resolution()) : 0.05f;
+  cloud_ = std::make_unique<sensor::PointCloud>(sensor::VoxelFilter(combined, res));
+  is_dirty_cloud_ = false;  // cloud_ 是直填权威，无需从 ikd-tree 同步
 }
 
 ActiveSubmaps2D::ActiveSubmaps2D(const proto::SubmapsOptions2D& options)

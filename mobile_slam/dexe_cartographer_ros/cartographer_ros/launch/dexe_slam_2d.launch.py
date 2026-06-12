@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -21,7 +22,7 @@ def generate_launch_description():
         description='Map name (used for output files)')
     resolution_arg = DeclareLaunchArgument(
         'resolution',
-        default_value='0.04',
+        default_value='0.05',
         description='Occupancy grid resolution in meters')
     config_file_arg = DeclareLaunchArgument(
         'config_file',
@@ -31,7 +32,18 @@ def generate_launch_description():
         'use_sim_time',
         default_value='false',
         description='Use simulation (Gazebo) clock if true')
-    
+    # gdb 调试开关（默认关）。gdb:=true 时用 gdb 包装 cartographer_node（并禁用 respawn，
+    # 否则崩溃退出后会被反复重启）。崩溃时停在 gdb 提示符，输入 bt 看栈。
+    gdb_arg = DeclareLaunchArgument(
+        'gdb',
+        default_value='false',
+        description='Run the cartographer node under gdb (true/false). Default false.')
+    gdb_prefix_arg = DeclareLaunchArgument(
+        'gdb_prefix',
+        default_value='gdb -ex run --args',
+        description='Command prefix used to wrap the node when gdb:=true '
+                    "(e.g. 'xterm -e gdb -ex run --args' or 'gdb -batch -ex run -ex bt --args').")
+
     # 话题重映射
     topic_remappings = [
         ('scan_1', 'laser_scan/front'),
@@ -46,30 +58,35 @@ def generate_launch_description():
     resolution = LaunchConfiguration('resolution')
     config_file = LaunchConfiguration('config_file')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    gdb = LaunchConfiguration('gdb')
+    gdb_prefix = LaunchConfiguration('gdb_prefix')
 
     # Locate cartographer_ros share directory to replace $(find cartographer_ros)
     carto_share = get_package_share_directory('cartographer_ros')
     configuration_directory = PathJoinSubstitution([carto_share, 'configuration_files'])
 
-    # mapping_node: cartographer_node
-    cartographer_node = Node(
+    # mapping_node: cartographer_node 公共参数（gdb 开/关两实例共用，仅 respawn/prefix/condition 不同）
+    cartographer_node_kwargs = dict(
         package='cartographer_ros',
         executable='cartographer_node',
         name='mapping_node',
         output='screen',
-        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],  # 修复: 使用LaunchConfiguration
-        respawn=True,
+        parameters=[{'use_sim_time': use_sim_time}],
         arguments=[
             '-configuration_directory', configuration_directory,
-            '-configuration_basename', config_file,  # 修复: 使用LaunchConfiguration而不是DeclareLaunchArgument
+            '-configuration_basename', config_file,
             '-map_folder', map_folder,
             '-map_name', map_name,
             '-resolution', resolution,
             '-collect_metrics', 'false',
         ],
         remappings=topic_remappings,
-        # prefix=['gdb -ex run --args'],
     )
+    # gdb:=false（默认）→ 正常运行（respawn=True）；gdb:=true → gdb 包装且 respawn=False。
+    cartographer_node = Node(
+        condition=UnlessCondition(gdb), respawn=True, **cartographer_node_kwargs)
+    cartographer_node_gdb = Node(
+        condition=IfCondition(gdb), respawn=False, prefix=[gdb_prefix], **cartographer_node_kwargs)
 
     # cartographer_occupancy_grid_node
     occupancy_grid_node = Node(
@@ -109,7 +126,10 @@ def generate_launch_description():
         resolution_arg,
         config_file_arg,  # 修复: 添加缺失的config_file_arg
         use_sim_time_arg,
+        gdb_arg,
+        gdb_prefix_arg,
         cartographer_node,
+        cartographer_node_gdb,
         occupancy_grid_node,
         # robot_state_publisher,  # uncomment if enabled above
     ])

@@ -49,6 +49,16 @@ void ProbabilityGrid::SetProbability(const Eigen::Array2i& cell_index,
   mutable_known_cells_box()->extend(cell_index.matrix());
 }
 
+// 覆盖写：允许 cell 已知（不 CHECK），用于整合已更新 chunk 回 global_static。
+void ProbabilityGrid::SetProbabilityOverwrite(const Eigen::Array2i& cell_index,
+                                              const float probability) {
+  uint16& cell =
+      (*mutable_correspondence_cost_cells())[ToFlatIndex(cell_index)];
+  cell =
+      CorrespondenceCostToValue(ProbabilityToCorrespondenceCost(probability));
+  mutable_known_cells_box()->extend(cell_index.matrix());
+}
+
 // Applies the 'odds' specified when calling ComputeLookupTableToApplyOdds()
 // to the probability of the cell at 'cell_index' if the cell has not already
 // been updated. Multiple updates of the same cell will be ignored until

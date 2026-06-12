@@ -13,6 +13,7 @@
 #include "cartographer/mapping/2d/xy_index.h"
 #include "cartographer/mapping/probability_values.h"
 #include "cartographer/mapping/proto/serialization.pb.h"
+#include "cartographer/sensor/internal/voxel_filter.h"  // FlushLiveSubmap cloud 下采样
 #include "glog/logging.h"
 
 namespace cartographer {
@@ -327,7 +328,7 @@ std::vector<std::pair<int, int>> ChunkMap2D::ActiveChunkIds() const {
 }
 
 std::shared_ptr<mapping::Submap2D> ChunkMap2D::AssembleLocalSubmap(
-    const transform::Rigid2d& origin) const {
+    const transform::Rigid2d& origin, bool finish_submap) const {
   CARTO_PERF_SCOPE("ChunkMap.AssembleLocalSubmap(on)");
   if (chunks_.empty()) {
     LOG(ERROR) << "ChunkMap2D::AssembleLocalSubmap: no chunks built.";
@@ -447,9 +448,125 @@ std::shared_ptr<mapping::Submap2D> ChunkMap2D::AssembleLocalSubmap(
   {
     CARTO_PERF_SCOPE("ChunkMap.RebuildIkd+Finish(on)");
     new_submap->RebuildIkdTrees();
-    new_submap->Finish();
+    // finish_submap=false → live submap：保持 insertion 未 finish（可继续 InsertRangeData/Cloud 更新）。
+    if (finish_submap) new_submap->Finish();
   }
+  // [chunk-trace] 诊断：assemble 出来的 submap 是否有内容 + 世界范围是否覆盖 origin（机器人位姿）。
+  {
+    const auto* g = dynamic_cast<const mapping::ProbabilityGrid*>(new_submap->grid());
+    const auto& cl = g->limits().cell_limits();
+    const Eigen::Vector2d gmax = g->limits().max();
+    const double gmin_x = gmax.x() - cl.num_x_cells * res;
+    const double gmin_y = gmax.y() - cl.num_y_cells * res;
+    const bool covers = (ox >= gmin_x && ox <= gmax.x() && oy >= gmin_y && oy <= gmax.y());
+    const size_t cloud_n = new_submap->cloud() ? new_submap->cloud()->size() : 0;
+    LOG(INFO) << "[chunk-trace ASM] origin(" << ox << "," << oy << ") finish=" << finish_submap
+              << " sel_chunks=" << sel.size()
+              << " grid " << cl.num_x_cells << "x" << cl.num_y_cells
+              << " world_x[" << gmin_x << "," << gmax.x() << "] world_y[" << gmin_y << "," << gmax.y() << "]"
+              << " covers_origin=" << covers
+              << " cloud=" << cloud_n;
+  }
+  // 每次 assemble chunk map（跨格 / 恢复 / 初始）时打印运行时间统计：rebuild_count + 各阶段耗时
+  // （AssembleLocalSubmap / FlushLiveSubmap / RebuildIkd+Finish / local_submap_insert）。chunk 模式
+  // 跨格才重拼，这是最有意义的打印点（避免每帧刷屏）。
+  common::PerfRegistry::Get().Dump("on-chunk-assemble");
   return new_submap;
+}
+
+void ChunkMap2D::FlushLiveSubmap(const mapping::Submap2D& live,
+                                 mapping::ProbabilityGrid* global_grid) {
+  CARTO_PERF_SCOPE("ChunkMap.FlushLiveSubmap");
+  if (chunks_.empty()) return;
+  const auto* lg = dynamic_cast<const mapping::ProbabilityGrid*>(live.grid());
+  if (!lg) return;
+  const double res = lg->limits().resolution();
+  const double L = options_.chunk_length;
+  const double half = 0.5 * L;
+  const int n = static_cast<int>(std::lround(L / res));
+
+  // ===== 1. 遍历 live 已知 grid cell，按 chunk 分组 → 为每个被覆盖且存在的 chunk **新建** grid 填入 =====
+  // 新建空 grid → SetProbability 合法（规避 bug-592）。落在非 loaded chunk 的 cell 直接丢弃。
+  std::unordered_map<int64_t, std::unique_ptr<mapping::ProbabilityGrid>> new_grids;
+  for (const Eigen::Array2i& li :
+       mapping::XYIndexRangeIterator(lg->limits().cell_limits())) {
+    if (!lg->IsKnown(li)) continue;
+    const Eigen::Vector2f world = lg->limits().GetCellCenter(li);
+    int gx, gy;
+    Pos2Grid(world.x(), world.y(), &gx, &gy);
+    const int64_t key = Key(gx, gy);
+    if (chunks_.find(key) == chunks_.end()) continue;  // 越界 / 非 loaded chunk → 丢弃
+    auto& ng = new_grids[key];
+    if (!ng) {
+      const double cmin_x = gx * L - half;
+      const double cmin_y = gy * L - half;
+      mapping::MapLimits climits(
+          res, Eigen::Vector2d(cmin_x + n * res, cmin_y + n * res),
+          mapping::CellLimits(n, n));
+      ng =
+          std::make_unique<mapping::ProbabilityGrid>(climits, conversion_tables_);
+    }
+    const Eigen::Array2i ci = ng->limits().GetCellIndex(world);
+    if (ng->limits().Contains(ci)) ng->SetProbability(ci, lg->GetProbability(li));
+  }
+
+  // ===== 2. live cloud 按 Pos2Grid 分组（保留 intensities）=====
+  std::unordered_map<int64_t, std::vector<sensor::RangefinderPoint>> pts_by_chunk;
+  std::unordered_map<int64_t, std::vector<float>> int_by_chunk;
+  bool live_has_int = false;
+  if (const auto* lc = live.cloud()) {
+    const auto& pts = lc->points();
+    live_has_int = lc->intensities().size() == pts.size();
+    for (size_t i = 0; i < pts.size(); ++i) {
+      int gx, gy;
+      Pos2Grid(pts[i].position.x(), pts[i].position.y(), &gx, &gy);
+      const int64_t key = Key(gx, gy);
+      if (chunks_.find(key) == chunks_.end()) continue;
+      pts_by_chunk[key].push_back(pts[i]);
+      if (live_has_int) int_by_chunk[key].push_back(lc->intensities()[i]);
+    }
+  }
+
+  // ===== 3. 各被覆盖 chunk：换入新 grid + 替换 cloud；若 global_grid 非空，整合该 chunk grid 进 global =====
+  for (auto& kv : new_grids) {
+    const int64_t key = kv.first;
+    auto cit = chunks_.find(key);
+    if (cit == chunks_.end() || !cit->second.submap) continue;
+    mapping::ProbabilityGrid* ng = kv.second.get();
+
+    // 3a. 整合进 global_static（覆盖写已知 cell，规避 bug-592；只整合 grid 供 occupancy 重定位）
+    if (global_grid) {
+      for (const Eigen::Array2i& ci :
+           mapping::XYIndexRangeIterator(ng->limits().cell_limits())) {
+        if (!ng->IsKnown(ci)) continue;
+        const Eigen::Vector2f world = ng->limits().GetCellCenter(ci);
+        const Eigen::Array2i gi = global_grid->limits().GetCellIndex(world);
+        if (global_grid->limits().Contains(gi)) {
+          global_grid->SetProbabilityOverwrite(gi, ng->GetProbability(ci));
+        }
+      }
+    }
+
+    // 3b. cloud：用 live 中该 chunk 的点（VoxelFilter 下采样）替换 chunk cloud
+    auto pit = pts_by_chunk.find(key);
+    if (pit != pts_by_chunk.end() && !pit->second.empty()) {
+      const auto iit = int_by_chunk.find(key);
+      sensor::PointCloud cc =
+          (live_has_int && iit != int_by_chunk.end() &&
+           iit->second.size() == pit->second.size())
+              ? sensor::PointCloud(std::move(pit->second), std::move(iit->second))
+              : sensor::PointCloud(std::move(pit->second));
+      cit->second.submap->SetCloud(std::make_unique<sensor::PointCloud>(
+          sensor::VoxelFilter(cc, static_cast<float>(res))));
+    }
+
+    // 3c. grid 整体换入 chunk
+    cit->second.submap->SetGrid(std::move(kv.second));
+  }
+  LOG(INFO) << "[chunk-trace FLUSH] live grid known-box wrote back to "
+            << new_grids.size() << " chunks; live cloud="
+            << (live.cloud() ? live.cloud()->size() : 0)
+            << " integrated_to_global=" << (global_grid != nullptr);
 }
 
 bool ChunkMap2D::SaveToDir(const std::string& chunks_dir) const {
@@ -528,6 +645,8 @@ mapping::proto::ChunkMapInfo ChunkMap2D::ToInfoProto() const {
 }
 
 std::vector<mapping::proto::ChunkSubmap2D> ChunkMap2D::ToChunkProtos() const {
+  // DEC-023：chunk 路径全同步；保存前 FlushForSave 在匹配线程把 live 切回 chunk。
+  // ⚠️ v1 假定保存时系统静止（不与匹配线程并发写 chunk 内容）。
   std::vector<mapping::proto::ChunkSubmap2D> protos;
   protos.reserve(chunks_.size());
   for (const auto& kv : chunks_) {
