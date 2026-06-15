@@ -40,6 +40,8 @@ if (WIN32)
     find_package(glog REQUIRED)
 endif()
 find_package(absl ${QUIET_OR_REQUIRED_OPTION})
+
+find_package(OpenMP REQUIRED)
 if(CARTOGRAPHER_HAS_GRPC)
    find_package(async_grpc ${QUIET_OR_REQUIRED_OPTION})
 endif()

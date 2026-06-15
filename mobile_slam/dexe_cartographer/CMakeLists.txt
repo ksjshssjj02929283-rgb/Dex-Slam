@@ -266,6 +266,7 @@ if(BUILD_GPU_MATCHER)
   target_sources(${PROJECT_NAME} PRIVATE
     cartographer/mapping/internal/2d/scan_matching/gpu_batch_fast_correlative_scan_matcher_2d.cu)
   target_link_libraries(${PROJECT_NAME} PUBLIC ${CUDAToolkit_LIBRARY_DIR}/libcudart.so)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC BUILD_GPU_MATCHER)
   message(STATUS "BUILD_GPU_MATCHER=ON (CUDA ${CUDAToolkit_VERSION}, arch ${CMAKE_CUDA_ARCHITECTURES})")
 endif()
 

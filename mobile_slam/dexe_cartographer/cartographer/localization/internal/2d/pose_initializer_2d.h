@@ -29,6 +29,10 @@
 #include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/batch_fast_correlative_scan_matcher_2d.h"
+#ifdef BUILD_GPU_MATCHER
+#include "cartographer/mapping/internal/2d/scan_matching/gpu_batch_fast_correlative_scan_matcher_2d.h"
+#endif
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/internal/range_data_collator.h"
 #include "cartographer/metrics/family_factory.h"
@@ -112,6 +116,10 @@ class PoseInitializer {
                    const double dist_th = 0.5,
                    const double yaw_th = 0.765 /*45 degrees*/);
 
+  bool MatchFullSubmapDispatch(const mapping::Grid2D& grid,
+                               const sensor::PointCloud& cloud, float min_score,
+                               float* score, transform::Rigid2d* pose);
+
 private:
   const proto::PoseInitializerOptions2D options_;
 
@@ -132,6 +140,14 @@ private:
 
   std::unique_ptr<mapping::scan_matching::FastCorrelativeScanMatcher2D>
   fast_correlative_scan_matcher_;
+
+  // 加速版全局匹配器（仅用于 MatchFullSubmap；局部 Match 与验证仍用原版）。
+  std::unique_ptr<mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>
+  batch_global_matcher_;
+#ifdef BUILD_GPU_MATCHER
+  std::unique_ptr<mapping::scan_matching::GpuBatchFastCorrelativeScanMatcher2D>
+  gpu_global_matcher_;
+#endif
 
   std::unique_ptr<mapping::scan_matching::RealTimeCorrelativeScanMatcher2D>
   real_time_correlative_scan_matcher_;

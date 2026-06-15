@@ -71,6 +71,10 @@ void PoseInitializer::ResetStatus()
   curr_cloud_.reset();
   curr_line_data_.reset();
   fast_correlative_scan_matcher_.reset();
+  batch_global_matcher_.reset();
+#ifdef BUILD_GPU_MATCHER
+  gpu_global_matcher_.reset();
+#endif
   real_time_correlative_scan_matcher_.reset();
   ceres_scan_matcher_.reset();
   line_matcher_.reset();
@@ -83,6 +87,70 @@ void PoseInitializer::InitGlobalSubmap(const std::shared_ptr<mapping::Submap2D>&
   global_submap_ = global_submap;
   // 地图更新时重置快速匹配器，下次使用时重新创建
   fast_correlative_scan_matcher_.reset();
+  batch_global_matcher_.reset();
+#ifdef BUILD_GPU_MATCHER
+  gpu_global_matcher_.reset();
+#endif
+}
+
+bool PoseInitializer::MatchFullSubmapDispatch(
+    const mapping::Grid2D& grid, const sensor::PointCloud& cloud,
+    const float min_score, float* score, transform::Rigid2d* pose) {
+  const auto& fcsm_opts = options_.fast_correlative_scan_matcher_options();
+  constexpr int kAngularBlockShift = 2;
+  const int threads = options_.global_matcher_num_threads() > 0
+                          ? options_.global_matcher_num_threads()
+                          : 4;
+  auto type = options_.global_matcher_type();
+#ifndef BUILD_GPU_MATCHER
+  if (type == proto::GLOBAL_MATCHER_GPU_ANGULAR) {
+    LOG_FIRST_N(WARNING, 1)
+        << "global_matcher_type=gpu but BUILD_GPU_MATCHER is not defined, fallback to CPU matcher.";
+    type = proto::GLOBAL_MATCHER_CPU_ANGULAR;
+  }
+#endif
+
+  switch (type) {
+#ifdef BUILD_GPU_MATCHER
+    case proto::GLOBAL_MATCHER_GPU_ANGULAR: {
+      if (gpu_global_matcher_ == nullptr) {
+        gpu_global_matcher_ = std::make_unique<
+            mapping::scan_matching::GpuBatchFastCorrelativeScanMatcher2D>(
+            grid, fcsm_opts);
+        gpu_global_matcher_->set_use_angular_branching(true);
+        gpu_global_matcher_->set_angular_block_shift(kAngularBlockShift);
+        LOG(INFO) << "global matcher: GPU angular pyramid, shift="
+                  << kAngularBlockShift;
+      }
+      return gpu_global_matcher_->MatchFullSubmap(cloud, min_score, score,
+                                                  pose);
+    }
+#endif
+    case proto::GLOBAL_MATCHER_CPU_ANGULAR: {
+      if (batch_global_matcher_ == nullptr) {
+        batch_global_matcher_ = std::make_unique<
+            mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>(
+            grid, fcsm_opts);
+        batch_global_matcher_->set_use_angular_branching(true);
+        batch_global_matcher_->set_angular_block_shift(kAngularBlockShift);
+        batch_global_matcher_->set_num_threads(threads);
+        LOG(INFO) << "global matcher: CPU angular pyramid, shift="
+                  << kAngularBlockShift << " threads=" << threads;
+      }
+      return batch_global_matcher_->MatchFullSubmap(cloud, min_score, score,
+                                                    pose);
+    }
+    case proto::GLOBAL_MATCHER_ORIGINAL:
+    default: {
+      if (fast_correlative_scan_matcher_ == nullptr) {
+        fast_correlative_scan_matcher_ = std::make_unique<
+            mapping::scan_matching::FastCorrelativeScanMatcher2D>(grid,
+                                                                  fcsm_opts);
+      }
+      return fast_correlative_scan_matcher_->MatchFullSubmap(cloud, min_score,
+                                                             score, pose);
+    }
+  }
 }
 
 bool PoseInitializer::SetInitialPose(const transform::Rigid2d &initial_pose)
@@ -216,8 +284,9 @@ void PoseInitializer::RelocalzationOnce()
 
   float score;
   if (options_.use_global_matching()) {
-    fast_correlative_scan_matcher_->MatchFullSubmap(
-      *curr_cloud_, options_.global_localization_min_score(), &score, initial_pose_.get());
+    MatchFullSubmapDispatch(
+      *global_grid, *curr_cloud_, options_.global_localization_min_score(),
+      &score, initial_pose_.get());
     LOG(INFO) << "global localization score: " << score;
 
     if (score < options_. global_localization_min_score()) {
@@ -369,10 +438,11 @@ void PoseInitializer::GlobalRelocalzationOnce()
   auto global_match_pose = std::make_shared<transform::Rigid2d>();
   float global_score = 0.0;
 
-  bool global_match_success = fast_correlative_scan_matcher_->MatchFullSubmap(
-    *curr_cloud_, 
-    options_.global_localization_min_score(), 
-    &global_score, 
+  bool global_match_success = MatchFullSubmapDispatch(
+    *global_grid,
+    *curr_cloud_,
+    options_.global_localization_min_score(),
+    &global_score,
     global_match_pose.get());
 
   LOG(INFO) << "Global localization score: " << global_score;

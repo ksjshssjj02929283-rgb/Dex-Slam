@@ -25,6 +25,7 @@
 #include "cartographer/mapping/pose_extrapolator_interface.h"
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
+#include "glog/logging.h"
 
 namespace cartographer {
 namespace localization {
@@ -57,6 +58,30 @@ proto::PoseInitializerOptions2D CreatePoseInitializerOptions2D(
   *options.mutable_line_matcher_options() =
     mapping::scan_matching::CreateLineMatcherOptions2D(
     parameter_dictionary->GetDictionary("initializer_line_matcher").get());
+
+  // 全局匹配器版本选择（向后兼容：旧 lua 无字段时默认 GPU 角度版 / shift=2 / 4 线程）。
+  if (parameter_dictionary->HasKey("global_matcher_type")) {
+    const std::string t =
+        parameter_dictionary->GetString("global_matcher_type");
+    if (t == "gpu") {
+      options.set_global_matcher_type(proto::GLOBAL_MATCHER_GPU_ANGULAR);
+    } else if (t == "cpu") {
+      options.set_global_matcher_type(proto::GLOBAL_MATCHER_CPU_ANGULAR);
+    } else if (t == "original") {
+      options.set_global_matcher_type(proto::GLOBAL_MATCHER_ORIGINAL);
+    } else {
+      LOG(WARNING) << "Unknown global_matcher_type=\"" << t
+                   << "\" (should be gpu/cpu/original), fallback to gpu.";
+      options.set_global_matcher_type(proto::GLOBAL_MATCHER_GPU_ANGULAR);
+    }
+  } else {
+    options.set_global_matcher_type(proto::GLOBAL_MATCHER_GPU_ANGULAR);
+  }
+  // 注：angular_block_shift 已写死为代码常量（算法安全参数，不从 lua 暴露）。
+  options.set_global_matcher_num_threads(
+      parameter_dictionary->HasKey("global_matcher_num_threads")
+          ? parameter_dictionary->GetInt("global_matcher_num_threads")
+          : 4);
   return options;
 }
 
