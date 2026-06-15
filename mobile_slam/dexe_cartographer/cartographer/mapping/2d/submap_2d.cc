@@ -16,6 +16,8 @@
 
 #include "cartographer/mapping/2d/submap_2d.h"
 
+#include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+
 #include <cinttypes>
 #include <cmath>
 #include <cstdlib>
@@ -120,6 +122,12 @@ Submap2D::Submap2D(const proto::Submap2D& proto,
     } else {
       LOG(FATAL) << "proto::Submap2D has grid with unknown type.";
     }
+  }
+  // pbstream 含缓存则直接载入（首次定位免重建）；无则留空，首次定位时按需构建（向后兼容）。
+  if (proto.has_precomputation_grid_stack()) {
+    precomputation_grid_stack_ =
+        std::make_shared<scan_matching::PrecomputationGridStack2D>(
+            proto.precomputation_grid_stack());
   }
   cloud_ = std::make_unique<sensor::PointCloud>();
   highlight_cloud_ = std::make_unique<sensor::PointCloud>();
@@ -268,6 +276,25 @@ Submap2D::~Submap2D() {
   }
 }
 
+std::shared_ptr<scan_matching::PrecomputationGridStack2D>
+Submap2D::GetOrBuildPrecomputationGridStack(
+    const scan_matching::proto::FastCorrelativeScanMatcherOptions2D& options) {
+  const int depth = options.branch_and_bound_depth();
+  // 命中条件：缓存存在且层数与请求 depth 一致；depth 变更则旧缓存作废重建。
+  if (precomputation_grid_stack_ &&
+      precomputation_grid_stack_->num_levels() == depth) {
+    LOG(INFO) << "localization map cache hit (depth " << depth << ")";
+    return precomputation_grid_stack_;
+  }
+  CHECK(grid_) << "Submap2D has no grid for localization map cache.";
+
+  LOG(INFO) << "building localization map cache (depth " << depth << ")";
+  precomputation_grid_stack_ =
+      std::make_shared<scan_matching::PrecomputationGridStack2D>(*grid_,
+                                                                 options);
+  return precomputation_grid_stack_;
+}
+
 proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
   proto::Submap proto;
   auto* const submap_2d = proto.mutable_submap_2d();
@@ -277,8 +304,15 @@ proto::Submap Submap2D::ToProto(const bool include_grid_data) const {
   if (include_grid_data) {
     CHECK(grid_);
     *submap_2d->mutable_grid() = grid_->ToProto();
+    // 缓存随 grid 一起固化；仅全局定位 submap 持有缓存，普通 submap 恒为空自然跳过。
+    if (precomputation_grid_stack_) {
+      *submap_2d->mutable_precomputation_grid_stack() =
+          precomputation_grid_stack_->ToProto();
+      LOG(INFO) << "persisted localization map cache ("
+                << precomputation_grid_stack_->num_levels() << " levels)";
+    }
   }
-  
+
   // Task 3: 序列化 line_map_2d_list 到 proto
   if (line_map_2d_list_ && line_map_2d_list_->size() > 0) {
     auto* line_map_proto = submap_2d->mutable_line_map_2d_list();

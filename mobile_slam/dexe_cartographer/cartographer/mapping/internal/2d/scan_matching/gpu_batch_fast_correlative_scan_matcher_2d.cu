@@ -130,11 +130,13 @@ struct GpuBatchFastCorrelativeScanMatcher2D::GpuData {
 
 GpuBatchFastCorrelativeScanMatcher2D::GpuBatchFastCorrelativeScanMatcher2D(
     const Grid2D& grid,
-    const proto::FastCorrelativeScanMatcherOptions2D& options)
+    const proto::FastCorrelativeScanMatcherOptions2D& options,
+    std::shared_ptr<PrecomputationGridStack2D> prebuilt)
     : options_(options), limits_(grid.limits()), gpu_(new GpuData) {
   const auto start = Clock::now();
   precomputation_grid_stack_ =
-      absl::make_unique<PrecomputationGridStack2D>(grid, options);
+      prebuilt ? std::move(prebuilt)
+               : std::make_shared<PrecomputationGridStack2D>(grid, options);
 
   // 金字塔各层一次性常驻显存。
   CUDA_CHECK(cudaStreamCreate(&gpu_->stream));

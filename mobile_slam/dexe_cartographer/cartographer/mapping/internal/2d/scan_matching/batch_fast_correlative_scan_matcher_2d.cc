@@ -31,12 +31,18 @@ double ElapsedMs(const Clock::time_point& start) {
 
 BatchFastCorrelativeScanMatcher2D::BatchFastCorrelativeScanMatcher2D(
     const Grid2D& grid,
-    const proto::FastCorrelativeScanMatcherOptions2D& options)
+    const proto::FastCorrelativeScanMatcherOptions2D& options,
+    std::shared_ptr<PrecomputationGridStack2D> prebuilt)
     : options_(options), limits_(grid.limits()) {
-  const auto start = Clock::now();
-  precomputation_grid_stack_ =
-      absl::make_unique<PrecomputationGridStack2D>(grid, options);
-  precomputation_ms_ = ElapsedMs(start);
+  if (prebuilt) {
+    precomputation_grid_stack_ = std::move(prebuilt);
+    precomputation_ms_ = 0.;
+  } else {
+    const auto start = Clock::now();
+    precomputation_grid_stack_ =
+        std::make_shared<PrecomputationGridStack2D>(grid, options);
+    precomputation_ms_ = ElapsedMs(start);
+  }
 }
 
 BatchFastCorrelativeScanMatcher2D::~BatchFastCorrelativeScanMatcher2D() {}

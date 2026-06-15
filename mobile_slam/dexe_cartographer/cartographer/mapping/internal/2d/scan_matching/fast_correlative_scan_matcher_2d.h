@@ -33,6 +33,7 @@
 #include "cartographer/mapping/2d/grid_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/proto/scan_matching/fast_correlative_scan_matcher_options_2d.pb.h"
+#include "cartographer/mapping/proto/scan_matching/precomputation_grid.pb.h"
 #include "cartographer/sensor/point_cloud.h"
 
 namespace cartographer {
@@ -50,6 +51,10 @@ class PrecomputationGrid2D {
  public:
   PrecomputationGrid2D(const Grid2D& grid, const CellLimits& limits, int width,
                        std::vector<float>* reusable_intermediate_grid);
+
+  // 从 proto 重建（pbstream 加载，A4）；const 成员经初始化列表直接填，不计算。
+  explicit PrecomputationGrid2D(const proto::PrecomputationGrid2DProto& proto);
+  proto::PrecomputationGrid2DProto ToProto() const;
 
   // Returns a value between 0 and 255 to represent probabilities between
   // min_score and max_score.
@@ -105,11 +110,18 @@ class PrecomputationGridStack2D {
       const Grid2D& grid,
       const proto::FastCorrelativeScanMatcherOptions2D& options);
 
+  // 从 proto 重建（pbstream 加载，A4）。
+  explicit PrecomputationGridStack2D(
+      const proto::PrecomputationGridStack2DProto& proto);
+  proto::PrecomputationGridStack2DProto ToProto() const;
+
   const PrecomputationGrid2D& Get(int index) {
     return precomputation_grids_[index];
   }
 
   int max_depth() const { return precomputation_grids_.size() - 1; }
+  // 层数 = branch_and_bound_depth（depth 校验用）。
+  int num_levels() const { return precomputation_grids_.size(); }
 
  private:
   std::vector<PrecomputationGrid2D> precomputation_grids_;

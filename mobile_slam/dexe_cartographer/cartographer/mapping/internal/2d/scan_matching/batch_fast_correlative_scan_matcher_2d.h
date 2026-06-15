@@ -53,9 +53,12 @@ struct BatchMatchStats {
 
 class BatchFastCorrelativeScanMatcher2D {
  public:
+  // prebuilt 非空时复用预构建金字塔（pbstream 加载，A4），跳过现场构建；
+  // 为空则从 grid 构建（benchmark 等原行为不变）。
   BatchFastCorrelativeScanMatcher2D(
       const Grid2D& grid,
-      const proto::FastCorrelativeScanMatcherOptions2D& options);
+      const proto::FastCorrelativeScanMatcherOptions2D& options,
+      std::shared_ptr<PrecomputationGridStack2D> prebuilt = nullptr);
   ~BatchFastCorrelativeScanMatcher2D();
 
   BatchFastCorrelativeScanMatcher2D(
@@ -112,7 +115,7 @@ class BatchFastCorrelativeScanMatcher2D {
 
   const proto::FastCorrelativeScanMatcherOptions2D options_;
   MapLimits limits_;
-  std::unique_ptr<PrecomputationGridStack2D> precomputation_grid_stack_;
+  std::shared_ptr<PrecomputationGridStack2D> precomputation_grid_stack_;
   double precomputation_ms_ = 0.;
 
   int num_threads_ = 4;

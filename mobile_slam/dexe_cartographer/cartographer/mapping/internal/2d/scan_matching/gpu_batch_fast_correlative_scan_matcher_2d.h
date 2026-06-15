@@ -31,9 +31,12 @@ namespace scan_matching {
 
 class GpuBatchFastCorrelativeScanMatcher2D {
  public:
+  // prebuilt 非空时复用预构建金字塔（pbstream 加载，A4），跳过 CPU 构建；
+  // 无论来源都会上传显存。为空则从 grid 构建（benchmark 原行为不变）。
   GpuBatchFastCorrelativeScanMatcher2D(
       const Grid2D& grid,
-      const proto::FastCorrelativeScanMatcherOptions2D& options);
+      const proto::FastCorrelativeScanMatcherOptions2D& options,
+      std::shared_ptr<PrecomputationGridStack2D> prebuilt = nullptr);
   ~GpuBatchFastCorrelativeScanMatcher2D();
 
   GpuBatchFastCorrelativeScanMatcher2D(
@@ -69,7 +72,7 @@ class GpuBatchFastCorrelativeScanMatcher2D {
 
   const proto::FastCorrelativeScanMatcherOptions2D options_;
   MapLimits limits_;
-  std::unique_ptr<PrecomputationGridStack2D> precomputation_grid_stack_;
+  std::shared_ptr<PrecomputationGridStack2D> precomputation_grid_stack_;
   std::unique_ptr<GpuData> gpu_;
   double precomputation_ms_ = 0.;
 

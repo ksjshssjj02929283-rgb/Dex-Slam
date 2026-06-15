@@ -114,13 +114,18 @@ bool PoseInitializer::MatchFullSubmapDispatch(
 #ifdef BUILD_GPU_MATCHER
     case proto::GLOBAL_MATCHER_GPU_ANGULAR: {
       if (gpu_global_matcher_ == nullptr) {
+        // 从 submap 取已载入/已缓存的地图缓存，避免首次现场构建。
+        auto stack = global_submap_
+                         ? global_submap_->GetOrBuildPrecomputationGridStack(
+                               fcsm_opts)
+                         : nullptr;
         gpu_global_matcher_ = std::make_unique<
             mapping::scan_matching::GpuBatchFastCorrelativeScanMatcher2D>(
-            grid, fcsm_opts);
+            grid, fcsm_opts, stack);
         gpu_global_matcher_->set_use_angular_branching(true);
         gpu_global_matcher_->set_angular_block_shift(kAngularBlockShift);
-        LOG(INFO) << "global matcher: GPU angular pyramid, shift="
-                  << kAngularBlockShift;
+        LOG(INFO) << "global matcher ready (GPU, shift=" << kAngularBlockShift
+                  << ")";
       }
       return gpu_global_matcher_->MatchFullSubmap(cloud, min_score, score,
                                                   pose);
@@ -128,14 +133,18 @@ bool PoseInitializer::MatchFullSubmapDispatch(
 #endif
     case proto::GLOBAL_MATCHER_CPU_ANGULAR: {
       if (batch_global_matcher_ == nullptr) {
+        auto stack = global_submap_
+                         ? global_submap_->GetOrBuildPrecomputationGridStack(
+                               fcsm_opts)
+                         : nullptr;
         batch_global_matcher_ = std::make_unique<
             mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>(
-            grid, fcsm_opts);
+            grid, fcsm_opts, stack);
         batch_global_matcher_->set_use_angular_branching(true);
         batch_global_matcher_->set_angular_block_shift(kAngularBlockShift);
         batch_global_matcher_->set_num_threads(threads);
-        LOG(INFO) << "global matcher: CPU angular pyramid, shift="
-                  << kAngularBlockShift << " threads=" << threads;
+        LOG(INFO) << "global matcher ready (CPU, shift=" << kAngularBlockShift
+                  << ", threads=" << threads << ")";
       }
       return batch_global_matcher_->MatchFullSubmap(cloud, min_score, score,
                                                     pose);

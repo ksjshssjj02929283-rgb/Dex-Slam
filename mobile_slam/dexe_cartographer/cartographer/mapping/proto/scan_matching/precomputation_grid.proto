@@ -1,0 +1,22 @@
+// 全局定位金字塔（PrecomputationGridStack2D）序列化——固化到 pbstream，
+// 消除首次全局定位的金字塔构建延迟。
+
+syntax = "proto3";
+
+package cartographer.mapping.scan_matching.proto;
+
+// 单层预计算栅格（滑窗 max 结果）。字段与 PrecomputationGrid2D 私有成员一一对应。
+message PrecomputationGrid2DProto {
+  int32 offset_x = 1;
+  int32 offset_y = 2;
+  int32 wide_num_x = 3;  // wide_limits.num_x_cells
+  int32 wide_num_y = 4;  // wide_limits.num_y_cells
+  float min_score = 5;
+  float max_score = 6;
+  bytes cells = 7;       // uint8 数组（length = wide_num_x * wide_num_y）
+}
+
+// 多分辨率金字塔。层数 = grids_size（= branch_and_bound_depth）。
+message PrecomputationGridStack2DProto {
+  repeated PrecomputationGrid2DProto grids = 1;
+}

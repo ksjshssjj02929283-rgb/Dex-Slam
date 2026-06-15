@@ -141,6 +141,11 @@ DEFINE_int32(bag_random_samples, 0,
              ">0 时启用时间随机抽帧：从整个 bag 时间轴无放回随机抽取该数量的帧"
              "（用 --seed 复现），替代 stride 模式");
 
+// --- A4 自检 ---
+DEFINE_bool(selftest_pyramid, false,
+            "A4 金字塔序列化往返自检：构建→ToProto→FromProto→逐格 GetValue 比对，"
+            "验证 pbstream 固化的金字塔与现场构建逐位一致");
+
 // --- 输出 ---
 DEFINE_string(output_dir, "",
               "报告输出目录，留空则使用 ~/.data/localization/bbs_baseline/。"
@@ -195,7 +200,7 @@ std::shared_ptr<carto::mapping::Submap2D> LoadGlobalSubmap(
     }
     record.Clear();
   }
-  LOG(FATAL) << "pbstream 中没有 global_static_submap 字段："
+  LOG(FATAL) << "no global_static_submap field in pbstream: "
              << pbstream_path;
   return nullptr;
 }
@@ -343,9 +348,9 @@ struct LuaPipeline {
 LuaPipeline LoadLuaPipeline() {
   LuaPipeline p;
   if (FLAGS_configuration_basename.empty()) {
-    LOG(WARNING) << "--configuration_basename 置空，关闭线上对齐模式："
-                 << "使用 flag 参数 + 简化预处理（与线上输入存在差异，"
-                 << "仅用于快速调试）";
+    LOG(WARNING) << "--configuration_basename empty, online-alignment mode off: "
+                 << "using flag params + simplified preprocessing (differs from "
+                 << "online input, for quick debugging only)";
     return p;
   }
   // 默认从本包 ament share 目录解析 lua（安装后即 share/cartographer_ros/
@@ -355,7 +360,7 @@ LuaPipeline LoadLuaPipeline() {
     config_dir = ament_index_cpp::get_package_share_directory(
                      "cartographer_ros") +
                  "/configuration_files";
-    LOG(INFO) << "lua 配置目录（自动解析）: " << config_dir;
+    LOG(INFO) << "lua config dir (auto-resolved): " << config_dir;
   }
   auto resolver =
       absl::make_unique<carto::common::ConfigurationFileResolver>(
@@ -379,16 +384,16 @@ LuaPipeline LoadLuaPipeline() {
   p.dp_options.set_use_deskew(false);
   p.dp_options.set_enable_feature_detection(false);
   p.enabled = true;
-  LOG(INFO) << "线上对齐模式已启用: min_score=" << p.min_score
+  LOG(INFO) << "online-alignment mode enabled: min_score=" << p.min_score
             << " branch_and_bound_depth="
             << p.fcsm_options.branch_and_bound_depth()
-            << " 预处理 min/max_range=" << p.dp_options.min_range() << "/"
+            << " preprocess min/max_range=" << p.dp_options.min_range() << "/"
             << p.dp_options.max_range()
             << " adaptive_voxel(max_length="
             << p.dp_options.adaptive_voxel_filter_options().max_length()
             << ", min_num_points="
             << p.dp_options.adaptive_voxel_filter_options().min_num_points()
-            << ")（flag 的 min_score/depth 被 lua 覆盖）";
+            << ") (flag min_score/depth overridden by lua)";
   return p;
 }
 
@@ -447,7 +452,7 @@ struct MatcherHolder {
     profile->scored_per_depth = stats.scored_per_depth;
     profile->best_score = stats.best_score;
     profile->matched = stats.matched;
-    if (stats.timed_out) LOG(WARNING) << "v1/v2 匹配超时，返回当前最优";
+    if (stats.timed_out) LOG(WARNING) << "v1/v2 match timed out, returning current best";
     return ok;
   }
 };
@@ -607,7 +612,7 @@ void WriteReport(const std::string& path, const std::string& header,
         << "," << r.profile.num_point_lookups << "\n";
     ++rows;
   }
-  LOG(INFO) << "报告已写入: " << path << "（" << rows << " 次测试）";
+  LOG(INFO) << "report written: " << path << " (" << rows << " tests)";
 }
 
 void Run() {
@@ -617,16 +622,48 @@ void Run() {
   const auto submap = LoadGlobalSubmap(pbstream_path, &conversion_tables);
   const auto* grid =
       dynamic_cast<const carto::mapping::ProbabilityGrid*>(submap->grid());
-  CHECK(grid != nullptr) << "global_static_submap 的 grid 不是 ProbabilityGrid";
+  CHECK(grid != nullptr) << "global_static_submap grid is not a ProbabilityGrid";
+
+  if (FLAGS_selftest_pyramid) {
+    carto::mapping::scan_matching::proto::FastCorrelativeScanMatcherOptions2D o;
+    o.set_linear_search_window(7.);
+    o.set_angular_search_window(M_PI / 6.);
+    o.set_branch_and_bound_depth(FLAGS_branch_and_bound_depth);
+    namespace sm = carto::mapping::scan_matching;
+    sm::PrecomputationGridStack2D built(*grid, o);
+    sm::PrecomputationGridStack2D loaded(built.ToProto());
+    CHECK_EQ(built.num_levels(), loaded.num_levels());
+    long long checked = 0, mismatch = 0;
+    for (int d = 0; d < built.num_levels(); ++d) {
+      const auto& g1 = built.Get(d);
+      const auto& g2 = loaded.Get(d);
+      const auto& wl = g1.wide_limits();
+      const auto off = g1.offset();
+      for (int y = 0; y < wl.num_y_cells; ++y) {
+        for (int x = 0; x < wl.num_x_cells; ++x) {
+          const Eigen::Array2i idx(off.x() + x, off.y() + y);
+          if (g1.GetValue(idx) != g2.GetValue(idx)) ++mismatch;
+          ++checked;
+        }
+      }
+    }
+    LOG(INFO) << "===== A4 pyramid serialization round-trip selftest =====";
+    LOG(INFO) << "  levels: " << built.num_levels()
+              << " | cells compared: " << checked << " | mismatches: " << mismatch;
+    LOG(INFO) << (mismatch == 0
+                      ? "  [OK] bit-identical: persisted pyramid == on-site build"
+                      : "  [FAIL] mismatches found!");
+    return;
+  }
 
   const auto& cells = grid->limits().cell_limits();
   const GridStats stats = ComputeGridStats(*grid);
-  LOG(INFO) << "===== 地图信息 =====";
-  LOG(INFO) << "  栅格: " << cells.num_x_cells << " x " << cells.num_y_cells
+  LOG(INFO) << "===== map info =====";
+  LOG(INFO) << "  grid: " << cells.num_x_cells << " x " << cells.num_y_cells
             << " @ " << grid->limits().resolution() << " m/cell";
-  LOG(INFO) << "  物理尺寸: " << cells.num_y_cells * grid->limits().resolution()
+  LOG(INFO) << "  physical size: " << cells.num_y_cells * grid->limits().resolution()
             << " x " << cells.num_x_cells * grid->limits().resolution() << " m";
-  LOG(INFO) << "  cell 统计: total=" << stats.total << " known=" << stats.known
+  LOG(INFO) << "  cell stats: total=" << stats.total << " known=" << stats.known
             << " free=" << stats.free << " occupied=" << stats.occupied;
 
   // 线上对齐模式：BBS/预处理参数全部取自线上 lua。
@@ -654,11 +691,11 @@ void Run() {
   CHECK(FLAGS_matcher == "v0" || FLAGS_matcher == "v1" ||
         FLAGS_matcher == "v1.1" || FLAGS_matcher == "v2" ||
         FLAGS_matcher == "v2.1")
-      << "--matcher 仅支持 v0 | v1 | v1.1 | v2 | v2.1";
+      << "--matcher only supports v0 | v1 | v1.1 | v2 | v2.1";
   MatcherHolder matcher;
-  LOG(INFO) << "===== 金字塔构建（matcher=" << FLAGS_matcher
+  LOG(INFO) << "===== pyramid build (matcher=" << FLAGS_matcher
             << ", branch_and_bound_depth=" << options.branch_and_bound_depth()
-            << "）=====";
+            << ") =====";
   for (int i = 0; i < std::max(1, FLAGS_pyramid_rebuilds); ++i) {
     if (FLAGS_matcher == "v0") {
       matcher.v0 = std::make_unique<InstrumentedFastCorrelativeScanMatcher2D>(
@@ -679,7 +716,7 @@ void Run() {
       matcher.v2->set_timeout_ms(FLAGS_timeout_ms);
       matcher.v2->set_use_angular_branching(FLAGS_matcher == "v2.1");
     }
-    LOG(INFO) << "  第 " << (i + 1) << " 次构建: "
+    LOG(INFO) << "  build #" << (i + 1) << ": "
               << matcher.precomputation_ms() << " ms";
   }
 
@@ -764,9 +801,9 @@ void Run() {
       }
     }
     for (const auto& t : topics) {
-      CHECK_GT(stamps[t].size(), 0u) << "bag 中没有话题 " << t;
-      LOG(INFO) << "话题 " << t << ": " << stamps[t].size()
-                << " 帧, frame_id=" << frame_ids[t];
+      CHECK_GT(stamps[t].size(), 0u) << "topic not found in bag: " << t;
+      LOG(INFO) << "topic " << t << ": " << stamps[t].size()
+                << " frames, frame_id=" << frame_ids[t];
     }
 
     // ===== 外参解析：手动覆盖优先，否则从 /tf_static 查 =====
@@ -774,7 +811,7 @@ void Run() {
     const auto manual = SplitString(FLAGS_scan_extrinsics, ';');
     if (!manual.empty()) {
       CHECK_EQ(manual.size(), topics.size())
-          << "--scan_extrinsics 段数须与话题数一致";
+          << "--scan_extrinsics segment count must match topic count";
       for (size_t i = 0; i < topics.size(); ++i) {
         extrinsics[topics[i]] = ParseExtrinsic(manual[i]);
       }
@@ -785,17 +822,17 @@ void Run() {
               FLAGS_tracking_frame, frame_ids[t], tf2::TimePointZero);
           extrinsics[t] = cartographer_ros::ToRigid3d(tf);
         } catch (const tf2::TransformException& e) {
-          LOG(WARNING) << "tf_static 查不到 " << FLAGS_tracking_frame << " ← "
-                       << frame_ids[t] << "（" << e.what()
-                       << "），该话题外参按 identity 处理；"
-                       << "多雷达场景请检查 bag 是否录了 /tf_static "
-                       << "或用 --scan_extrinsics 手动指定";
+          LOG(WARNING) << "tf_static missing " << FLAGS_tracking_frame << " <- "
+                       << frame_ids[t] << " (" << e.what()
+                       << "), treating this topic's extrinsic as identity; "
+                       << "for multi-lidar check that the bag recorded /tf_static "
+                       << "or pass --scan_extrinsics manually";
           extrinsics[t] = carto::transform::Rigid3d::Identity();
         }
       }
     }
     for (const auto& t : topics) {
-      LOG(INFO) << "外参 " << FLAGS_tracking_frame << " ← " << frame_ids[t]
+      LOG(INFO) << "extrinsic " << FLAGS_tracking_frame << " <- " << frame_ids[t]
                 << ": " << extrinsics[t];
     }
 
@@ -811,8 +848,8 @@ void Run() {
           static_cast<size_t>(FLAGS_bag_random_samples), all.size());
       primary_indices.assign(all.begin(), all.begin() + k);
       std::sort(primary_indices.begin(), primary_indices.end());
-      LOG(INFO) << "bag 时间随机抽帧: " << k << "/" << primary_stamps.size()
-                << " 帧（主话题 " << primary << ", seed=" << FLAGS_seed << "）";
+      LOG(INFO) << "bag random time sampling: " << k << "/" << primary_stamps.size()
+                << " frames (primary topic " << primary << ", seed=" << FLAGS_seed << ")";
     } else {
       for (size_t i = 0; i < primary_stamps.size() &&
                          primary_indices.size() <
@@ -844,9 +881,9 @@ void Run() {
           --best;
         }
         if (std::abs(s[best] - primary_stamps[pi]) > FLAGS_pair_tolerance) {
-          LOG(WARNING) << "主帧#" << pi << " 在 " << topics[ti]
-                       << " 上无 " << FLAGS_pair_tolerance
-                       << "s 内的配对帧，样本跳过";
+          LOG(WARNING) << "primary frame #" << pi << " has no paired frame on "
+                       << topics[ti] << " within " << FLAGS_pair_tolerance
+                       << "s, sample skipped";
           ok = false;
           break;
         }
@@ -903,8 +940,8 @@ void Run() {
         const auto merged_data =
             preprocessor->ProcessMultipleSensorData(laser_data_map, sync_time);
         if (merged_data.IsEmpty()) {
-          LOG(WARNING) << "主帧#" << sample.frame_index.at(primary)
-                       << " 预处理输出为空，样本跳过";
+          LOG(WARNING) << "primary frame #" << sample.frame_index.at(primary)
+                       << " preprocessing output empty, sample skipped";
           continue;
         }
         cloud = merged_data.merged_filtered_cloud;
@@ -968,7 +1005,7 @@ void Run() {
          << " ms（线上为懒构造，计入首次全局定位延迟）\n";
 
   LOG(INFO) << "";
-  LOG(INFO) << "########## 基线基准汇总 ##########";
+  LOG(INFO) << "########## baseline benchmark summary ##########";
   LOG(INFO) << "\n" << header.str();
 
   // 输出目录：默认 ~/.data/localization/bbs_baseline/

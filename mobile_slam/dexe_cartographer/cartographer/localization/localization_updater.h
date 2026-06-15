@@ -100,6 +100,12 @@ public:
   // 同时更新 global_static_submap_ 的 local_pose。
   void ApplyOriginTransform(const transform::Rigid3d& T);
 
+  // A4：save 前主动为待保存的 global static submap 构建金字塔（用 lua 配置的
+  // branch_and_bound_depth），确保 pbstream 含金字塔——不依赖定位是否已触发
+  // 全局重定位。缓存命中（已构建/加载）则跳过。
+  void EnsureGlobalSubmapPyramid(
+      const std::shared_ptr<mapping::Submap2D>& submap);
+
   int num_trajectory_builders() const {
     return trajectory_builders_.size();
   }

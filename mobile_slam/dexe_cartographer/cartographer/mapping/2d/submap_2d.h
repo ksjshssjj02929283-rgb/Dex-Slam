@@ -27,6 +27,7 @@
 #include "cartographer/common/lua_parameter_dictionary.h"
 #include "cartographer/mapping/2d/grid_2d.h"
 #include "cartographer/mapping/2d/map_limits.h"
+#include "cartographer/mapping/proto/scan_matching/fast_correlative_scan_matcher_options_2d.pb.h"
 #include "cartographer/mapping/proto/serialization.pb.h"
 #include "cartographer/mapping/proto/submap_visualization.pb.h"
 #include "cartographer/mapping/proto/submaps_options_2d.pb.h"
@@ -44,6 +45,10 @@
 
 namespace cartographer {
 namespace mapping {
+
+namespace scan_matching {
+class PrecomputationGridStack2D;  // 前向声明
+}  // namespace scan_matching
 
 proto::SubmapsOptions2D CreateSubmapsOptions2D(
     common::LuaParameterDictionary* parameter_dictionary);
@@ -70,6 +75,12 @@ class Submap2D : public Submap {
                        proto::SubmapQuery::Response* response) const override;
 
   const Grid2D* grid() const { return grid_.get(); }
+
+  // 返回全局定位地图缓存——缓存存在且层数与 options.branch_and_bound_depth
+  // 一致则直接返回，否则从 grid 现场构建并缓存。matcher 创建时调用以避免重复构建。
+  std::shared_ptr<scan_matching::PrecomputationGridStack2D>
+  GetOrBuildPrecomputationGridStack(
+      const scan_matching::proto::FastCorrelativeScanMatcherOptions2D& options);
   const sensor::PointCloud* cloud() const {
     if (is_dirty_cloud_) {
       FreshCloudData();
@@ -131,6 +142,9 @@ class Submap2D : public Submap {
 
  private:
   std::unique_ptr<Grid2D> grid_;
+  // 全局定位地图缓存（pbstream 载入或首次定位构建填入），随 grid 走。
+  mutable std::shared_ptr<scan_matching::PrecomputationGridStack2D>
+      precomputation_grid_stack_;
   mutable std::unique_ptr<sensor::PointCloud> cloud_;
   mutable std::unique_ptr<sensor::PointCloud> highlight_cloud_;
   std::unique_ptr<ikd_tree::iKdTree<pcl::PointXYZ>> cloud_ikdtree_;
