@@ -73,6 +73,22 @@ enum class PoseInitializerStatus {
   Success = 3
 };
 
+// Info about the most recent global relocalization run: per-stage timing
+// (milliseconds) plus the result. Stages: BBS full-submap match -> real-time
+// correlative refine -> line tracking -> ceres refine -> validation.
+// Always recorded internally; read back via GetLastGlobalRelocInfo().
+struct GlobalRelocInfo {
+  double t_bbs_ms = 0.0;
+  double t_rtcsm_ms = 0.0;
+  double t_line_ms = 0.0;
+  double t_ceres_ms = 0.0;
+  double t_validate_ms = 0.0;
+  double t_total_ms = 0.0;
+  bool matched = false;
+  float bbs_score = 0.0f;
+  transform::Rigid2d pose_estimate = transform::Rigid2d::Identity();
+};
+
 // Wires up the local SLAM stack (i.e. pose extrapolator, scan matching, etc.)
 // without loop closure.
 // TODO(gaschler): Add test for this class similar to the 3D test.
@@ -105,10 +121,23 @@ class PoseInitializer {
   void start();
   void stop();
 
+  // Runs one global relocalization synchronously on the calling thread (no
+  // worker thread). The caller prepares state first via Initialize /
+  // InitGlobalSubmap / UpdateSensorData / TriggerGlobalRelocalization. The async
+  // worker (Run) and offline benchmark drivers call this same method, so the two
+  // paths stay unified. This run's per-stage timing + result are recorded
+  // internally; read them with GetLastGlobalRelocInfo(), and check
+  // GetInitializerStatus() == Success for the outcome.
+  void GlobalRelocalzationOnce();
+
+  // Timing + result of the most recent GlobalRelocalzationOnce() call.
+  const GlobalRelocInfo& GetLastGlobalRelocInfo() const {
+    return last_global_reloc_info_;
+  }
+
  private:
   void Run();
   void RelocalzationOnce();
-  void GlobalRelocalzationOnce();
   void CreateRelocalzationThread();
 
   bool IsRelocalizationSuccess();  bool IsPoseValid(const transform::Rigid2d& pose,
@@ -129,6 +158,9 @@ private:
   std::shared_ptr<transform::Rigid2d> global_pose_estimate_;
   bool need_apply_initial_pose_ = false;
   bool need_global_relocalization_ = false;  // 标识需要进行全局重定位
+
+  // 最近一次 GlobalRelocalzationOnce 的耗时与结果；经 getter 读取。
+  GlobalRelocInfo last_global_reloc_info_;
 
   bool working_ = false;
 

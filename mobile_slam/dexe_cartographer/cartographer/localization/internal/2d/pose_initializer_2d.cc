@@ -248,9 +248,7 @@ void PoseInitializer::Run()
       if (need_apply_initial_pose_) {
         RelocalzationOnce();  // 局部重定位（有初始位姿）
       } else if (need_global_relocalization_) {
-        cartographer::common::TicToc timer;
-        GlobalRelocalzationOnce();  // 全局重定位（无初始位姿）
-        LOG(INFO) << "Global relocalization took " << timer.toc() << " ms";
+        GlobalRelocalzationOnce();  // records info + logs total inside
       }
     }
   }
@@ -409,6 +407,16 @@ void PoseInitializer::RelocalzationOnce()
 
 void PoseInitializer::GlobalRelocalzationOnce()
 {
+  using Clock = std::chrono::steady_clock;
+  const auto elapsed_ms = [](const Clock::time_point& s) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - s).count();
+  };
+  const auto t_total_start = Clock::now();
+
+  // 每次执行都把本次信息记进成员，调用方用 GetLastGlobalRelocInfo() 读取。
+  last_global_reloc_info_ = GlobalRelocInfo{};
+  GlobalRelocInfo& info = last_global_reloc_info_;
+
   if (global_submap_ == nullptr) {
     LOG(ERROR) << "Global submap is not initialized, please set global submap first.";
     initializer_status_ = PoseInitializerStatus::NotInitialized;
@@ -447,18 +455,22 @@ void PoseInitializer::GlobalRelocalzationOnce()
   auto global_match_pose = std::make_shared<transform::Rigid2d>();
   float global_score = 0.0;
 
+  const auto t_bbs = Clock::now();
   bool global_match_success = MatchFullSubmapDispatch(
     *global_grid,
     *curr_cloud_,
     options_.global_localization_min_score(),
     &global_score,
     global_match_pose.get());
+  info.t_bbs_ms = elapsed_ms(t_bbs);
+  info.bbs_score = global_score;
 
   LOG(INFO) << "Global localization score: " << global_score;
 
   if (!global_match_success || global_score < options_.global_localization_min_score()) {
     LOG(ERROR) << "Global relocalization failed, score too low: " << global_score;
     initializer_status_ = PoseInitializerStatus::Failed;
+    info.t_total_ms = elapsed_ms(t_total_start);
     return;
   }
 
@@ -468,6 +480,7 @@ void PoseInitializer::GlobalRelocalzationOnce()
   initial_pose_ = global_match_pose;
 
   // 进行在线相关扫描匹配以改进位姿
+  const auto t_rtcsm = Clock::now();
   transform::Rigid2d online_correlative_pose;
   if (options_.use_online_correlative_scan_matching()) {
     const double score = real_time_correlative_scan_matcher_->Match(
@@ -482,6 +495,7 @@ void PoseInitializer::GlobalRelocalzationOnce()
       initial_pose_ = std::make_shared<transform::Rigid2d>(online_correlative_pose);
     }
   }
+  info.t_rtcsm_ms = elapsed_ms(t_rtcsm);
 
   // 进行Ceres精细优化
   global_pose_estimate_ = std::make_unique<transform::Rigid2d>();
@@ -492,6 +506,7 @@ void PoseInitializer::GlobalRelocalzationOnce()
     LOG(WARNING) << "No line data in global scan matcher.";
   }
   
+  const auto t_line = Clock::now();
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
   auto global_line_map = global_submap_->line_map_2d_list();
   if (curr_line_data_->size() != 0 && global_line_map && global_line_map->size() != 0) {
@@ -500,11 +515,14 @@ void PoseInitializer::GlobalRelocalzationOnce()
                                     *global_line_map,
                                     tracked_lane_data);
   }
+  info.t_line_ms = elapsed_ms(t_line);
 
+  const auto t_ceres = Clock::now();
   auto global_cloud_ikdtree = global_submap_->cloud_ikdtree();
   if (!global_cloud_ikdtree) {
     LOG(ERROR) << "Global cloud ikdtree is not available in submap.";
     initializer_status_ = PoseInitializerStatus::Failed;
+    info.t_total_ms = elapsed_ms(t_total_start);
     return;
   }
 
@@ -517,8 +535,13 @@ void PoseInitializer::GlobalRelocalzationOnce()
                             *global_cloud_ikdtree,
                             global_pose_estimate_.get(),
                             &summary);
+  info.t_ceres_ms = elapsed_ms(t_ceres);
 
-  if (!IsRelocalizationSuccess()) {
+  const auto t_validate = Clock::now();
+  const bool reloc_ok = IsRelocalizationSuccess();
+  info.t_validate_ms = elapsed_ms(t_validate);
+
+  if (!reloc_ok) {
     global_pose_estimate_.reset();
     initializer_status_ = PoseInitializerStatus::Failed;
     LOG(ERROR) << "Global relocalization validation failed";
@@ -526,7 +549,13 @@ void PoseInitializer::GlobalRelocalzationOnce()
     initializer_status_ = PoseInitializerStatus::Success;
     need_global_relocalization_ = false;  // 全局重定位成功后重置标志
     LOG(INFO) << "Global relocalization succeeded! Final pose: " << *global_pose_estimate_;
+    info.pose_estimate = *global_pose_estimate_;
   }
+
+  const double total_ms = elapsed_ms(t_total_start);
+  info.t_total_ms = total_ms;
+  info.matched = (initializer_status_ == PoseInitializerStatus::Success);
+  LOG(INFO) << "Global relocalization took " << total_ms << " ms";
 }
 
 bool PoseInitializer::IsRelocalizationSuccess()

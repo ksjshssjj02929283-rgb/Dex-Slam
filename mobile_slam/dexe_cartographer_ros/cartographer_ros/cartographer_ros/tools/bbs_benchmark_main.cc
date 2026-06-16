@@ -12,6 +12,8 @@
  * 取自 lua，bag 模式复用线上 DataPreprocessor（双雷达融合 + AdaptiveVoxelFilter）。
  * 默认双雷达 /laser_scan/front + /laser_scan/rear，tracking_frame=base_footprint。
  *
+ * 地图加载、合成 scan 生成、bag 取帧、统计等通用单元见 bbs_benchmark/benchmark_common。
+ *
  * 两种 scan 来源：
  *   --mode synth  从地图自由空间随机撒位姿，ray-cast 合成 scan（带真值，
  *                 可批量统计成功率与位姿误差）
@@ -47,34 +49,22 @@
 #include "cartographer/common/configuration_file_resolver.h"
 #include "cartographer/common/lua_parameter_dictionary.h"
 #include "cartographer/common/math.h"
-#include "cartographer/io/proto_stream.h"
-#include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/preprocess/data_preprocessor.h"
 #include "cartographer/preprocess/data_preprocessor_options.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
-#include "cartographer/sensor/timed_point_cloud_data.h"
 #include "cartographer/mapping/2d/grid_2d.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/submap_2d.h"
-#include "cartographer/mapping/proto/serialization.pb.h"
 #include "cartographer/mapping/value_conversion_tables.h"
 #include "cartographer/sensor/point_cloud.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "ament_index_cpp/get_package_share_directory.hpp"
-#include "cartographer_ros/conversion/msg_conversion.h"
-#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
-#include "rclcpp/serialization.hpp"
-#include "rclcpp/serialized_message.hpp"
-#include "rosbag2_cpp/reader.hpp"
-#include "sensor_msgs/msg/laser_scan.hpp"
-#include "tf2/buffer_core.h"
-#include "tf2/exceptions.h"
-#include "tf2_msgs/msg/tf_message.hpp"
 
 #include "cartographer/mapping/internal/2d/scan_matching/batch_fast_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/gpu_batch_fast_correlative_scan_matcher_2d.h"
+#include "cartographer_ros/tools/bbs_benchmark/benchmark_common.h"
 #include "cartographer_ros/tools/bbs_benchmark/instrumented_fast_correlative_scan_matcher_2d.h"
 
 // --- 地图与匹配参数 ---
@@ -155,11 +145,24 @@ DEFINE_string(output_dir, "",
 namespace {
 
 namespace carto = ::cartographer;
+namespace bc = ::cartographer_ros::benchmark_common;
 using ::cartographer_ros::bbs_benchmark::BbsProfile;
 using ::cartographer_ros::bbs_benchmark::InstrumentedFastCorrelativeScanMatcher2D;
 
-constexpr float kOccupiedProbability = 0.65f;
-constexpr float kFreeProbability = 0.196f;
+// 通用单元（见 benchmark_common）。
+using bc::ApplyMergedCloudFilters;
+using bc::BagFrame;
+using bc::BagPrepConfig;
+using bc::ComputeGridStats;
+using bc::GridStats;
+using bc::LoadGlobalSubmap;
+using bc::Mean;
+using bc::Percentile;
+using bc::PrepareBagFrames;
+using bc::SampleFreePose;
+using bc::SplitString;
+using bc::SynthConfig;
+using bc::SynthesizeScan;
 
 // 单次测量记录（合成模式带真值，bag 模式 gt/err 字段为 NaN）。
 struct RunRecord {
@@ -182,157 +185,6 @@ std::string ResolvePbstreamPath() {
     root = std::string(home ? home : "/tmp") + "/.dexe/data/maps";
   }
   return root + "/" + FLAGS_map_name + "/map.pbstream";
-}
-
-// 从 pbstream 读取 global_static_submap，构建与线上一致的 Submap2D。
-std::shared_ptr<carto::mapping::Submap2D> LoadGlobalSubmap(
-    const std::string& pbstream_path,
-    carto::mapping::ValueConversionTables* conversion_tables) {
-  LOG(INFO) << "Loading pbstream: " << pbstream_path;
-  carto::io::ProtoStreamReader reader(pbstream_path);
-  carto::io::ProtoStreamDeserializer deserializer(&reader);
-
-  carto::mapping::proto::SerializedData record;
-  while (deserializer.ReadNextSerializedData(&record)) {
-    if (record.has_global_static_submap()) {
-      return std::make_shared<carto::mapping::Submap2D>(
-          record.global_static_submap(), conversion_tables);
-    }
-    record.Clear();
-  }
-  LOG(FATAL) << "no global_static_submap field in pbstream: "
-             << pbstream_path;
-  return nullptr;
-}
-
-struct GridStats {
-  int known = 0, free = 0, occupied = 0, total = 0;
-};
-
-GridStats ComputeGridStats(const carto::mapping::ProbabilityGrid& grid) {
-  GridStats s;
-  const auto& cells = grid.limits().cell_limits();
-  s.total = cells.num_x_cells * cells.num_y_cells;
-  for (int y = 0; y < cells.num_y_cells; ++y) {
-    for (int x = 0; x < cells.num_x_cells; ++x) {
-      const Eigen::Array2i idx(x, y);
-      if (!grid.IsKnown(idx)) continue;
-      ++s.known;
-      const float p = grid.GetProbability(idx);
-      if (p > kOccupiedProbability) ++s.occupied;
-      else if (p < kFreeProbability) ++s.free;
-    }
-  }
-  return s;
-}
-
-// 沿世界系方向 ray-march，命中占据格返回距离，否则返回 -1（无回波）。
-double RayCast(const carto::mapping::ProbabilityGrid& grid,
-               const Eigen::Vector2d& origin, const Eigen::Vector2d& dir,
-               const double max_range) {
-  const double step = grid.limits().resolution() * 0.5;
-  for (double r = step; r <= max_range; r += step) {
-    const Eigen::Vector2f pt = (origin + r * dir).cast<float>();
-    const Eigen::Array2i idx = grid.limits().GetCellIndex(pt);
-    if (!grid.limits().Contains(idx)) return -1.;
-    if (grid.IsKnown(idx) && grid.GetProbability(idx) > kOccupiedProbability) {
-      return r;
-    }
-  }
-  return -1.;
-}
-
-// 在地图自由空间随机采样一个位姿（真值）。
-bool SampleFreePose(const carto::mapping::ProbabilityGrid& grid,
-                    std::mt19937& rng, carto::transform::Rigid2d* pose) {
-  const auto& limits = grid.limits();
-  const auto& cells = limits.cell_limits();
-  // 世界系包围盒：注意 cartographer 的 x 索引对应世界 -y 方向。
-  const double x_max = limits.max().x();
-  const double y_max = limits.max().y();
-  const double x_min = x_max - limits.resolution() * cells.num_y_cells;
-  const double y_min = y_max - limits.resolution() * cells.num_x_cells;
-  std::uniform_real_distribution<double> ux(x_min, x_max);
-  std::uniform_real_distribution<double> uy(y_min, y_max);
-  std::uniform_real_distribution<double> uyaw(-M_PI, M_PI);
-
-  for (int attempt = 0; attempt < 1000; ++attempt) {
-    const Eigen::Vector2f pt(ux(rng), uy(rng));
-    const Eigen::Array2i idx = limits.GetCellIndex(pt);
-    if (!limits.Contains(idx) || !grid.IsKnown(idx)) continue;
-    if (grid.GetProbability(idx) >= kFreeProbability) continue;  // 仅自由格
-    *pose = carto::transform::Rigid2d(pt.cast<double>(), uyaw(rng));
-    return true;
-  }
-  return false;
-}
-
-// 给定真值位姿，ray-cast 合成传感器系 scan。
-carto::sensor::PointCloud SynthesizeScan(
-    const carto::mapping::ProbabilityGrid& grid,
-    const carto::transform::Rigid2d& gt_pose, std::mt19937& rng) {
-  std::normal_distribution<double> noise(0., FLAGS_range_noise_sigma);
-  const double fov = FLAGS_fov_deg * M_PI / 180.;
-  const double yaw = gt_pose.rotation().angle();
-  std::vector<carto::sensor::RangefinderPoint> points;
-  points.reserve(FLAGS_beams);
-  for (int i = 0; i < FLAGS_beams; ++i) {
-    const double beam_angle = -fov / 2. + fov * i / FLAGS_beams;
-    const double world_angle = yaw + beam_angle;
-    const Eigen::Vector2d dir(std::cos(world_angle), std::sin(world_angle));
-    const double r = RayCast(grid, gt_pose.translation(), dir, FLAGS_max_range);
-    if (r <= 0.) continue;
-    const double rn = std::max(0.01, r + noise(rng));
-    points.push_back({Eigen::Vector3f(rn * std::cos(beam_angle),
-                                      rn * std::sin(beam_angle), 0.f)});
-  }
-  return carto::sensor::PointCloud(std::move(points));
-}
-
-// LaserScan 逐点经 3D 外参变换到 tracking frame 后投影 2D，追加到 points。
-// 完整 3D 变换可正确处理倒装雷达（外参含 roll≈180°）；不去畸变。
-void AppendScanToPointCloud(
-    const sensor_msgs::msg::LaserScan& scan,
-    const carto::transform::Rigid3d& sensor_to_tracking,
-    std::vector<carto::sensor::RangefinderPoint>* points) {
-  for (size_t i = 0; i < scan.ranges.size(); ++i) {
-    const float r = scan.ranges[i];
-    if (!std::isfinite(r) || r < scan.range_min || r > scan.range_max) continue;
-    const double angle = scan.angle_min + i * scan.angle_increment;
-    const Eigen::Vector3d p =
-        sensor_to_tracking *
-        Eigen::Vector3d(r * std::cos(angle), r * std::sin(angle), 0.);
-    points->push_back({Eigen::Vector3f(p.x(), p.y(), 0.f)});
-  }
-}
-
-std::vector<std::string> SplitString(const std::string& s, const char delim) {
-  std::vector<std::string> out;
-  std::stringstream ss(s);
-  std::string item;
-  while (std::getline(ss, item, delim)) {
-    if (!item.empty()) out.push_back(item);
-  }
-  return out;
-}
-
-// "x,y,z,roll,pitch,yaw"（米/度）→ Rigid3d
-carto::transform::Rigid3d ParseExtrinsic(const std::string& s) {
-  const auto parts = SplitString(s, ',');
-  CHECK_EQ(parts.size(), 6u)
-      << "外参格式应为 x,y,z,roll,pitch,yaw（米/度）: " << s;
-  std::vector<double> v;
-  for (const auto& p : parts) v.push_back(std::stod(p));
-  const double d2r = M_PI / 180.;
-  const Eigen::Quaterniond q =
-      Eigen::AngleAxisd(v[5] * d2r, Eigen::Vector3d::UnitZ()) *
-      Eigen::AngleAxisd(v[4] * d2r, Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(v[3] * d2r, Eigen::Vector3d::UnitX());
-  return carto::transform::Rigid3d(Eigen::Vector3d(v[0], v[1], v[2]), q);
-}
-
-double HeaderStampToSeconds(const sensor_msgs::msg::LaserScan& scan) {
-  return scan.header.stamp.sec + scan.header.stamp.nanosec * 1e-9;
 }
 
 // 线上对齐模式：从线上 lua 取 BBS 参数 + 预处理参数，复用线上 DataPreprocessor，
@@ -395,18 +247,6 @@ LuaPipeline LoadLuaPipeline() {
             << p.dp_options.adaptive_voxel_filter_options().min_num_points()
             << ") (flag min_score/depth overridden by lua)";
   return p;
-}
-
-// 复刻 GetMergedData 对 merged_filtered_cloud 的滤波（用于合成模式对齐）。
-carto::sensor::PointCloud ApplyMergedCloudFilters(
-    const carto::sensor::PointCloud& cloud,
-    const carto::preprocess::proto::DataPreprocessorOptions& dp_options) {
-  carto::sensor::PointCloud out = carto::sensor::AdaptiveVoxelFilter(
-      cloud, dp_options.adaptive_voxel_filter_options());
-  if (dp_options.voxel_filter_size() > 0.f) {
-    out = carto::sensor::VoxelFilter(out, dp_options.voxel_filter_size());
-  }
-  return out;
 }
 
 // matcher 版本适配：v0 = 原生 instrumented 副本；v1 = Phase A 加速版。
@@ -473,19 +313,6 @@ RunRecord RunMatch(const MatcherHolder& matcher,
     rec.est_yaw = pose_estimate.rotation().angle();
   }
   return rec;
-}
-
-double Percentile(std::vector<double> v, const double p) {
-  if (v.empty()) return NAN;
-  std::sort(v.begin(), v.end());
-  const size_t idx = std::min(v.size() - 1,
-                              static_cast<size_t>(p / 100. * v.size()));
-  return v[idx];
-}
-
-double Mean(const std::vector<double>& v) {
-  if (v.empty()) return NAN;
-  return std::accumulate(v.begin(), v.end(), 0.) / v.size();
 }
 
 // 生成单模式统计汇总文本（终端与报告文件共用）。无该模式数据返回空串。
@@ -723,6 +550,12 @@ void Run() {
   std::vector<RunRecord> records;
 
   if (FLAGS_mode == "synth" || FLAGS_mode == "both") {
+    SynthConfig synth_cfg;
+    synth_cfg.beams = FLAGS_beams;
+    synth_cfg.fov_deg = FLAGS_fov_deg;
+    synth_cfg.max_range = FLAGS_max_range;
+    synth_cfg.range_noise_sigma = FLAGS_range_noise_sigma;
+
     std::mt19937 rng(FLAGS_seed);
     const double yaw_tol = FLAGS_success_yaw_tol_deg * M_PI / 180.;
     int generated = 0, attempts = 0;
@@ -730,7 +563,8 @@ void Run() {
       ++attempts;
       carto::transform::Rigid2d gt_pose;
       if (!SampleFreePose(*grid, rng, &gt_pose)) break;
-      carto::sensor::PointCloud cloud = SynthesizeScan(*grid, gt_pose, rng);
+      carto::sensor::PointCloud cloud =
+          SynthesizeScan(*grid, gt_pose, rng, synth_cfg);
       if (static_cast<int>(cloud.size()) <
           FLAGS_beams * FLAGS_min_valid_beam_ratio) {
         continue;  // 回波太少（空旷/边缘区），不是有效采样
@@ -763,204 +597,32 @@ void Run() {
 
   if (FLAGS_mode == "bag" || FLAGS_mode == "both") {
     CHECK(!FLAGS_bag_filename.empty()) << "bag 模式需要 --bag_filename";
-
-    // 话题列表：scan_topics（多雷达，逗号分隔）优先；空则退化单雷达 scan_topic。
     std::vector<std::string> topics = SplitString(FLAGS_scan_topics, ',');
     if (topics.empty()) topics.push_back(FLAGS_scan_topic);
-    const std::string& primary = topics[0];
 
-    rclcpp::Serialization<sensor_msgs::msg::LaserScan> serialization;
-    rclcpp::Serialization<tf2_msgs::msg::TFMessage> tf_serialization;
+    BagPrepConfig bag_cfg;
+    bag_cfg.bag_filename = FLAGS_bag_filename;
+    bag_cfg.topics = topics;
+    bag_cfg.scan_extrinsics = FLAGS_scan_extrinsics;
+    bag_cfg.tracking_frame = FLAGS_tracking_frame;
+    bag_cfg.pair_tolerance = FLAGS_pair_tolerance;
+    bag_cfg.bag_stride = FLAGS_bag_stride;
+    bag_cfg.max_bag_scans = FLAGS_max_bag_scans;
+    bag_cfg.bag_random_samples = FLAGS_bag_random_samples;
+    bag_cfg.seed = FLAGS_seed;
 
-    // ===== 第一遍：收集 /tf_static 外参 + 各话题帧时间戳与 frame_id =====
-    tf2::BufferCore tf_buffer;
-    std::map<std::string, std::vector<double>> stamps;     // topic → 各帧时间
-    std::map<std::string, std::string> frame_ids;          // topic → frame_id
-    for (const auto& t : topics) stamps[t] = {};
-    {
-      rosbag2_cpp::Reader reader;
-      reader.open(FLAGS_bag_filename);
-      while (reader.has_next()) {
-        auto msg = reader.read_next();
-        if (msg->topic_name == "/tf_static") {
-          rclcpp::SerializedMessage serialized(*msg->serialized_data);
-          tf2_msgs::msg::TFMessage tf_msg;
-          tf_serialization.deserialize_message(&serialized, &tf_msg);
-          for (const auto& t : tf_msg.transforms) {
-            tf_buffer.setTransform(t, "bbs_benchmark", true /*is_static*/);
-          }
-        } else if (stamps.count(msg->topic_name)) {
-          rclcpp::SerializedMessage serialized(*msg->serialized_data);
-          sensor_msgs::msg::LaserScan scan;
-          serialization.deserialize_message(&serialized, &scan);
-          stamps[msg->topic_name].push_back(HeaderStampToSeconds(scan));
-          if (frame_ids[msg->topic_name].empty()) {
-            frame_ids[msg->topic_name] = scan.header.frame_id;
-          }
-        }
-      }
-    }
-    for (const auto& t : topics) {
-      CHECK_GT(stamps[t].size(), 0u) << "topic not found in bag: " << t;
-      LOG(INFO) << "topic " << t << ": " << stamps[t].size()
-                << " frames, frame_id=" << frame_ids[t];
-    }
-
-    // ===== 外参解析：手动覆盖优先，否则从 /tf_static 查 =====
-    std::map<std::string, carto::transform::Rigid3d> extrinsics;
-    const auto manual = SplitString(FLAGS_scan_extrinsics, ';');
-    if (!manual.empty()) {
-      CHECK_EQ(manual.size(), topics.size())
-          << "--scan_extrinsics segment count must match topic count";
-      for (size_t i = 0; i < topics.size(); ++i) {
-        extrinsics[topics[i]] = ParseExtrinsic(manual[i]);
-      }
-    } else {
-      for (const auto& t : topics) {
-        try {
-          const auto tf = tf_buffer.lookupTransform(
-              FLAGS_tracking_frame, frame_ids[t], tf2::TimePointZero);
-          extrinsics[t] = cartographer_ros::ToRigid3d(tf);
-        } catch (const tf2::TransformException& e) {
-          LOG(WARNING) << "tf_static missing " << FLAGS_tracking_frame << " <- "
-                       << frame_ids[t] << " (" << e.what()
-                       << "), treating this topic's extrinsic as identity; "
-                       << "for multi-lidar check that the bag recorded /tf_static "
-                       << "or pass --scan_extrinsics manually";
-          extrinsics[t] = carto::transform::Rigid3d::Identity();
-        }
-      }
-    }
-    for (const auto& t : topics) {
-      LOG(INFO) << "extrinsic " << FLAGS_tracking_frame << " <- " << frame_ids[t]
-                << ": " << extrinsics[t];
-    }
-
-    // ===== 主话题抽帧（时间随机 / 固定步长）+ 副话题时间配对 =====
-    const auto& primary_stamps = stamps[primary];
-    std::vector<size_t> primary_indices;
-    if (FLAGS_bag_random_samples > 0) {
-      std::vector<size_t> all(primary_stamps.size());
-      std::iota(all.begin(), all.end(), 0);
-      std::mt19937 rng(FLAGS_seed);
-      std::shuffle(all.begin(), all.end(), rng);
-      const size_t k = std::min(
-          static_cast<size_t>(FLAGS_bag_random_samples), all.size());
-      primary_indices.assign(all.begin(), all.begin() + k);
-      std::sort(primary_indices.begin(), primary_indices.end());
-      LOG(INFO) << "bag random time sampling: " << k << "/" << primary_stamps.size()
-                << " frames (primary topic " << primary << ", seed=" << FLAGS_seed << ")";
-    } else {
-      for (size_t i = 0; i < primary_stamps.size() &&
-                         primary_indices.size() <
-                             static_cast<size_t>(FLAGS_max_bag_scans);
-           i += std::max(1, FLAGS_bag_stride)) {
-        primary_indices.push_back(i);
-      }
-    }
-
-    // 每个样本 = 主帧 + 各副话题时间最近帧（超差丢弃整个样本）。
-    struct PairedSample {
-      std::map<std::string, size_t> frame_index;  // topic → 帧索引
-      double t_rel;                               // 主帧相对 bag 起始秒
-    };
-    std::vector<PairedSample> samples;
-    std::map<std::string, std::set<size_t>> needed;
-    for (const size_t pi : primary_indices) {
-      PairedSample sample;
-      sample.frame_index[primary] = pi;
-      sample.t_rel = primary_stamps[pi] - primary_stamps.front();
-      bool ok = true;
-      for (size_t ti = 1; ti < topics.size(); ++ti) {
-        const auto& s = stamps[topics[ti]];
-        const auto it = std::lower_bound(s.begin(), s.end(),
-                                         primary_stamps[pi]);
-        size_t best = std::min<size_t>(it - s.begin(), s.size() - 1);
-        if (best > 0 && std::abs(s[best - 1] - primary_stamps[pi]) <
-                            std::abs(s[best] - primary_stamps[pi])) {
-          --best;
-        }
-        if (std::abs(s[best] - primary_stamps[pi]) > FLAGS_pair_tolerance) {
-          LOG(WARNING) << "primary frame #" << pi << " has no paired frame on "
-                       << topics[ti] << " within " << FLAGS_pair_tolerance
-                       << "s, sample skipped";
-          ok = false;
-          break;
-        }
-        sample.frame_index[topics[ti]] = best;
-      }
-      if (!ok) continue;
-      for (const auto& [topic, idx] : sample.frame_index) needed[topic].insert(idx);
-      samples.push_back(sample);
-    }
-    CHECK_GT(samples.size(), 0u) << "没有可用样本（检查话题名与配对容差）";
-
-    // ===== 第二遍：只反序列化被选中的帧 =====
-    std::map<std::string, std::map<size_t, sensor_msgs::msg::LaserScan>> stored;
-    {
-      rosbag2_cpp::Reader reader;
-      reader.open(FLAGS_bag_filename);
-      std::map<std::string, size_t> counters;
-      while (reader.has_next()) {
-        auto msg = reader.read_next();
-        if (!stamps.count(msg->topic_name)) continue;
-        const size_t idx = counters[msg->topic_name]++;
-        if (!needed[msg->topic_name].count(idx)) continue;
-        rclcpp::SerializedMessage serialized(*msg->serialized_data);
-        serialization.deserialize_message(&serialized,
-                                          &stored[msg->topic_name][idx]);
-      }
-    }
-
-    // ===== 评估：各话题点云经外参合并为一帧 =====
-    // lua 模式：组装 TimedPointCloudData 走线上 DataPreprocessor（与
-    // pose_estimator_2d L480 的 ProcessMultipleSensorData 同一份代码），
-    // 取 merged_filtered_cloud——即 PoseInitializer 的真实输入。
-    // 非 lua 模式：简化合并（无 range 裁剪/体素滤波），仅作快速测试。
+    // lua 模式走线上 DataPreprocessor（merged_filtered_cloud）；否则简化合并。
+    const auto frames = PrepareBagFrames(bag_cfg, preprocessor.get());
     int tested = 0;
-    for (const auto& sample : samples) {
-      carto::sensor::PointCloud cloud;
-      if (lua.enabled) {
-        std::map<std::string, carto::sensor::TimedPointCloudData>
-            laser_data_map;
-        carto::common::Time sync_time;
-        for (const auto& [topic, idx] : sample.frame_index) {
-          carto::sensor::PointCloudWithIntensities pcwi;
-          carto::common::Time time;
-          std::tie(pcwi, time) =
-              cartographer_ros::ToPointCloudWithIntensities(stored[topic][idx]);
-          const auto& T = extrinsics[topic];
-          laser_data_map[topic] = carto::sensor::TimedPointCloudData{
-              time, T.translation().cast<float>(), T,
-              carto::sensor::TransformTimedPointCloud(pcwi.points,
-                                                      T.cast<float>()),
-              pcwi.intensities};
-          if (topic == primary) sync_time = time;
-        }
-        const auto merged_data =
-            preprocessor->ProcessMultipleSensorData(laser_data_map, sync_time);
-        if (merged_data.IsEmpty()) {
-          LOG(WARNING) << "primary frame #" << sample.frame_index.at(primary)
-                       << " preprocessing output empty, sample skipped";
-          continue;
-        }
-        cloud = merged_data.merged_filtered_cloud;
-      } else {
-        std::vector<carto::sensor::RangefinderPoint> merged;
-        for (const auto& [topic, idx] : sample.frame_index) {
-          AppendScanToPointCloud(stored[topic][idx], extrinsics[topic],
-                                 &merged);
-        }
-        cloud = carto::sensor::PointCloud(std::move(merged));
-      }
-      if (cloud.empty()) continue;
-      RunRecord rec = RunMatch(matcher, cloud, min_score, "bag", tested);
+    for (const auto& frame : frames) {
+      if (frame.cloud.empty()) continue;
+      RunRecord rec = RunMatch(matcher, frame.cloud, min_score, "bag", tested);
       rec.success = rec.profile.matched;
       records.push_back(rec);
       ++tested;
-      LOG(INFO) << "[bag " << tested << "/" << samples.size() << "] "
-                << "frame#" << sample.frame_index.at(primary)
-                << " bag_t=+" << sample.t_rel << "s"
+      LOG(INFO) << "[bag " << tested << "/" << frames.size() << "] "
+                << "frame#" << frame.primary_frame_index
+                << " bag_t=+" << frame.t_rel << "s"
                 << " t=" << rec.profile.t_total_ms << " ms"
                 << " score=" << rec.profile.best_score
                 << " points=" << rec.profile.points_per_scan;
