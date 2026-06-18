@@ -133,78 +133,71 @@ LocalizationNode::LocalizationNode(
 
   // 发布者  
   submap_list_publisher_ = node_->create_publisher<cartographer_ros_msgs::msg::SubmapList>(
-      kSubmapListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kSubmapListTopic, kLatestOnlyPublisherQueueSize);
   trajectory_node_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kTrajectoryNodeListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kTrajectoryNodeListTopic, kLatestOnlyPublisherQueueSize);
   landmark_poses_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
   constraint_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kConstraintListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kConstraintListTopic, kLatestOnlyPublisherQueueSize);
 
   // 发布跟踪的位姿
   if (node_options_.publish_tracked_pose) {
     loc_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        kLocaliztionPoseTopic, rclcpp::SystemDefaultsQoS());
+        std::string("~/") + kLocaliztionPoseTopic, rclcpp::SystemDefaultsQoS());
     tracked_path_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
-        kTrackedPathTopic, kLatestOnlyPublisherQueueSize);
+        std::string("~/") + kTrackedPathTopic, kLatestOnlyPublisherQueueSize);
   }
 
   global_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kGlobalPointCloudTopic, qos_latched);
+      std::string("~/") + kGlobalPointCloudTopic, qos_latched);
   global_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kGlobalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kGlobalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
   local_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
   local_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
   matched_feature_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
   scan_matched_point_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
   localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
-      kLocalizationStateTopic, kLatestOnlyPublisherQueueSize);
-  set_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-      "/robot_localization/set_pose", rclcpp::QoS(1));
+      "~/state", kLatestOnlyPublisherQueueSize);
 
   // 服务  
   submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
-      kSubmapQueryServiceName,
+      std::string("~/") + kSubmapQueryServiceName,
       std::bind(&LocalizationNode::HandleSubmapQuery, this, 
                 std::placeholders::_1, std::placeholders::_2));
 
   trajectory_query_service_ = node_->create_service<cartographer_ros_msgs::srv::TrajectoryQuery>(
-      kTrajectoryQueryServiceName,
+      std::string("~/") + kTrajectoryQueryServiceName,
       std::bind(&LocalizationNode::HandleTrajectoryQuery, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   start_trajectory_service_ = node_->create_service<cartographer_ros_msgs::srv::StartTrajectory>(
-      kStartTrajectoryServiceName,
+      std::string("~/") + kStartTrajectoryServiceName,
       std::bind(&LocalizationNode::HandleStartTrajectory, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   finish_trajectory_service_ = node_->create_service<cartographer_ros_msgs::srv::FinishTrajectory>(
-      kFinishTrajectoryServiceName,
+      std::string("~/") + kFinishTrajectoryServiceName,
       std::bind(&LocalizationNode::HandleFinishTrajectory, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   write_state_service_ = node_->create_service<cartographer_ros_msgs::srv::WriteState>(
-      kWriteStateServiceName,
+      std::string("~/") + kWriteStateServiceName,
       std::bind(&LocalizationNode::HandleWriteState, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   get_trajectory_states_service_ = node_->create_service<cartographer_ros_msgs::srv::GetTrajectoryStates>(
-      kGetTrajectoryStatesServiceName,
+      std::string("~/") + kGetTrajectoryStatesServiceName,
       std::bind(&LocalizationNode::HandleGetTrajectoryStates, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   relocalization_service_ = node_->create_service<nav_interfaces::srv::SetPose>(
-      kHandleRelocalizationServiceName,
+      "~/relocalization",
       std::bind(&LocalizationNode::HandleRelocalization, this,
-                std::placeholders::_1, std::placeholders::_2));
-
-  set_map_changed_service_ = node_->create_service<std_srvs::srv::Trigger>(
-      kHandleSetMapChangedServiceName,
-      std::bind(&LocalizationNode::HandleSetMapChanged, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   // 定时器（Wall timers 与 regular timer）
@@ -1081,12 +1074,6 @@ void LocalizationNode::HandleRelocalization(
   response->success = localization_updater_bridge_.SetInitialPose(initial_pose);
 }
 
-void LocalizationNode::HandleSetMapChanged(
-    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-{
-  response->success = true;
-}
 
 /* --------------------------------- service client ---------------------------------------- */
 bool LocalizationNode::SetInitialPoseInFilter(

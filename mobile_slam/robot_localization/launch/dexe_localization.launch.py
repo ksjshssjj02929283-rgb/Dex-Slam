@@ -65,8 +65,9 @@ def launch_setup(context, *args, **kwargs):
             {'use_sim_time': use_sim_time}
         ],
         remappings=[
-            # Add any topic remappings here if needed
-            # ('odometry/filtered', '/odometry/local'),
+            # 输出 topic 收敛到节点私有域 /robot_localization/（EKF 状态估计输出）
+            ('odometry/filtered', '~/odometry/filtered'),
+            ('accel/filtered', '~/accel/filtered'),
         ]
     )
     

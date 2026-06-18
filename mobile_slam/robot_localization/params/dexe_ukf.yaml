@@ -129,7 +129,7 @@ robot_localization:
 # ============================
 # Localization Pose Input Configuration
 # ============================
-        pose0: /loc_pose
+        pose0: /localization_node/loc_pose
         pose0_config: [true,  true,  false,
                        false, false, true,
                        false, false, false,

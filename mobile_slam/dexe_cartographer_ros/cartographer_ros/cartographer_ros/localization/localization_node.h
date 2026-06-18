@@ -162,10 +162,6 @@ private:
       const std::shared_ptr<nav_interfaces::srv::SetPose::Request> request,
       std::shared_ptr<nav_interfaces::srv::SetPose::Response> response);
 
-  void HandleSetMapChanged(
-      const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-      std::shared_ptr<std_srvs::srv::Trigger::Response> response);
-
   // Helpers
   bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);
   bool StopFilter();
@@ -239,7 +235,6 @@ private:
   rclcpp::Service<cartographer_ros_msgs::srv::WriteState>::SharedPtr write_state_service_;
   rclcpp::Service<cartographer_ros_msgs::srv::GetTrajectoryStates>::SharedPtr get_trajectory_states_service_;
   rclcpp::Service<nav_interfaces::srv::SetPose>::SharedPtr relocalization_service_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr set_map_changed_service_;
 
   // Subscribers per trajectory
   struct TrajectorySensorSamplers {
