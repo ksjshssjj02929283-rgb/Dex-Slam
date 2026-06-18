@@ -23,9 +23,8 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
-#include "std_msgs/msg/int16.hpp"
 #include "nav_interfaces/srv/set_map_name.hpp"
-#include "nav_interfaces/srv/get_string.hpp"
+#include "nav_interfaces/msg/mapping_state.hpp"
 
 #include "cartographer/mapping/map_builder.h"
 #include "cartographer_ros/mapping/node.h"
@@ -89,7 +88,8 @@ public:
   : rclcpp::Node("mapping_node")
   {
     // Publisher
-    mapping_status_pub_ = this->create_publisher<std_msgs::msg::Int16>("mapping_status", 10);
+    // ~/state：结构化建图状态（唯一状态出口，FQN /mapping_node/state；状态仅经 topic 发布）
+    state_pub_ = this->create_publisher<nav_interfaces::msg::MappingState>("~/state", 10);
 
     start_mapping_srv_ = this->create_service<std_srvs::srv::Trigger>(
       "~/start_mapping",
@@ -111,9 +111,7 @@ public:
       "~/set_map_name",
       std::bind(&MappingNode::SetMapName, this, std::placeholders::_1, std::placeholders::_2));
 
-    get_mapping_status_srv_ = this->create_service<nav_interfaces::srv::GetString>(
-      "~/get_mapping_status",
-      std::bind(&MappingNode::GetMappingStatus, this, std::placeholders::_1, std::placeholders::_2));
+    // 建图状态仅经 ~/state(topic) 发布，不提供查询 service
 
     // Clients for show map control (使用全路径，等价于 ROS1 版本)
     start_show_map_client_ = this->create_client<std_srvs::srv::Trigger>(
@@ -136,11 +134,18 @@ public:
 
 private:
   // ---- Service Callbacks (ROS2 签名) ----
-  void GetMappingStatus(const std::shared_ptr<nav_interfaces::srv::GetString::Request> /*req*/,
-                        std::shared_ptr<nav_interfaces::srv::GetString::Response> res)
-  {
-    res->data = is_mapping_ ? "mapping" : "idle";
-    res->success = true;
+  // 构建结构化建图状态（~/state topic 发布用）
+  nav_interfaces::msg::MappingState BuildMappingState() const {
+    nav_interfaces::msg::MappingState s;
+    if (is_saving_) {
+      s.status = nav_interfaces::msg::MappingState::SAVING;
+    } else if (is_mapping_) {
+      s.status = nav_interfaces::msg::MappingState::MAPPING;
+    } else {
+      s.status = nav_interfaces::msg::MappingState::IDLE;
+    }
+    s.map_name = map_name_;
+    return s;
   }
 
   void StartMappingCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
@@ -230,6 +235,7 @@ private:
       return;
     }
     
+    is_saving_ = true;  // 进入保存/收尾阶段（~/state 报 SAVING）
     // 完成所有轨迹并进行最终优化（只执行一次）
     if (!trajectories_finished_) {
       LOG(INFO) << "Finishing all trajectories and running final optimization...";
@@ -261,6 +267,7 @@ private:
                  << ". You can call finish_mapping again to retry.";
       res->success = false;
       res->message = "Failed to save map files. Please check logs and call finish_mapping again to retry.";
+      is_saving_ = false;  // 保存失败，退出保存态（仍在建图）
       return;  // 保存失败，不重置节点，保持 is_mapping_ = true 和 trajectories_finished_ = true
     }
     
@@ -391,12 +398,14 @@ private:
 
     map_name_.clear();
     is_mapping_ = false;
+    is_saving_ = false;
     trajectories_finished_ = false;  // 重置标志
     
     LOG(INFO) << "Mapping node reset completed.";
   }
 
   void FinishMapping() {
+    is_saving_ = true;  // 进入保存/收尾阶段（~/state 报 SAVING）
     // 结束优化与保存
     mapping_node_->FinishAllTrajectories();
     mapping_node_->RunFinalOptimization();
@@ -416,6 +425,7 @@ private:
     
     if (!save_success) {
       LOG(ERROR) << "Failed to save map files in FinishMapping()";
+      is_saving_ = false;  // 保存失败，退出保存态
       return;
     }
     
@@ -451,14 +461,14 @@ private:
   }
 
   void Publish() {
-    auto msg = std_msgs::msg::Int16();
-    msg.data = is_mapping_ ? 1 : -1;
-    mapping_status_pub_->publish(msg);
+    // ~/state：结构化建图状态（唯一状态出口，仅 topic）
+    state_pub_->publish(BuildMappingState());
   }
 private:
   // 状态
   std::string map_name_;
   bool is_mapping_{false};
+  bool is_saving_{false};               // 正在保存/收尾建图（~/state 报 SAVING）
   bool trajectories_finished_{false};  // 标记轨迹是否已完成和优化
 
   // Cartographer 持有
@@ -468,14 +478,13 @@ private:
 
   // ROS2 通信
   rclcpp::TimerBase::SharedPtr publish_timer_;
-  rclcpp::Publisher<std_msgs::msg::Int16>::SharedPtr mapping_status_pub_;
+  rclcpp::Publisher<nav_interfaces::msg::MappingState>::SharedPtr state_pub_;
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
   rclcpp::Service<nav_interfaces::srv::SetMapName>::SharedPtr set_map_name_srv_;
-  rclcpp::Service<nav_interfaces::srv::GetString>::SharedPtr get_mapping_status_srv_;
 
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_show_map_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stop_show_map_client_;

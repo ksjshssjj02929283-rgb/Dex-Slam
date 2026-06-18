@@ -107,12 +107,12 @@ Node::Node(const double resolution, const double publish_period_sec)
   callback_group_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
   callback_group_executor_->add_callback_group(callback_group_, this->get_node_base_interface());
   client_ = this->create_client<cartographer_ros_msgs::srv::SubmapQuery>(
-        kSubmapQueryServiceName,
+        "/mapping_node/submap_query",
         rmw_qos_profile_services_default,
         callback_group_
         );
   submap_list_subscriber_ = this->create_subscription<cartographer_ros_msgs::msg::SubmapList>(
-      kSubmapListTopic, rclcpp::QoS(10),
+      "/mapping_node/submap_list", rclcpp::QoS(10),
       std::bind(&Node::HandleSubmapList, this, std::placeholders::_1));
   occupancy_grid_publisher_ = this->create_publisher<::nav_msgs::msg::OccupancyGrid>(
       kOccupancyGridTopic, rclcpp::QoS(10).transient_local());
