@@ -171,7 +171,7 @@ private:
       res->message = "Failed to create map_folder";
       return;
     }
-    const std::string this_map_folder = FLAGS_map_folder + "/" + map_name_;
+    const std::string this_map_folder = FLAGS_map_folder + "/" + map_name_ + "/slam";  // 底图在 slam/ 子目录
     if (!EnsureDirectoryExists(this_map_folder)) {
       res->success = false;
       res->message = "Failed to create map subfolder";
@@ -252,14 +252,14 @@ private:
     }
 
     // 保存 pbstream 文件
-    const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/map.pbstream";
+    const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/slam/map.pbstream";
     if (!state_filename.empty()) {
       mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
       LOG(INFO) << "State saved to '" << state_filename << "'.";
     }
 
     // 保存地图文件（带校验）
-    const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/map";
+    const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/slam/map";
     bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
     
     if (!save_success) {
@@ -414,13 +414,13 @@ private:
       mapping_node_->SaveOptimizedPoses(int(0));
     }
 
-    const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/map.pbstream";
+    const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/slam/map.pbstream";
     if (!state_filename.empty()) {
       mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
       LOG(INFO) << "State saved to '" << state_filename << "'.";
     }
 
-    const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/map";
+    const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/slam/map";
     bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
     
     if (!save_success) {
@@ -450,7 +450,7 @@ private:
       res->success = false;
       return;
     }
-    const std::string this_map_folder = FLAGS_map_folder + "/" + map_name_;
+    const std::string this_map_folder = FLAGS_map_folder + "/" + map_name_ + "/slam";  // 底图在 slam/ 子目录
     if (!EnsureDirectoryExists(this_map_folder)) {
       res->success = false;
       return;

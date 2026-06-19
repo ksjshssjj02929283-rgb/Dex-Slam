@@ -195,10 +195,8 @@ LocalizationNode::LocalizationNode(
       std::bind(&LocalizationNode::HandleGetTrajectoryStates, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  relocalization_service_ = node_->create_service<nav_interfaces::srv::SetPose>(
-      "~/relocalization",
-      std::bind(&LocalizationNode::HandleRelocalization, this,
-                std::placeholders::_1, std::placeholders::_2));
+  // 注：~/relocalization（局部重定位，SetPose）为控制类服务，已按门面+引擎原则
+  // 移到外围层 LocalizationManagerNode 注册；核心仅暴露 Relocalize() 方法。
 
   // 定时器（Wall timers 与 regular timer）
   using namespace std::chrono_literals;
@@ -1043,26 +1041,25 @@ void LocalizationNode::HandleWriteState(
   }
 }
 
-void LocalizationNode::HandleRelocalization(
-    const std::shared_ptr<nav_interfaces::srv::SetPose::Request> request,
-    std::shared_ptr<nav_interfaces::srv::SetPose::Response> response)
+// 引擎能力方法：局部重定位——将定位滤波器初始位姿设为
+// 指定位姿（须在 map_frame）。控制类 ROS 服务 ~/relocalization 由外围层注册并转调本方法。
+bool LocalizationNode::Relocalize(
+    const geometry_msgs::msg::PoseWithCovarianceStamped& pose)
 {
-  if (request->pose.header.frame_id == "") {
-    // This should be removed at some point
+  if (pose.header.frame_id == "") {
     RCLCPP_WARN(node_->get_logger(),
                 "Received initial pose with empty frame_id. Using default frame_id = map.");
   }
   // We only accept initial pose estimates in the global frame, #5148.
-  else if (StripSlash(request->pose.header.frame_id) != node_options_.map_frame) {
+  else if (StripSlash(pose.header.frame_id) != node_options_.map_frame) {
     RCLCPP_WARN(node_->get_logger(),
                 "Ignoring initial pose in frame \"%s\"; initial poses must be in the global frame, \"%s\"",
-                StripSlash(request->pose.header.frame_id).c_str(),
+                StripSlash(pose.header.frame_id).c_str(),
                 node_options_.map_frame.c_str());
-    response->success = false;
-    return;
+    return false;
   }
 
-  const carto::transform::Rigid3d initial_pose = ToRigid3d(request->pose.pose.pose);
+  const carto::transform::Rigid3d initial_pose = ToRigid3d(pose.pose.pose);
 
   need_set_pose_in_filter_ = true;
   auto initial_pose_2d = carto::transform::Project2D(initial_pose);
@@ -1071,7 +1068,7 @@ void LocalizationNode::HandleRelocalization(
               initial_pose_2d.translation().x(),
               initial_pose_2d.translation().y(),
               initial_pose_2d.rotation().angle());
-  response->success = localization_updater_bridge_.SetInitialPose(initial_pose);
+  return localization_updater_bridge_.SetInitialPose(initial_pose);
 }
 
 

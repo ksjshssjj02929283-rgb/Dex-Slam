@@ -105,6 +105,10 @@ public:
   // 用于重置地图原点并重启定位后，将机器人定位到新地图原点处。
   bool TriggerGlobalRelocalization();
 
+  // 局部重定位（引擎能力方法）：将定位滤波器初始位姿设为指定位姿
+  // （须在 map_frame）。控制类服务 ~/relocalization 由外围层 LocalizationManagerNode 注册并转调。
+  bool Relocalize(const geometry_msgs::msg::PoseWithCovarianceStamped& pose);
+
   // Public methods for offline processing (similar to mapping::Node)
   std::set<::cartographer::mapping::TrajectoryBuilderInterface::SensorId>
   ComputeExpectedSensorIds(const TrajectoryOptions& options) const;
@@ -157,10 +161,6 @@ private:
   void HandleGetTrajectoryStates(
       const std::shared_ptr<cartographer_ros_msgs::srv::GetTrajectoryStates::Request> request,
       std::shared_ptr<cartographer_ros_msgs::srv::GetTrajectoryStates::Response> response);
-
-  void HandleRelocalization(
-      const std::shared_ptr<nav_interfaces::srv::SetPose::Request> request,
-      std::shared_ptr<nav_interfaces::srv::SetPose::Response> response);
 
   // Helpers
   bool SetInitialPoseInFilter(const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg);
@@ -234,7 +234,7 @@ private:
   rclcpp::Service<cartographer_ros_msgs::srv::FinishTrajectory>::SharedPtr finish_trajectory_service_;
   rclcpp::Service<cartographer_ros_msgs::srv::WriteState>::SharedPtr write_state_service_;
   rclcpp::Service<cartographer_ros_msgs::srv::GetTrajectoryStates>::SharedPtr get_trajectory_states_service_;
-  rclcpp::Service<nav_interfaces::srv::SetPose>::SharedPtr relocalization_service_;
+  // relocalization 控制服务在外围层注册（loc_node_main.cc）；核心不持有该服务成员。
 
   // Subscribers per trajectory
   struct TrajectorySensorSamplers {

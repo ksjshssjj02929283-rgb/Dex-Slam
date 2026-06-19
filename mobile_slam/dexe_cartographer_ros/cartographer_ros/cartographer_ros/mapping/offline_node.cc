@@ -468,8 +468,8 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
   if (rclcpp::ok() && !FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
     LOG(INFO) << "Starting map save process...";
     
-    // Create map folder structure: map_folder/map_name/
-    std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name;
+    // Create map folder structure: map_folder/map_name/slam/（底图在 slam/ 子目录）
+    std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name + "/slam";
     std::string mkdir_cmd = "mkdir -p " + map_dir;
     int ret = system(mkdir_cmd.c_str());
     if (ret != 0) {
