@@ -23,6 +23,7 @@
 #include <mutex>
 #include <filesystem>
 #include <atomic>
+#include <cstdint>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -36,6 +37,7 @@
 #include "cartographer_ros/localization/map_persistence_manager.h"
 #include "nav_interfaces/srv/save_map.hpp"
 #include "nav_interfaces/srv/set_pose.hpp"
+#include "nav_interfaces/msg/map_state.hpp"
 #include "cartographer_ros/options/localization_node_options.h"
 #include "cartographer_ros/mapping/ros_log_sink.h"
 #include "gflags/gflags.h"
@@ -72,7 +74,7 @@ DEFINE_string(
 DEFINE_bool(
     auto_load_map, false,
     "If true, automatically load the map specified by --map_folder/--map_name on startup. "
-    "If false, skip map loading at startup and wait for the set_map_changed service to trigger.");
+    "If false, skip map loading at startup and wait for map_manager/map_state (epoch) to trigger.");
 
 DEFINE_int32(
     map_backup_keep_count, 50,
@@ -121,7 +123,7 @@ public:
           } else {
             RCLCPP_INFO(get_logger(),
                         "auto_load_map=false: skipping map load at startup, "
-                        "waiting for ~/set_map_changed service to trigger");
+                        "waiting for map_manager/map_state (epoch) to trigger");
           }
         });
   }
@@ -178,12 +180,17 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_localization_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_localization_srv_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr change_map_srv_;
   rclcpp::Service<nav_interfaces::srv::SaveMap>::SharedPtr save_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_global_relocalization_srv_;
   rclcpp::Service<nav_interfaces::srv::SetPose>::SharedPtr relocalization_srv_;
   // rollback_map_to 服务已移除——回退归 command_board 文件级处理。
+
+  // MapState 订阅：地图自动生效的唯一入口。按 epoch 比对，epoch 变即重载
+  // （含同名重载/回退、含未运行时启动）。set_map_changed 服务 + param 直读 + map_manager push 已删，
+  // 统一走 topic 自动生效；强制重载由上游调 map_manager/load_map（epoch+1）触发。
+  rclcpp::Subscription<nav_interfaces::msg::MapState>::SharedPtr map_state_sub_;
+  uint64_t last_map_epoch_ = 0;
 
   // filter service 调用使用临时 node + 独立 executor，不持有长期 client
   // （在 service handler 线程中调用同进程其他 service 会死锁，须独立 executor）
@@ -212,11 +219,6 @@ private:
         std::bind(&LocalizationManagerNode::HandleResetLocalization, this,
                   std::placeholders::_1, std::placeholders::_2));
 
-    change_map_srv_ = create_service<std_srvs::srv::Trigger>(
-        "~/set_map_changed",
-        std::bind(&LocalizationManagerNode::HandleChangeMap, this,
-                  std::placeholders::_1, std::placeholders::_2));
-
     save_map_srv_ = create_service<nav_interfaces::srv::SaveMap>(
         "~/save_map",
         std::bind(&LocalizationManagerNode::HandleSaveMap, this,
@@ -237,6 +239,12 @@ private:
         "~/relocalization",
         std::bind(&LocalizationManagerNode::HandleRelocalization, this,
                   std::placeholders::_1, std::placeholders::_2));
+
+    // 订阅 map_manager/map_state（latched）：地图自动生效唯一入口，epoch 变即重载（含冷启动）
+    map_state_sub_ = create_subscription<nav_interfaces::msg::MapState>(
+        "/map_manager/map_state",
+        rclcpp::QoS(1).transient_local().reliable(),
+        std::bind(&LocalizationManagerNode::HandleMapState, this, std::placeholders::_1));
 
     // ~/rollback_map_to 已移除——引擎不提供 rollback，回退由 command_board
     // 文件级处理（从 slam/backups 恢复 + 重下发）。底图 ring backup 仍由 save_map 维护。
@@ -305,102 +313,58 @@ private:
         "Localization reset successfully" : "Failed to reset localization";
   }
 
-  void HandleChangeMap(
-      const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
-    
+  // MapState 回调：地图自动生效的唯一入口。按 epoch 比对，epoch 变即重载——
+  //   · 运行中变更（含同名重载/回退）→ 重载到新版本
+  //   · 未运行（冷启动 / auto_load_map=false）→ 直接用该地图启动定位
+  // 启动去重：首条 MapState 且定位已由 auto_load_map 用同一地图启动 → 仅同步 epoch，避免双载。
+  void HandleMapState(const nav_interfaces::msg::MapState::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    
-    RCLCPP_INFO(get_logger(), "Changing map - getting new map info from map_manager");
-    
-    // 从map_manager获取新的地图信息
-    std::string new_map_folder;
-    std::string new_map_name;
-    
-    if (!GetMapInfoFromMapManager(new_map_folder, new_map_name)) {
-      response->success = false;
-      response->message = "Failed to get map info from map_manager";
+
+    if (msg->map_folder.empty() || msg->map_name.empty()) {
+      RCLCPP_WARN(get_logger(), "MapState with empty folder/name, ignoring");
       return;
     }
-    
-    RCLCPP_INFO(get_logger(), "New map - folder: %s, name: %s", 
-                new_map_folder.c_str(), new_map_name.c_str());
-    
-    // 停止当前定位
-    RCLCPP_INFO(get_logger(), "Stopping current localization...");
-    StopFilter();
-    StopLocalization();
-    
-    // 更新地图路径（更新全局FLAGS）
-    FLAGS_map_folder = new_map_folder;
-    FLAGS_map_name = new_map_name;
-    
-    // 使用新地图启动定位
-    RCLCPP_INFO(get_logger(), "Starting localization with new map...");
-    response->success = StartLocalization() && StartFilter();
-    response->message = response->success ? 
-        "Map changed successfully" : "Failed to start localization with new map";
+    if (msg->epoch == last_map_epoch_) return;  // epoch 未变，无需处理
+
+    const uint64_t prev = last_map_epoch_;
+    last_map_epoch_ = msg->epoch;
+
+    // 启动去重：首条 MapState（prev==0）且定位已 RUNNING 在同一地图（auto_load_map 已启动）→ 不重复重载
+    if (prev == 0 && state_ == LocalizationState::RUNNING &&
+        FLAGS_map_folder == msg->map_folder && FLAGS_map_name == msg->map_name) {
+      RCLCPP_INFO(get_logger(),
+                  "MapState first sync (epoch=%lu): localization already running same map, skip reload",
+                  static_cast<unsigned long>(msg->epoch));
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(),
+                "MapState epoch %lu->%lu: %s map folder=%s name=%s",
+                static_cast<unsigned long>(prev), static_cast<unsigned long>(msg->epoch),
+                (state_ == LocalizationState::RUNNING ? "reloading" : "starting with"),
+                msg->map_folder.c_str(), msg->map_name.c_str());
+    ReloadWithMap(msg->map_folder, msg->map_name);
   }
 
-  bool GetMapInfoFromMapManager(std::string& map_folder, std::string& map_name) {
-    // 创建临时节点用于参数获取
-    try {
-      RCLCPP_INFO(get_logger(), "Creating temporary node to fetch map_manager parameters...");
-      
-      // 创建临时节点
-      auto temp_node = std::make_shared<rclcpp::Node>(
-          "temp_param_client_node",
-          rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
-      
-      // 创建参数客户端
-      auto param_client = std::make_shared<rclcpp::SyncParametersClient>(
-          temp_node, "map_manager");
-      
-      if (!param_client->wait_for_service(std::chrono::seconds(5))) {
-        RCLCPP_ERROR(get_logger(), "map_manager parameter service not available");
-        return false;
-      }
-      
-      RCLCPP_INFO(get_logger(), "Connected to map_manager parameter service");
-      
-      // 获取 map_folder 和 map_name 参数
-      auto params = param_client->get_parameters({"map_folder", "map_name"});
-      
-      if (params.size() != 2) {
-        RCLCPP_ERROR(get_logger(), "Failed to get both map_folder and map_name parameters");
-        return false;
-      }
-      
-      // 检查并获取 map_folder
-      if (params[0].get_type() == rclcpp::ParameterType::PARAMETER_STRING) {
-        map_folder = params[0].as_string();
-      } else {
-        RCLCPP_ERROR(get_logger(), "map_folder parameter is not a string");
-        return false;
-      }
-      
-      // 检查并获取 map_name
-      if (params[1].get_type() == rclcpp::ParameterType::PARAMETER_STRING) {
-        map_name = params[1].as_string();
-      } else {
-        RCLCPP_ERROR(get_logger(), "map_name parameter is not a string");
-        return false;
-      }
-      
-      if (map_folder.empty() || map_name.empty()) {
-        RCLCPP_ERROR(get_logger(), "Got empty map_folder or map_name from map_manager");
-        return false;
-      }
-      
-      RCLCPP_INFO(get_logger(), "Successfully got map info from map_manager - folder: %s, name: %s",
-                  map_folder.c_str(), map_name.c_str());
-      
-      return true;
-      
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(get_logger(), "Exception while getting parameters from map_manager: %s", e.what());
-      return false;
+  // 用新地图重载并重启定位（调用方须已持有 state_mutex_）。
+  bool ReloadWithMap(const std::string& new_map_folder, const std::string& new_map_name) {
+    RCLCPP_INFO(get_logger(), "Reloading map - folder: %s, name: %s",
+                new_map_folder.c_str(), new_map_name.c_str());
+
+    // 停止当前定位
+    StopFilter();
+    StopLocalization();
+
+    // 更新地图路径（全局 FLAGS）
+    FLAGS_map_folder = new_map_folder;
+    FLAGS_map_name = new_map_name;
+
+    // 使用新地图启动定位
+    const bool ok = StartLocalization() && StartFilter();
+    if (!ok) {
+      RCLCPP_ERROR(get_logger(), "Failed to (re)start localization with new map");
     }
+    return ok;
   }
 
   bool StartLocalization() {
