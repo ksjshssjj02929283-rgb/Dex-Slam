@@ -297,6 +297,10 @@ void LocalizationNode::PublishLocalizationState()
   const auto loc_state = localization_updater_bridge_.GetLocalizationState();
   nav_interfaces::msg::LocalizationState loc_state_msg;
 
+  // ScanMatch 后的地图重合率作为定位置信度 score（来自 ConsistencyChecker）
+  loc_state_msg.score = static_cast<float>(
+      localization_updater_bridge_.GetLocalizationConfidence());
+
   if (!loc_state.has_value()) {
     // 未初始化或不可用时可选择填充一个默认状态
     loc_state_msg.status = nav_interfaces::msg::LocalizationState::LOC_NOT_INIT;

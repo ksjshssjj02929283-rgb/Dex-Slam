@@ -106,6 +106,9 @@ class PoseEstimator2D {
 
   LocalizationState GetLocalizationState() const { return loc_state_; }
 
+  // 获取当前定位置信度（ScanMatch 后的地图重合率 [0,1]）
+  double GetLocalizationConfidence() const;
+
   // 触发全局重定位，不需要初始位姿
   void TriggerGlobalRelocalization();
 
@@ -167,9 +170,6 @@ class PoseEstimator2D {
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
     std::map<int, std::vector<sensor::LineData>> & track_lane_data);
-
-  // 获取当前定位置信度
-  double GetLocalizationConfidence() const;
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
