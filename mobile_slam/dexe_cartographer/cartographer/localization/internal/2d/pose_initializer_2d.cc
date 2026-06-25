@@ -416,6 +416,7 @@ void PoseInitializer::GlobalRelocalzationOnce()
   // 每次执行都把本次信息记进成员，调用方用 GetLastGlobalRelocInfo() 读取。
   last_global_reloc_info_ = GlobalRelocInfo{};
   GlobalRelocInfo& info = last_global_reloc_info_;
+  info.call_index = ++global_reloc_call_count_;  // M1 profiling：1 = 冷启动首帧
 
   if (global_submap_ == nullptr) {
     LOG(ERROR) << "Global submap is not initialized, please set global submap first.";
@@ -440,11 +441,15 @@ void PoseInitializer::GlobalRelocalzationOnce()
     return;
   }
 
+  // M1 profiling：原版 FCSM 构造会建完整金字塔（不读 pbstream 固化），仅 validate 使用，
+  // 首次定位时落在 t_bbs 之前的未计时区——单独计时确认是否为 1126ms 缺口主因。
+  const auto t_fcsm_build = Clock::now();
   if (fast_correlative_scan_matcher_ == nullptr) {
     fast_correlative_scan_matcher_ =
         std::make_unique<mapping::scan_matching::FastCorrelativeScanMatcher2D>(
           *global_grid, options_.fast_correlative_scan_matcher_options());
   }
+  info.t_fcsm_build_ms = elapsed_ms(t_fcsm_build);
 
   initializer_status_ = PoseInitializerStatus::GlobalEstimating;
 
@@ -454,6 +459,10 @@ void PoseInitializer::GlobalRelocalzationOnce()
   // 创建一个临时位姿用于存储全局匹配结果
   auto global_match_pose = std::make_shared<transform::Rigid2d>();
   float global_score = 0.0;
+
+  // M1 profiling：t_total_start -> 此处的整个准备区（检查 + grid 获取 + 匹配器构造），
+  // 5 段计时不覆盖它，缺口若在这里，t_setup_ms 会接近 ~1126ms。
+  info.t_setup_ms = elapsed_ms(t_total_start);
 
   const auto t_bbs = Clock::now();
   bool global_match_success = MatchFullSubmapDispatch(
@@ -552,6 +561,18 @@ void PoseInitializer::GlobalRelocalzationOnce()
     info.pose_estimate = *global_pose_estimate_;
   }
 
+  LOG(INFO) << "Global relocalization info: "
+            << "call_index=" << info.call_index << ", "
+            << "t_setup_ms=" << info.t_setup_ms << ", "
+            << "t_fcsm_build_ms=" << info.t_fcsm_build_ms << ", "
+            << "t_bbs_ms=" << info.t_bbs_ms << ", "
+            << "t_rtcsm_ms=" << info.t_rtcsm_ms << ", "
+            << "t_line_ms=" << info.t_line_ms << ", "
+            << "t_ceres_ms=" << info.t_ceres_ms << ", "
+            << "t_validate_ms=" << info.t_validate_ms << ", "
+            << "t_validate_fcsm_ms=" << info.t_validate_fcsm_ms << ", "
+            << "t_validate_rtcsm_ms=" << info.t_validate_rtcsm_ms;
+
   const double total_ms = elapsed_ms(t_total_start);
   info.t_total_ms = total_ms;
   info.matched = (initializer_status_ == PoseInitializerStatus::Success);
@@ -560,6 +581,12 @@ void PoseInitializer::GlobalRelocalzationOnce()
 
 bool PoseInitializer::IsRelocalizationSuccess()
 {
+  // M1 profiling：拆开 validate 的 362ms——原版 FCSM 全局重匹配 vs RTCSM 各占多少。
+  using Clock = std::chrono::steady_clock;
+  const auto elapsed_ms = [](const Clock::time_point& s) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - s).count();
+  };
+
   if (fast_correlative_scan_matcher_ == nullptr) {
     LOG(ERROR) << "fast correlative scan matcher is not initialized.";
     return false;
@@ -573,6 +600,7 @@ bool PoseInitializer::IsRelocalizationSuccess()
   std::shared_ptr<transform::Rigid2d> best_pose = absl::make_unique<transform::Rigid2d>();
 
   float score = 0.0;
+  const auto t_validate_fcsm = Clock::now();
   bool fast_match_success =
             fast_correlative_scan_matcher_->Match(
                   *global_pose_estimate_,
@@ -580,6 +608,7 @@ bool PoseInitializer::IsRelocalizationSuccess()
                   options_.global_localization_min_score(),
                   &score,
                   best_pose.get());
+  last_global_reloc_info_.t_validate_fcsm_ms = elapsed_ms(t_validate_fcsm);
 
   if (fast_match_success &&
       score < options_.global_localization_min_score())
@@ -596,9 +625,11 @@ bool PoseInitializer::IsRelocalizationSuccess()
       return false;
     }
     
+    const auto t_validate_rtcsm = Clock::now();
     score = real_time_correlative_scan_matcher_->Match(
       *global_pose_estimate_, *curr_cloud_,
       *global_grid, best_pose.get());
+    last_global_reloc_info_.t_validate_rtcsm_ms = elapsed_ms(t_validate_rtcsm);
 
     if (score < options_.global_localization_min_score()) {
       LOG(WARNING) << "online correlative scan matcher score is too low.";

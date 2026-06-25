@@ -186,9 +186,8 @@ private:
   rclcpp::Service<nav_interfaces::srv::SetPose>::SharedPtr relocalization_srv_;
   // rollback_map_to 服务已移除——回退归 command_board 文件级处理。
 
-  // MapState 订阅：地图自动生效的唯一入口。按 epoch 比对，epoch 变即重载
-  // （含同名重载/回退、含未运行时启动）。set_map_changed 服务 + param 直读 + map_manager push 已删，
-  // 统一走 topic 自动生效；强制重载由上游调 map_manager/load_map（epoch+1）触发。
+  // MapState 订阅：地图自动生效唯一入口。epoch 变即重载（含同名/回退、含未运行时启动）；
+  // 强制重载由上游调 map_manager/load_map（epoch+1）触发。
   rclcpp::Subscription<nav_interfaces::msg::MapState>::SharedPtr map_state_sub_;
   uint64_t last_map_epoch_ = 0;
 
