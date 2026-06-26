@@ -156,6 +156,12 @@ class PoseInitializer {
                                const sensor::PointCloud& cloud, float min_score,
                                float* score, transform::Rigid2d* pose);
 
+  // 轻量位姿打分（M2, DEC-002）：对单个位姿（不做搜索）计算扫描点的平均占据概率，
+  // 口径同 RTCSM ComputeCandidateScore，用于替代 validate 里的全局重匹配。
+  float ScorePoseAgainstGrid(const transform::Rigid2d& pose,
+                             const sensor::PointCloud& point_cloud,
+                             const mapping::Grid2D& grid) const;
+
 private:
   const proto::PoseInitializerOptions2D options_;
 
@@ -163,6 +169,9 @@ private:
 
   std::shared_ptr<transform::Rigid2d> initial_pose_;
   std::shared_ptr<transform::Rigid2d> global_pose_estimate_;
+  // 主链路 BBS 全局解（校验门②复用：加速 BBS 确定性，重跑会返回同一位姿，故存下来直接比 delta，
+  // 不重复 ~490ms 全局搜索；DEC-003）。
+  transform::Rigid2d last_global_bbs_pose_ = transform::Rigid2d::Identity();
   bool need_apply_initial_pose_ = false;
   bool need_global_relocalization_ = false;  // 标识需要进行全局重定位
 

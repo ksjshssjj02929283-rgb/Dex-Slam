@@ -403,7 +403,11 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
  */
 double PoseEstimator2D::GetLocalizationConfidence() const {
   if (consistency_checker_) {
-    return consistency_checker_->GetConfidence();
+    // 校准到 [0,1]：原始一致性 score × 1.25 截断到 1.0——重合率 0.8 即视为满分
+    // （0.8 重合率实际已是优秀定位）。下游 NavSystemStatus / panel / command_board
+    // 判据统一使用此校准后的置信度，保持定义与使用一致。
+    const double scaled = consistency_checker_->GetConfidence() * 1.25;
+    return scaled > 1.0 ? 1.0 : scaled;
   }
   return 0.0;
 }
