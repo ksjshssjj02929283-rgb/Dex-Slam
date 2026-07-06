@@ -3,6 +3,7 @@
 //
 
 #include "core/system/slam.h"
+#include "common/map_layout.h"
 #include "core/maps/g2p5/g2p5.h"
 #include "core/lio/laser_mapping.h"
 #include "core/loop_closing/loop_closing.h"
@@ -184,7 +185,7 @@ void SlamSystem::StartSLAM(std::string map_name) {
 void SlamSystem::SaveMap(const SaveMapService::Request::SharedPtr request,
                          SaveMapService::Response::SharedPtr response) {
     map_name_ = request->map_id;
-    std::string save_path = "./data/" + map_name_ + "/";
+    std::string save_path = MapSlamDir(DefaultMapsRoot(), map_name_) + "/";
 
     SaveMap(save_path);
     response->response = 0;
@@ -193,7 +194,7 @@ void SlamSystem::SaveMap(const SaveMapService::Request::SharedPtr request,
 void SlamSystem::SaveMap(const std::string& path) {
     std::string save_path = path;
     if (save_path.empty()) {
-        save_path = "./data/" + map_name_ + "/";
+        save_path = MapSlamDir(DefaultMapsRoot(), map_name_) + "/";
     }
 
     LOG(INFO) << "slam map saving to " << save_path;

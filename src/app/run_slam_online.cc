@@ -18,11 +18,12 @@
 #include "nav_interfaces/srv/get_string.hpp"
 #include "nav_interfaces/srv/set_map_name.hpp"
 
+#include "common/map_layout.h"
 #include "core/system/slam.h"
 #include "utils/timer.h"
 
 DEFINE_string(config, "./config/default.yaml", "配置文件");
-DEFINE_string(map_folder, "./data", "地图存储根目录");
+DEFINE_string(map_folder, "", "地图存储根目录（空 = 默认 ~/.dexe/data/maps）");
 
 namespace lightning {
 namespace {
@@ -165,7 +166,7 @@ class SlamMappingNode : public rclcpp::Node {
             }
             return;
         }
-        const std::string save_path = FLAGS_map_folder + "/" + map_name_ + "/";
+        const std::string save_path = MapSlamDir(FLAGS_map_folder, map_name_) + "/";
         StopSlam(true, save_path);
         res->success = true;
         res->message = "OK";
@@ -191,7 +192,7 @@ class SlamMappingNode : public rclcpp::Node {
             res->message = "Not mapping";
             return;
         }
-        const std::string save_path = FLAGS_map_folder + "/" + map_name_ + "/";
+        const std::string save_path = MapSlamDir(FLAGS_map_folder, map_name_) + "/";
         StopSlam(true, save_path);
         res->success = true;
         res->message = "OK";
@@ -217,8 +218,9 @@ class SlamMappingNode : public rclcpp::Node {
         try {
             for (const auto& entry : std::filesystem::directory_iterator(folder)) {
                 if (!entry.is_directory()) continue;
-                // 含 global.pcd 或 map.pgm 视为有效 lightning 地图
-                if (std::filesystem::exists(entry.path() / "global.pcd") ||
+                // 分层布局 slam/ 下含 global.pcd 视为有效 lightning 地图；兼容旧扁平布局
+                if (std::filesystem::exists(entry.path() / "slam" / "global.pcd") ||
+                    std::filesystem::exists(entry.path() / "global.pcd") ||
                     std::filesystem::exists(entry.path() / "map.pgm")) {
                     maps.push_back(entry.path().filename().string());
                 }
@@ -300,6 +302,7 @@ int main(int argc, char** argv) {
     FLAGS_stderrthreshold = google::INFO;
     google::AllowCommandLineReparsing();
     google::ParseCommandLineFlags(&argc, &argv, true);
+    FLAGS_map_folder = lightning::ResolveMapsRoot(FLAGS_map_folder);
 
     auto node = std::make_shared<lightning::SlamMappingNode>();
 

@@ -12,6 +12,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
+#include "common/map_layout.h"
 #include "core/system/loc_system.h"
 #include "io/yaml_io.h"
 #include "utils/timer.h"
@@ -20,7 +21,7 @@
 
 DEFINE_string(input_bag, "", "输入 ROS2 bag 文件路径");
 DEFINE_string(config, "./config/default.yaml", "配置文件路径");
-DEFINE_string(map_folder, "./data", "地图根目录");
+DEFINE_string(map_folder, "", "地图根目录（空 = 默认 ~/.dexe/data/maps）");
 DEFINE_string(map_name, "offline_map", "地图名称");
 
 /// 运行离线定位，针对已有地图进行轨迹跟踪测试
@@ -38,8 +39,9 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // 验证地图是否存在
-    const std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name + "/";
+    // 验证地图是否存在（优先 slam/ 分层布局，回退旧扁平布局）
+    FLAGS_map_folder = lightning::ResolveMapsRoot(FLAGS_map_folder);
+    const std::string map_dir = lightning::ResolveMapDir(FLAGS_map_folder, FLAGS_map_name) + "/";
     const std::string map_file = map_dir + "global.pcd";
     if (!std::filesystem::exists(map_file)) {
         LOG(ERROR) << "Map file not found: " << map_file;

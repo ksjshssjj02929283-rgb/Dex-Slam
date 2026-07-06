@@ -3,6 +3,7 @@
 //
 
 #include "core/system/loc_system.h"
+#include "common/map_layout.h"
 #include "core/localization/localization.h"
 #include "io/yaml_io.h"
 #include "wrapper/ros_utils.h"
@@ -99,10 +100,8 @@ bool LocSystem::Init(const std::string &yaml_path, const std::string &map_path) 
         map_loaded_ = true;
         loc_started_ = false;
 
-        // 提取地图名，打开定位轨迹文件
-        std::filesystem::path p(map_path);
-        // map_path 可能以 '/' 结尾，用 parent_path().filename() 兼容
-        map_name_ = p.filename().empty() ? p.parent_path().filename().string() : p.filename().string();
+        // 提取地图名，打开定位轨迹文件（兼容尾随 '/' 与 slam/ 分层子目录）
+        map_name_ = MapNameFromPath(map_path);
         const char* home = std::getenv("HOME");
         if (home && !map_name_.empty()) {
             std::string traj_dir = std::string(home) + "/.dexe/localization/" + map_name_ + "/";

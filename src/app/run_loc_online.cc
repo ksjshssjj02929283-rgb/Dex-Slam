@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 
+#include "common/map_layout.h"
 #include "core/system/loc_system.h"
 #include "nav_interfaces/srv/get_status.hpp"
 #include "nav_interfaces/srv/get_string.hpp"
@@ -21,7 +22,7 @@
 #include "std_srvs/srv/trigger.hpp"
 
 DEFINE_string(config, "./config/default.yaml", "配置文件");
-DEFINE_string(map_folder, "./data", "地图根目录");
+DEFINE_string(map_folder, "", "地图根目录（空 = 默认 ~/.dexe/data/maps）");
 DEFINE_string(map_name, "", "地图名称");
 
 namespace lightning {
@@ -133,8 +134,9 @@ class LocalizationManagerNode : public rclcpp::Node {
         if (FLAGS_map_folder.empty() || FLAGS_map_name.empty()) {
             return false;
         }
-        const std::filesystem::path map_dir = std::filesystem::path(FLAGS_map_folder) / FLAGS_map_name;
-        return std::filesystem::exists(map_dir) && std::filesystem::exists(map_dir / "global.pcd");
+        // ResolveMapDir 优先 slam/ 分层布局，回退旧扁平布局
+        const std::filesystem::path map_dir = ResolveMapDir(FLAGS_map_folder, FLAGS_map_name);
+        return std::filesystem::exists(map_dir / "global.pcd");
     }
 
     bool StartLocalizationInternal() {
@@ -150,7 +152,7 @@ class LocalizationManagerNode : public rclcpp::Node {
             return false;
         }
 
-        const std::string map_path = FLAGS_map_folder + "/" + FLAGS_map_name + "/";
+        const std::string map_path = ResolveMapDir(FLAGS_map_folder, FLAGS_map_name) + "/";
 
         LocSystem::Options opt;
         loc_system_ = std::make_unique<LocSystem>(opt);
@@ -358,6 +360,7 @@ int main(int argc, char** argv) {
     google::AllowCommandLineReparsing();
 
     google::ParseCommandLineFlags(&argc, &argv, true);
+    FLAGS_map_folder = lightning::ResolveMapsRoot(FLAGS_map_folder);
 
     auto node = std::make_shared<lightning::LocalizationManagerNode>();
 

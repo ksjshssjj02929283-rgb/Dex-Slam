@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -342,8 +343,20 @@ void G2P5::SaveGridMap(const std::string& save_path) {
     }
 
     try {
+        // created_at：本地时间 ISO8601
+        std::time_t now = std::time(nullptr);
+        char created_at[32] = {0};
+        std::strftime(created_at, sizeof(created_at), "%Y-%m-%dT%H:%M:%S", std::localtime(&now));
+
+        // 字段组织遵循统一 map.yaml Schema：通用字段 → 2D 栅格字段 → 类型特有字段
         YAML::Emitter emitter;
         emitter << YAML::BeginMap;
+        // 通用字段（所有 SLAM 类型必须有）
+        emitter << YAML::Key << "type"             << YAML::Value << "lidar_3d";
+        emitter << YAML::Key << "slam_backend"     << YAML::Value << "slam_3d";
+        emitter << YAML::Key << "created_at"       << YAML::Value << created_at;
+        emitter << YAML::Key << "description"      << YAML::Value << "";
+        // 2D 栅格字段（image 必须用相对路径）
         emitter << YAML::Key << "image"            << YAML::Value << "map.png";
         emitter << YAML::Key << "mode"             << YAML::Value << "trinary";
         emitter << YAML::Key << "width"            << YAML::Value << width;
@@ -355,8 +368,9 @@ void G2P5::SaveGridMap(const std::string& save_path) {
         emitter << YAML::Key << "negate"           << YAML::Value << 0;
         emitter << YAML::Key << "occupied_thresh"  << YAML::Value << 0.65;
         emitter << YAML::Key << "free_thresh"      << YAML::Value << 0.25;
-        emitter << YAML::Key << "type"              << YAML::Value << "lidar_3d";
-        emitter << YAML::Key << "slam_backend"      << YAML::Value << "slam_3d";
+        // lidar_3d 类型特有字段（相对路径）
+        emitter << YAML::Key << "index_file"       << YAML::Value << "index.txt";
+        emitter << YAML::Key << "global_cloud"     << YAML::Value << "global.pcd";
         emitter << YAML::EndMap;
         yaml_file << emitter.c_str();
         yaml_file.close();

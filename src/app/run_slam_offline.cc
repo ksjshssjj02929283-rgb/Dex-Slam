@@ -12,6 +12,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
+#include "common/map_layout.h"
 #include "core/system/slam.h"
 #include "ui/pangolin_window.h"
 #include "utils/timer.h"
@@ -22,7 +23,7 @@
 
 DEFINE_string(input_bag, "", "输入 ROS2 bag 文件路径");
 DEFINE_string(config, "./config/default.yaml", "配置文件路径");
-DEFINE_string(map_folder, "./data", "地图存储根目录");
+DEFINE_string(map_folder, "", "地图存储根目录（空 = 默认 ~/.dexe/data/maps）");
 DEFINE_string(map_name, "offline_map", "地图名称");
 
 /// 运行离线建图，支持 Pangolin 可视化
@@ -41,8 +42,9 @@ int main(int argc, char** argv) {
 
     using namespace lightning;
 
-    // 验证并创建地图目录
-    const std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name + "/";
+    // 验证并创建地图目录（底图统一保存到 <map_folder>/<map_name>/slam/）
+    FLAGS_map_folder = ResolveMapsRoot(FLAGS_map_folder);
+    const std::string map_dir = MapSlamDir(FLAGS_map_folder, FLAGS_map_name) + "/";
     try {
         std::filesystem::create_directories(map_dir);
         LOG(INFO) << "Map directory: " << map_dir;
