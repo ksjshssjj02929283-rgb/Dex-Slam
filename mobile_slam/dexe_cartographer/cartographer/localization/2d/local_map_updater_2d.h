@@ -44,11 +44,22 @@ public:
   // - SHORT/LONG/PERSISTENT: 返回 global_dynamic_submap_
   std::shared_ptr<mapping::Submap2D> GetGlobalSubmap() const;
 
+  // 获取漂移免疫的静态底图（SetGlobalSubmap 后从不插入新数据）。
+  // 与 GetGlobalSubmap() 不同：后者在 SHORT/LONG/PERSISTENT 策略下返回被持续更新的
+  // global_dynamic_submap_（会随定位漂移一起污染）。漂移门控必须用这张不漂的底图做独立锚点。
+  std::shared_ptr<mapping::Submap2D> GetStaticSubmap() const;
+
   // 同步地以给定位姿为中心，从 global_dynamic_submap_ 裁剪并构建新的 local submap，
   // 并直接替换内部的 local_submap_（同时更新 local_map_origin_）。
   // 用于 Recovery 场景：先将 local map 对准估计位姿，再调用 local_submap() 进行搜索。
   // global_dynamic_submap_ 未初始化时为 no-op。
   void RebuildLocalSubmapAt(const transform::Rigid2d& pose);
+
+  // 与 RebuildLocalSubmapAt 相同，但从【漂移免疫的 global_static_submap_】裁剪，
+  // 得到干净的 local submap（含 grid + cloud → ikdtree，可供 correlative + ceres 精修）。
+  // 用于漂移恢复：在干净底图上精修校正位姿，避免被已漂的 global_dynamic_submap_ 拉回漂移方向。
+  // global_static_submap_ 未初始化时为 no-op。
+  void RebuildLocalSubmapFromStaticAt(const transform::Rigid2d& pose);
 
   // reset_map_origin 时同步更新内部地图和状态到新坐标系。
   void ApplyOriginTransform(const transform::Rigid3d& T);

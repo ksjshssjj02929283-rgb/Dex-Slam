@@ -33,6 +33,17 @@ POSE_ESTIMATOR_2D = {
     max_linear_velocity = 1.0,           -- 最大线速度 (m/s)
     max_angular_velocity = math.rad(45.),-- 最大角速度 (rad/s)，45度/秒
     min_score = 0.3,                     -- 最小匹配分数阈值，用于验证和恢复
+
+    -- 静态地图漂移门控：边定位边更新地图时拦截"自洽漂移"（在错误位姿更新地图）。
+    -- 原理：现有三路信号都参照 odom 预测 + live local map（被同一漂移污染），对缓慢漂移失明。
+    -- 用从不更新的 global_static_submap_ 做独立锚点：漂移时 live 重合度高但 static 低，
+    -- 且独立再匹配出现位姿 delta → 连续若干帧确认后冻结地图更新。
+    enable_drift_gate = true,            -- 是否启用静态地图漂移门控
+    static_map_min_score = 0.30,         -- static map 重合度 / 再匹配得分下限（低于则 static 无法判定，跳过避免新区域误冻）
+    drift_score_gap = 0.15,              -- (live 重合度 - static 重合度) 触发漂移指纹的最小差
+    drift_trans_threshold = 0.12,        -- 独立再匹配相对估计位姿的平移 delta 阈值 (米)
+    drift_rot_threshold = math.rad(6.),  -- 独立再匹配相对估计位姿的旋转 delta 阈值 (弧度)
+    drift_persist_frames = 3,            -- 连续多少帧确认漂移才冻结地图（去抖）
   },
 
   adaptive_voxel_filter = {

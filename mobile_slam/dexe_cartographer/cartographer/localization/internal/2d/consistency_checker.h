@@ -46,6 +46,22 @@ struct ConsistencyCheckResult {
   std::string ToString() const;
 };
 
+// 静态地图漂移检测结果（边定位边更新地图时拦截"自洽漂移"）
+struct DriftCheckResult {
+  bool drift_suspected = false;     // 是否疑似漂移（确认后才置 true → 冻结地图更新）
+  bool judged = false;             // 本帧是否做了判定（static 覆盖不足/未启用时为 false）
+  double static_overlap = 0.0;      // 估计位姿在【漂移免疫 static map】上的重合度
+  double live_overlap = 0.0;        // 估计位姿在 live local map 上的重合度
+  double static_rematch_score = 0.0;// static map 上独立再匹配得分
+  double pose_delta_trans = 0.0;    // 独立再匹配相对估计位姿的平移 delta (m)
+  double pose_delta_rot = 0.0;      // 独立再匹配相对估计位姿的旋转 delta (rad)
+  int consecutive_frames = 0;       // 当前连续疑似漂移帧数（去抖）
+  transform::Rigid2d rematched_pose;// static map 上独立再匹配得到的位姿（漂移确认时作为重定位粗校正初值）
+  std::string reason;               // 判定说明
+
+  std::string ToString() const;
+};
+
 // 存储的历史位姿信息
 struct PoseRecord {
   common::Time time;
@@ -74,6 +90,20 @@ class ConsistencyChecker {
       const transform::Rigid2d& estimated_pose,
       const sensor::PointCloud& point_cloud,
       const mapping::Submap2D& local_submap);
+
+  // 检查是否发生"自洽漂移"——用漂移免疫的 static map 做独立锚点。
+  // 现有 CheckPoseConsistency 三路信号都参照 odom 预测 + live local map（被同一漂移污染），
+  // 对缓慢自洽漂移失明；本方法用从不更新的 static map 检测：
+  //   ① 重合度指纹：live 重合度高但 static 重合度低，且差值大（漂移自洽于 live、不自洽于 static）；
+  //   ② 独立确认：仅当指纹触发时，在 static map 上独立再匹配，看相对估计位姿的 delta；
+  //   ③ 去抖：连续 drift_persist_frames 帧确认才判漂移（抗单帧遮挡/噪声）。
+  // 仅在 static map 对当前 scan 有足够覆盖（再匹配得分 ≥ static_map_min_score）时才判定，
+  // 因此机器人进入 static map 未覆盖的新区域时不会误判（drift_suspected 保持 false）。
+  DriftCheckResult CheckMapDrift(
+      const transform::Rigid2d& estimated_pose,
+      const sensor::PointCloud& point_cloud,
+      const mapping::Submap2D& static_submap,
+      const mapping::Submap2D& live_local_submap);
 
   // 获取当前置信度
   double GetConfidence() const { return current_confidence_; }
@@ -131,6 +161,9 @@ class ConsistencyChecker {
 
   // 当前置信度
   double current_confidence_;
+
+  // 漂移门控去抖计数：连续疑似漂移帧数
+  int consecutive_drift_frames_ = 0;
 };
 
 }  // namespace localization

@@ -33,7 +33,33 @@ proto::ConsistencyCheckerOptions CreateConsistencyCheckerOptions(
       parameter_dictionary->GetDouble("max_angular_velocity"));
   options.set_min_score(
       parameter_dictionary->GetDouble("min_score"));
-  
+
+  // ===== 静态地图漂移门控参数（向后兼容：旧 lua 缺省时用默认值）=====
+  options.set_enable_drift_gate(
+      parameter_dictionary->HasKey("enable_drift_gate")
+          ? parameter_dictionary->GetBool("enable_drift_gate")
+          : true);
+  options.set_static_map_min_score(
+      parameter_dictionary->HasKey("static_map_min_score")
+          ? parameter_dictionary->GetDouble("static_map_min_score")
+          : 0.30);
+  options.set_drift_score_gap(
+      parameter_dictionary->HasKey("drift_score_gap")
+          ? parameter_dictionary->GetDouble("drift_score_gap")
+          : 0.15);
+  options.set_drift_trans_threshold(
+      parameter_dictionary->HasKey("drift_trans_threshold")
+          ? parameter_dictionary->GetDouble("drift_trans_threshold")
+          : 0.12);
+  options.set_drift_rot_threshold(
+      parameter_dictionary->HasKey("drift_rot_threshold")
+          ? parameter_dictionary->GetDouble("drift_rot_threshold")
+          : 0.105);
+  options.set_drift_persist_frames(
+      parameter_dictionary->HasKey("drift_persist_frames")
+          ? parameter_dictionary->GetInt("drift_persist_frames")
+          : 3);
+
   return options;
 }
 

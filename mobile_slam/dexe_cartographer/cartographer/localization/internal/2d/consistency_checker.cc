@@ -401,23 +401,22 @@ std::unique_ptr<transform::Rigid2d> ConsistencyChecker::RecoverFromLocalMap(
     return nullptr;
   }
   
-  // 6. 恢复成功，进行一致性检查
-  LOG(INFO) << "Recovery optimization successful, performing consistency check...";
-  
-  // 使用 validation_pose 作为预测位姿，恢复的位姿作为估计位姿
-  auto consistency_result = CheckPoseConsistency(
-      time,
-      validation_pose,  // 预测位姿（恢复前的位姿）
-      *recovery_pose_refined,  // 估计位姿（恢复后的位姿）
-      point_cloud,
-      *local_submap);
-  
-  // 打印恢复后的一致性检查结果
-  LOG(INFO) << "Recovery Consistency Check Result:\n" << consistency_result.ToString();
-  
-  // 7. 如果一致性检查失败，返回失败
-  if (!consistency_result.is_consistent) {
-    LOG(ERROR) << "Recovery pose failed consistency check!";
+  // 6. 恢复成功，校验【恢复后位姿自身的合法性】（而非与恢复前位姿比 delta）
+  // ⚠️ 绝不能用 CheckPoseConsistency(validation_pose, refined) 比平移/旋转 delta：
+  //    validation_pose 是恢复前的【错误/漂移位姿】，重定位本就要大幅挪位姿，
+  //    delta 大恰恰说明恢复在起作用；拿它当误差门会把成功的恢复否决（漂移越大越否决，逻辑反）。
+  //    正确做法：校验 refined 位姿与（干净参考）local map 的重合度是否达标。
+  LOG(INFO) << "Recovery optimization successful, validating refined pose legitimacy...";
+
+  const double recovery_confidence =
+      CalculateMapOverlapConfidence(point_cloud, *recovery_pose_refined, *local_submap);
+  LOG(INFO) << "Recovery refined pose overlap confidence: " << recovery_confidence
+            << " (min_score=" << min_score << ")";
+
+  // 7. 合法性不足（refined 位姿与地图重合度过低）→ 恢复失败
+  if (recovery_confidence < min_score) {
+    LOG(ERROR) << "Recovery pose legitimacy check failed: overlap confidence "
+               << recovery_confidence << " < " << min_score;
     return nullptr;
   }
   
@@ -431,7 +430,118 @@ std::unique_ptr<transform::Rigid2d> ConsistencyChecker::RecoverFromLocalMap(
 void ConsistencyChecker::Reset() {
   pose_history_.clear();
   current_confidence_ = 0.0;
+  consecutive_drift_frames_ = 0;
   LOG(INFO) << "ConsistencyChecker reset";
+}
+
+std::string DriftCheckResult::ToString() const {
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(4);
+  oss << "DriftCheck "
+      << (drift_suspected ? "DRIFT" : (judged ? "OK" : "SKIP"))
+      << " | static_overlap=" << static_overlap
+      << " live_overlap=" << live_overlap
+      << " rematch_score=" << static_rematch_score
+      << " delta_t=" << pose_delta_trans << "m"
+      << " delta_r=" << (pose_delta_rot * 180.0 / M_PI) << "deg"
+      << " streak=" << consecutive_frames;
+  if (!reason.empty()) {
+    oss << " | " << reason;
+  }
+  return oss.str();
+}
+
+DriftCheckResult ConsistencyChecker::CheckMapDrift(
+    const transform::Rigid2d& estimated_pose,
+    const sensor::PointCloud& point_cloud,
+    const mapping::Submap2D& static_submap,
+    const mapping::Submap2D& live_local_submap) {
+  DriftCheckResult result;
+  const auto& opt = options_.consistency_checker_options();
+
+  // 未启用 → 直接放行（drift_suspected=false）
+  if (!opt.enable_drift_gate()) {
+    consecutive_drift_frames_ = 0;
+    return result;
+  }
+
+  // static map 必须有可用 grid（这是漂移免疫的底图）
+  if (static_submap.grid() == nullptr || point_cloud.empty()) {
+    return result;
+  }
+
+  // ① 重合度指纹：估计位姿在 static / live 两张图上的重合度。
+  //    自洽漂移的特征 = live 高（地图跟着漂、自我确认）但 static 低（static 不漂、对不齐）。
+  result.static_overlap =
+      CalculateMapOverlapConfidence(point_cloud, estimated_pose, static_submap);
+  result.live_overlap =
+      CalculateMapOverlapConfidence(point_cloud, estimated_pose, live_local_submap);
+
+  const double static_map_min_score = opt.static_map_min_score();
+  const double drift_score_gap = opt.drift_score_gap();
+
+  const bool fingerprint =
+      (result.static_overlap < static_map_min_score) &&
+      ((result.live_overlap - result.static_overlap) > drift_score_gap);
+
+  if (!fingerprint) {
+    // 估计位姿在 static map 上同样自洽 → 无漂移嫌疑，计数清零
+    consecutive_drift_frames_ = 0;
+    result.judged = true;
+    return result;
+  }
+
+  // ② 独立确认（仅指纹触发时才跑再匹配，开销低）：在 static map 上独立再定位
+  if (real_time_correlative_scan_matcher_ == nullptr) {
+    // 无匹配器，无法独立确认；保守不冻结（仅靠指纹在新区域易误判）
+    consecutive_drift_frames_ = 0;
+    result.reason = "fingerprint hit but no matcher to confirm";
+    return result;
+  }
+
+  transform::Rigid2d static_aligned = estimated_pose;
+  result.static_rematch_score = real_time_correlative_scan_matcher_->Match(
+      estimated_pose, point_cloud, *static_submap.grid(), &static_aligned);
+  result.rematched_pose = static_aligned;  // 供漂移确认后的重定位复用，省一次匹配
+
+  // static map 在此处覆盖不足（再匹配得分太低）→ 很可能是 static map 未覆盖的新区域/
+  // 改变区域，无法判定漂移，跳过（避免在合法的新区域建图时误冻结）
+  if (result.static_rematch_score < static_map_min_score) {
+    consecutive_drift_frames_ = 0;
+    result.reason = "static map cannot localize here (new/changed area), skip";
+    return result;  // judged 保持 false
+  }
+
+  result.judged = true;
+
+  // 独立再匹配位姿与估计位姿的 delta —— static map 认为"对的位姿"离估计有多远
+  result.pose_delta_trans =
+      (static_aligned.translation() - estimated_pose.translation()).norm();
+  double dtheta =
+      static_aligned.rotation().angle() - estimated_pose.rotation().angle();
+  while (dtheta > M_PI) dtheta -= 2.0 * M_PI;
+  while (dtheta < -M_PI) dtheta += 2.0 * M_PI;
+  result.pose_delta_rot = std::abs(dtheta);
+
+  const bool delta_exceeds =
+      (result.pose_delta_trans > opt.drift_trans_threshold()) ||
+      (result.pose_delta_rot > opt.drift_rot_threshold());
+
+  if (delta_exceeds) {
+    consecutive_drift_frames_++;
+  } else {
+    consecutive_drift_frames_ = 0;
+  }
+  result.consecutive_frames = consecutive_drift_frames_;
+
+  // ③ 去抖：连续 drift_persist_frames 帧确认才判漂移（抗单帧遮挡/对称环境噪声）
+  if (consecutive_drift_frames_ >= opt.drift_persist_frames()) {
+    result.drift_suspected = true;
+    result.reason = "self-consistent drift confirmed by static-map re-localization";
+    LOG(WARNING) << "[DriftGate] " << result.ToString();
+  }
+
+  return result;
 }
 
 }  // namespace localization
