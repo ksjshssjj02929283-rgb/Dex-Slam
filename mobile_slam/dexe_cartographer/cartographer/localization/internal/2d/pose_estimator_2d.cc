@@ -696,6 +696,60 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     }
   }
 
+  // ========== P0 漂移门控 + 重定位：拦截自洽漂移，先恢复正确位姿，再决定是否更新地图 ==========
+  // 现有 CheckPoseConsistency 三路信号都参照 odom 预测 + live local map（被同一漂移污染），
+  // 对缓慢自洽漂移失明。这里用从不更新的 global_static_submap_ 做独立锚点检测漂移；一旦确认：
+  //   ① 先在 static map 上重定位并做一致性校验，恢复【正确】位姿；
+  //   ② 重定位成功 → 用校正后的正确位姿，并恢复地图更新（在正确位姿插入）；
+  //   ③ 重定位失败/未通过校验 → 冻结地图，绝不在错误/不确定位姿更新。
+  // 必须放在 pose_estimate / local_pose_ 计算之前，让校正后的位姿流入 TF 输出与后续插入。
+  bool safe_to_update_map = true;
+  {
+    auto static_submap = local_map_updater_->GetStaticSubmap();
+    auto live_local = local_map_updater_->local_submap();
+    if (static_submap && static_submap->grid() && live_local) {
+      DriftCheckResult drift_result = consistency_checker_->CheckMapDrift(
+          *pose_estimate_2d,
+          filtered_gravity_aligned_point_cloud,
+          *static_submap,
+          *live_local);
+      if (drift_result.drift_suspected) {
+        LOG(WARNING) << "Localization drift confirmed — relocalizing against static map "
+                        "before any map update. " << drift_result.ToString();
+
+        // 以 static map 再匹配位姿为初值，从【漂移免疫的 static 底图】重建干净 local map
+        // （含 grid + cloud → ikdtree）。绝不能用 RebuildLocalSubmapAt（裁自已漂的
+        // global_dynamic_submap_）——在漂图上 ceres 会把校正位姿拉回漂移方向（DEC-002 教训）。
+        // 干净 static 上精修 + 校验 refined 自身重合度（见 RecoverFromLocalMap）。
+        local_map_updater_->RebuildLocalSubmapFromStaticAt(drift_result.rematched_pose);
+        auto reloc_submap = local_map_updater_->local_submap();
+        std::unique_ptr<transform::Rigid2d> corrected;
+        if (reloc_submap) {
+          corrected = consistency_checker_->RecoverFromLocalMap(
+              time,
+              drift_result.rematched_pose,
+              filtered_gravity_aligned_point_cloud,
+              merged_data.merged_highlight_cloud,
+              reloc_submap);
+        }
+
+        if (corrected) {
+          // 重定位成功且通过一致性校验 → 用校正后的正确位姿，清空 active_submaps 重启匹配，
+          // 位姿已确认正确 → 允许在正确位姿更新地图。
+          pose_estimate_2d = std::move(corrected);
+          active_submaps_.clear();
+          safe_to_update_map = true;
+          LOG(WARNING) << "Static-map relocalization succeeded — resuming map update at corrected pose "
+                       << *pose_estimate_2d;
+        } else {
+          // 重定位失败/未通过校验 → 冻结地图，绝不在错误/不确定位姿更新（定位仍输出当前估计）。
+          safe_to_update_map = false;
+          LOG(ERROR) << "Static-map relocalization failed — freezing map update this frame.";
+        }
+      }
+    }
+  }
+
   const transform::Rigid3d pose_estimate =
       transform::Embed3D(*pose_estimate_2d) * gravity_alignment;
   local_pose_ = pose_estimate;
@@ -718,12 +772,15 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     }
   }
 
-  // 使用merged_data中的数据进行插入
-  std::unique_ptr<InsertionResult> insertion_result = InsertIntoSubmap(
-      time,
-      merged_data,
-      tracked_lane_data,
-      pose_estimate,gravity_alignment.rotation());
+  // 使用merged_data中的数据进行插入（漂移嫌疑时冻结地图，不在错误位姿烤入数据）
+  std::unique_ptr<InsertionResult> insertion_result;
+  if (safe_to_update_map) {
+    insertion_result = InsertIntoSubmap(
+        time,
+        merged_data,
+        tracked_lane_data,
+        pose_estimate,gravity_alignment.rotation());
+  }
 
   // 计算local slam的频率
   const auto wall_time = std::chrono::steady_clock::now();

@@ -369,6 +369,13 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetGlobalSubmap() const
   return global_dynamic_submap_;
 }
 
+std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::GetStaticSubmap() const
+{
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  // 漂移免疫底图：SetGlobalSubmap 后从不再插入数据，供漂移门控做独立锚点
+  return global_static_submap_;
+}
+
 void LocalMapUpdater2D::ApplyOriginTransform(const transform::Rigid3d& T)
 {
   std::lock_guard<std::mutex> lock(data_mutex_);
@@ -413,6 +420,37 @@ void LocalMapUpdater2D::RebuildLocalSubmapAt(const transform::Rigid2d& pose)
     return;
   }
   LOG(INFO) << "RebuildLocalSubmapAt done in " << t.toc() << " ms at ("
+            << pose.translation().x() << ", " << pose.translation().y() << ")";
+
+  // 就地替换内部 local_submap_ 和 local_map_origin_
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    local_submap_ = std::move(new_submap);
+    local_map_origin_ = std::make_shared<transform::Rigid2d>(pose);
+  }
+}
+
+void LocalMapUpdater2D::RebuildLocalSubmapFromStaticAt(const transform::Rigid2d& pose)
+{
+  std::shared_ptr<mapping::Submap2D> source_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    if (!global_static_submap_) {
+      LOG(ERROR) << "RebuildLocalSubmapFromStaticAt: global_static_submap_ is not initialized.";
+      return;
+    }
+    // 从【漂移免疫】的静态底图裁剪，而非会随定位漂移污染的 global_dynamic_submap_。
+    source_snapshot = global_static_submap_;
+  }
+
+  // 纯计算，无需持锁
+  common::TicToc t;
+  auto new_submap = BuildLocalSubmap(source_snapshot, pose);
+  if (!new_submap) {
+    LOG(ERROR) << "RebuildLocalSubmapFromStaticAt: BuildLocalSubmap returned nullptr.";
+    return;
+  }
+  LOG(INFO) << "RebuildLocalSubmapFromStaticAt done in " << t.toc() << " ms at ("
             << pose.translation().x() << ", " << pose.translation().y() << ")";
 
   // 就地替换内部 local_submap_ 和 local_map_origin_
