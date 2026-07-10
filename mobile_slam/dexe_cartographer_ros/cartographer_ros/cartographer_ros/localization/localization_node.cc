@@ -163,6 +163,8 @@ LocalizationNode::LocalizationNode(
       kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
   localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
       kLocalizationStateTopic, kLatestOnlyPublisherQueueSize);
+  set_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      "/robot_localization/set_pose", rclcpp::QoS(1));
 
   // 服务  
   submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
@@ -616,11 +618,11 @@ bool LocalizationNode::ResetMapOriginAndSave(
 bool LocalizationNode::TriggerGlobalRelocalization()
 {
   absl::MutexLock lock(&localization_updater_mutex_);
-  const auto identity = cartographer::transform::Rigid3d::Identity();
   RCLCPP_INFO(node_->get_logger(),
-              "TriggerGlobalRelocalization: setting initial pose to map origin (identity)");
+              "TriggerGlobalRelocalization: starting global (BBS) relocalization");
   need_set_pose_in_filter_ = true;
-  return localization_updater_bridge_.SetInitialPose(identity);
+  localization_updater_bridge_.TriggerGlobalRelocalization();
+  return true;
 }
 
 
@@ -1090,42 +1092,21 @@ void LocalizationNode::HandleSetMapChanged(
 bool LocalizationNode::SetInitialPoseInFilter(
     const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg)
 {
-  RCLCPP_INFO(node_->get_logger(), "Setting initial pose in filter");
-  // Create service client (should be created in constructor for better practice)
-  auto set_pose_client = node_->create_client<nav_interfaces::srv::SetPose>("/robot_localization/set_pose");
-  if (!set_pose_client) {
-    RCLCPP_ERROR(node_->get_logger(), "SetPose client not initialized");
-    return false;
-  }
-  // Wait for service to be available
-  if (!set_pose_client->wait_for_service(std::chrono::seconds(3))) {
-    RCLCPP_ERROR(node_->get_logger(), "Timed out waiting for SetPose service");
-    need_set_pose_in_filter_ = false;
-    return false;
+  // 走话题而非服务：ros_filter 的 set_pose 服务类型是 robot_localization/srv/SetPose，
+  // 与本包的 nav_interfaces/srv/SetPose 类型不匹配，DDS 端点永远无法匹配（wait_for_service 必超时）。
+  // 同名话题订阅与服务共用 setPoseCallback，效果等价且无阻塞。
+  if (set_pose_publisher_->get_subscription_count() == 0) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                         "No subscriber on %s yet, will retry",
+                         set_pose_publisher_->get_topic_name());
+    return false;  // 保留 need_set_pose_in_filter_，下个发布周期重试
   }
 
-  auto pose_cmd = std::make_shared<nav_interfaces::srv::SetPose::Request>();
-  pose_cmd->pose = pose_cov_msg;
-
-  // Call service asynchronously with timeout
-  auto future = set_pose_client->async_send_request(pose_cmd);
-  
-  // Wait for response with timeout
-  auto status = future.wait_for(std::chrono::seconds(5));
-  if (status != std::future_status::ready) {
-    RCLCPP_ERROR(node_->get_logger(), "Failed to call service set_pose - timeout");
-    return false;
-  }
-
-  auto result = future.get();
-  if (!result) {
-    RCLCPP_ERROR(node_->get_logger(), "Failed to call service set_pose - no response");
-    return false;
-  }
-
+  set_pose_publisher_->publish(pose_cov_msg);
   need_set_pose_in_filter_ = false;
-  RCLCPP_WARN(node_->get_logger(), "SetPose service called successfully");
-  return result->success;
+  RCLCPP_INFO(node_->get_logger(), "Initial pose published to %s",
+              set_pose_publisher_->get_topic_name());
+  return true;
 }
 
 bool LocalizationNode::StopFilter()
