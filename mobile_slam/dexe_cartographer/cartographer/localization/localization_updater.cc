@@ -348,9 +348,30 @@ void LocalizationUpdater::ApplyOriginTransform(const transform::Rigid3d& T) {
   }
 }
 
+void LocalizationUpdater::EnsureGlobalSubmapPyramid(
+    const std::shared_ptr<mapping::Submap2D>& submap) {
+  if (!submap || !submap->grid()) return;
+  for (const auto& opt : all_trajectory_builder_options_) {
+    const auto& tbo = opt.trajectory_builder_options();
+    if (!tbo.has_pose_estimator_2d_options()) continue;
+    const auto& pe = tbo.pose_estimator_2d_options();
+    if (!pe.has_pose_initializer_options()) continue;
+    const auto& fcsm = pe.pose_initializer_options()
+                           .fast_correlative_scan_matcher_options();
+    if (fcsm.branch_and_bound_depth() < 1) continue;
+    submap->GetOrBuildPrecomputationGridStack(fcsm);  // no-op if cache hit
+    LOG(INFO) << "save: localization map cache ready (depth="
+              << fcsm.branch_and_bound_depth() << ")";
+    return;
+  }
+  LOG(WARNING)
+      << "save: localization params missing, map cache will be absent";
+}
+
 void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
                                 io::ProtoStreamWriterInterface* const writer) {
   // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存
+  EnsureGlobalSubmapPyramid(global_static_submap_);  // 补全局定位地图缓存
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
                     include_unfinished_submaps, global_static_submap_);
   
@@ -435,6 +456,8 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
     }
   }
   
+  // 对实际要保存的 submap（可能是 dynamic submap）补全局定位地图缓存
+  EnsureGlobalSubmapPyramid(submap_to_save);
   // 保存时传递选定的 submap
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
                     include_unfinished_submaps, submap_to_save);

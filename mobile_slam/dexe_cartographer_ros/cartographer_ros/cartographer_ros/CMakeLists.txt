@@ -177,3 +177,31 @@ install(TARGETS merge_maps_tool
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+google_binary(bbs_benchmark_tool
+  SRCS
+    tools/bbs_benchmark_main.cc
+    tools/bbs_benchmark/benchmark_common.h
+    tools/bbs_benchmark/benchmark_common.cc
+    tools/bbs_benchmark/instrumented_fast_correlative_scan_matcher_2d.h
+    tools/bbs_benchmark/instrumented_fast_correlative_scan_matcher_2d.cc
+)
+
+install(TARGETS bbs_benchmark_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+google_binary(pose_initializer_benchmark_tool
+  SRCS
+    tools/pose_initializer_benchmark_main.cc
+    tools/bbs_benchmark/benchmark_common.h
+    tools/bbs_benchmark/benchmark_common.cc
+)
+
+install(TARGETS pose_initializer_benchmark_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)

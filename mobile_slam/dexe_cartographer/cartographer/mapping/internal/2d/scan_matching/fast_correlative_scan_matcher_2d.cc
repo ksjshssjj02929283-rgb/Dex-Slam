@@ -168,6 +168,30 @@ uint8 PrecomputationGrid2D::ComputeCellValue(const float probability) const {
   return cell_value;
 }
 
+// A4：从 proto 直接填 const 成员（不计算滑窗 max），用于 pbstream 加载。
+PrecomputationGrid2D::PrecomputationGrid2D(
+    const proto::PrecomputationGrid2DProto& proto)
+    : offset_(proto.offset_x(), proto.offset_y()),
+      wide_limits_(proto.wide_num_x(), proto.wide_num_y()),
+      min_score_(proto.min_score()),
+      max_score_(proto.max_score()),
+      cells_(proto.cells().begin(), proto.cells().end()) {
+  CHECK_EQ(cells_.size(), static_cast<size_t>(wide_limits_.num_x_cells) *
+                              wide_limits_.num_y_cells);
+}
+
+proto::PrecomputationGrid2DProto PrecomputationGrid2D::ToProto() const {
+  proto::PrecomputationGrid2DProto proto;
+  proto.set_offset_x(offset_.x());
+  proto.set_offset_y(offset_.y());
+  proto.set_wide_num_x(wide_limits_.num_x_cells);
+  proto.set_wide_num_y(wide_limits_.num_y_cells);
+  proto.set_min_score(min_score_);
+  proto.set_max_score(max_score_);
+  proto.set_cells(std::string(cells_.begin(), cells_.end()));
+  return proto;
+}
+
 PrecomputationGridStack2D::PrecomputationGridStack2D(
     const Grid2D& grid,
     const proto::FastCorrelativeScanMatcherOptions2D& options) {
@@ -183,6 +207,23 @@ PrecomputationGridStack2D::PrecomputationGridStack2D(
     precomputation_grids_.emplace_back(grid, limits, width,
                                        &reusable_intermediate_grid);
   }
+}
+
+PrecomputationGridStack2D::PrecomputationGridStack2D(
+    const proto::PrecomputationGridStack2DProto& proto) {
+  precomputation_grids_.reserve(proto.grids_size());
+  for (const auto& grid_proto : proto.grids()) {
+    precomputation_grids_.emplace_back(grid_proto);
+  }
+}
+
+proto::PrecomputationGridStack2DProto PrecomputationGridStack2D::ToProto()
+    const {
+  proto::PrecomputationGridStack2DProto proto;
+  for (const auto& grid : precomputation_grids_) {
+    *proto.add_grids() = grid.ToProto();
+  }
+  return proto;
 }
 
 FastCorrelativeScanMatcher2D::FastCorrelativeScanMatcher2D(

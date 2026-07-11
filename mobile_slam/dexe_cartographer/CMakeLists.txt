@@ -243,6 +243,33 @@ target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   "${EIGEN3_INCLUDE_DIR}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${EIGEN3_LIBRARIES})
 
+# 全局定位加速：batch matcher 的批内并行打分依赖 OpenMP
+find_package(OpenMP REQUIRED)
+target_link_libraries(${PROJECT_NAME} PUBLIC OpenMP::OpenMP_CXX)
+
+# 全局定位加速 V2：GPU（CUDA）攒批打分。默认在检测到 CUDA Toolkit 时开启；
+# 无 CUDA 环境用 -DBUILD_GPU_MATCHER=OFF 关闭（benchmark 工具的 v2 选项随之不可用）。
+if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "/usr/local/cuda/bin/nvcc")
+  set(CMAKE_CUDA_COMPILER "/usr/local/cuda/bin/nvcc")
+endif()
+find_package(CUDAToolkit QUIET)
+option(BUILD_GPU_MATCHER "Build CUDA-accelerated global matcher (V2)" ${CUDAToolkit_FOUND})
+if(BUILD_GPU_MATCHER)
+  enable_language(CUDA)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+    # 86=RTX30 系（x86 开发机）；Jetson 上按板卡覆盖（Xavier=72 / Orin=87）
+    set(CMAKE_CUDA_ARCHITECTURES 86)
+  endif()
+  # functions.cmake 给 target 设的 GCC 专属 flags（-Werror=format-security 等）
+  # 会一并传给 .cu；让 nvcc 把不认识的 flag 转发给 host 编译器。
+  set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --forward-unknown-to-host-compiler")
+  target_sources(${PROJECT_NAME} PRIVATE
+    cartographer/mapping/internal/2d/scan_matching/gpu_batch_fast_correlative_scan_matcher_2d.cu)
+  target_link_libraries(${PROJECT_NAME} PUBLIC ${CUDAToolkit_LIBRARY_DIR}/libcudart.so)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC BUILD_GPU_MATCHER)
+  message(STATUS "BUILD_GPU_MATCHER=ON (CUDA ${CUDAToolkit_VERSION}, arch ${CMAKE_CUDA_ARCHITECTURES})")
+endif()
+
 target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
   "${CERES_INCLUDE_DIRS}")
 target_link_libraries(${PROJECT_NAME} PUBLIC ${CERES_LIBRARIES})
@@ -328,8 +355,12 @@ if(${BUILD_PROMETHEUS})
 endif()
 
 set(TARGET_COMPILE_FLAGS "${TARGET_COMPILE_FLAGS} ${GOOG_CXX_FLAGS}")
-set_target_properties(${PROJECT_NAME} PROPERTIES
-  COMPILE_FLAGS ${TARGET_COMPILE_FLAGS})
+# GCC 专属 flags（-Werror=format-security 等）按语言限定到 C++：
+# 字符串属性 COMPILE_FLAGS 会无差别传给 .cu 导致 nvcc fatal。
+separate_arguments(TARGET_COMPILE_FLAGS_LIST UNIX_COMMAND "${TARGET_COMPILE_FLAGS}")
+target_compile_options(${PROJECT_NAME} PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:${TARGET_COMPILE_FLAGS_LIST}>
+  $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fPIC>)
 
 set(TEST_LIB
   cartographer_test_library

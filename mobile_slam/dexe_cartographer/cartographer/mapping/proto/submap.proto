@@ -18,6 +18,7 @@ package cartographer.mapping.proto;
 
 import "cartographer/mapping/proto/grid_2d.proto";
 import "cartographer/mapping/proto/hybrid_grid.proto";
+import "cartographer/mapping/proto/scan_matching/precomputation_grid.proto";
 import "cartographer/transform/proto/transform.proto";
 
 // Task 2: 添加线段地图数据结构支持
@@ -78,6 +79,9 @@ message Submap2D {
   // 添加点云数据到 Submap2D
   PointCloudData cloud = 6;
   PointCloudData highlight_cloud = 7;
+  // 全局定位金字塔固化（A4，DEC-007）。可选——旧 pbstream 无此字段时加载后
+  // 现场重建（向后兼容）。
+  scan_matching.proto.PrecomputationGridStack2DProto precomputation_grid_stack = 8;
 }
 
 // Serialized state of a Submap3D.

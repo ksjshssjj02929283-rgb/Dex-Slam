@@ -29,6 +29,10 @@
 #include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/batch_fast_correlative_scan_matcher_2d.h"
+#ifdef BUILD_GPU_MATCHER
+#include "cartographer/mapping/internal/2d/scan_matching/gpu_batch_fast_correlative_scan_matcher_2d.h"
+#endif
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/internal/range_data_collator.h"
 #include "cartographer/metrics/family_factory.h"
@@ -69,6 +73,22 @@ enum class PoseInitializerStatus {
   Success = 3
 };
 
+// Info about the most recent global relocalization run: per-stage timing
+// (milliseconds) plus the result. Stages: BBS full-submap match -> real-time
+// correlative refine -> line tracking -> ceres refine -> validation.
+// Always recorded internally; read back via GetLastGlobalRelocInfo().
+struct GlobalRelocInfo {
+  double t_bbs_ms = 0.0;
+  double t_rtcsm_ms = 0.0;
+  double t_line_ms = 0.0;
+  double t_ceres_ms = 0.0;
+  double t_validate_ms = 0.0;
+  double t_total_ms = 0.0;
+  bool matched = false;
+  float bbs_score = 0.0f;
+  transform::Rigid2d pose_estimate = transform::Rigid2d::Identity();
+};
+
 // Wires up the local SLAM stack (i.e. pose extrapolator, scan matching, etc.)
 // without loop closure.
 // TODO(gaschler): Add test for this class similar to the 3D test.
@@ -101,16 +121,33 @@ class PoseInitializer {
   void start();
   void stop();
 
+  // Runs one global relocalization synchronously on the calling thread (no
+  // worker thread). The caller prepares state first via Initialize /
+  // InitGlobalSubmap / UpdateSensorData / TriggerGlobalRelocalization. The async
+  // worker (Run) and offline benchmark drivers call this same method, so the two
+  // paths stay unified. This run's per-stage timing + result are recorded
+  // internally; read them with GetLastGlobalRelocInfo(), and check
+  // GetInitializerStatus() == Success for the outcome.
+  void GlobalRelocalzationOnce();
+
+  // Timing + result of the most recent GlobalRelocalzationOnce() call.
+  const GlobalRelocInfo& GetLastGlobalRelocInfo() const {
+    return last_global_reloc_info_;
+  }
+
  private:
   void Run();
   void RelocalzationOnce();
-  void GlobalRelocalzationOnce();
   void CreateRelocalzationThread();
 
   bool IsRelocalizationSuccess();  bool IsPoseValid(const transform::Rigid2d& pose,
                    const transform::Rigid2d& target,
                    const double dist_th = 0.5,
                    const double yaw_th = 0.765 /*45 degrees*/);
+
+  bool MatchFullSubmapDispatch(const mapping::Grid2D& grid,
+                               const sensor::PointCloud& cloud, float min_score,
+                               float* score, transform::Rigid2d* pose);
 
 private:
   const proto::PoseInitializerOptions2D options_;
@@ -122,6 +159,9 @@ private:
   bool need_apply_initial_pose_ = false;
   bool need_global_relocalization_ = false;  // 标识需要进行全局重定位
 
+  // 最近一次 GlobalRelocalzationOnce 的耗时与结果；经 getter 读取。
+  GlobalRelocInfo last_global_reloc_info_;
+
   bool working_ = false;
 
   std::unique_ptr<std::thread> relocalization_thread_;
@@ -132,6 +172,14 @@ private:
 
   std::unique_ptr<mapping::scan_matching::FastCorrelativeScanMatcher2D>
   fast_correlative_scan_matcher_;
+
+  // 加速版全局匹配器（仅用于 MatchFullSubmap；局部 Match 与验证仍用原版）。
+  std::unique_ptr<mapping::scan_matching::BatchFastCorrelativeScanMatcher2D>
+  batch_global_matcher_;
+#ifdef BUILD_GPU_MATCHER
+  std::unique_ptr<mapping::scan_matching::GpuBatchFastCorrelativeScanMatcher2D>
+  gpu_global_matcher_;
+#endif
 
   std::unique_ptr<mapping::scan_matching::RealTimeCorrelativeScanMatcher2D>
   real_time_correlative_scan_matcher_;

@@ -15,6 +15,10 @@
 POSE_INITIALIZER_2D = {
   use_global_matching = false,
   global_localization_min_score = 0.3,
+
+  global_matcher_type = "gpu",  -- "gpu" or "cpu"
+  global_matcher_num_threads = 4,
+
   fast_correlative_scan_matcher = {
     linear_search_window = 5.,
     angular_search_window = math.rad(180.),

@@ -20,6 +20,14 @@ import "cartographer/mapping/proto/scan_matching/ceres_scan_matcher_options_2d.p
 import "cartographer/mapping/proto/scan_matching/real_time_correlative_scan_matcher_options.proto";
 import "cartographer/mapping/proto/scan_matching/fast_correlative_scan_matcher_options_2d.proto";
 import "cartographer/mapping/proto/scan_matching/line_matcher_options.proto";
+
+// 全局初始定位（MatchFullSubmap）的匹配器版本——加速方案接入开关。
+enum GlobalMatcherType {
+  GLOBAL_MATCHER_ORIGINAL = 0;     // 原版 cartographer BBS（DFS），安全回退
+  GLOBAL_MATCHER_CPU_ANGULAR = 1;  // V1.1：best-first + OpenMP + 角度金字塔
+  GLOBAL_MATCHER_GPU_ANGULAR = 2;  // V2.1：best-first + CUDA + 角度金字塔（默认）
+}
+
 message PoseInitializerOptions2D {
   bool use_global_matching = 1;
   float global_localization_min_score = 2;
@@ -34,4 +42,8 @@ message PoseInitializerOptions2D {
       ceres_scan_matcher_options = 6;
 
   cartographer.mapping.scan_matching.proto.LineMatcherOptions line_matcher_options = 7;
+
+  GlobalMatcherType global_matcher_type = 8;
+
+  int32 global_matcher_num_threads = 9;  // CPU 版并行打分线程数（默认 4）
 }
