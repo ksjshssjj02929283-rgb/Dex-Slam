@@ -22,7 +22,9 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(nav_interfaces REQUIRED)
 
 # OMP
+find_package(CUDA REQUIRED)
 find_package(OpenMP)
+include_directories(${CUDA_INCLUDE_DIRS})
 if (OPENMP_FOUND)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")

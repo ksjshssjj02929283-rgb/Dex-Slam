@@ -184,7 +184,7 @@ target_link_libraries(lightning.core.localization
     lightning.wrapper
     ${third_party_libs}
     ${PCL_LIBRARIES}
-    cpu_bbs3d
+    gpu_bbs3d
 )
 
 ament_target_dependencies(lightning.core.localization

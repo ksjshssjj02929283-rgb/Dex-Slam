@@ -15,10 +15,9 @@ bool BBSRelocalizer::Init(const Options& options) {
         return false;
     }
 
-    bbs_ = std::make_unique<cpu::BBS3D>();
-    bbs_->set_num_threads(options_.num_threads_);
-    bbs_->set_score_threshold_percentage(options_.score_threshold_percentage_);
-    bbs_->set_voxel_expantion_rate(2.0);
+    bbs_ = std::make_unique<gpu::BBS3D>();
+    bbs_->set_score_threshold_percentage(static_cast<float>(options_.score_threshold_percentage_));
+    bbs_->set_voxel_expantion_rate(2.0f);
 
     if (options_.timeout_msec_ > 0) {
         bbs_->enable_timeout();
@@ -28,14 +27,14 @@ bool BBSRelocalizer::Init(const Options& options) {
     }
 
     // 角度搜索范围（roll/pitch 小范围，yaw 全范围）
-    Eigen::Vector3d min_rpy(options_.min_roll_, options_.min_pitch_, options_.min_yaw_);
-    Eigen::Vector3d max_rpy(options_.max_roll_, options_.max_pitch_, options_.max_yaw_);
-    if (max_rpy.z() >= 6.28) {
-        max_rpy.z() = 2.0 * M_PI;
+    Eigen::Vector3f min_rpy(options_.min_roll_, options_.min_pitch_, options_.min_yaw_);
+    Eigen::Vector3f max_rpy(options_.max_roll_, options_.max_pitch_, options_.max_yaw_);
+    if (max_rpy.z() >= 6.28f) {
+        max_rpy.z() = 2.0f * M_PI;
     }
     bbs_->set_angular_search_range(min_rpy, max_rpy);
 
-    // 优先加载预构建体素图（快，~130ms），否则从 global.pcd 运行时构建（~3.5s）
+    // 优先加载预构建体素图（快），否则从 global.pcd 运行时构建
     if (!options_.voxelmaps_path_.empty() && bbs_->set_voxelmaps_coords(options_.voxelmaps_path_)) {
         LOG(INFO) << "[BBS] Loaded prebuilt voxelmaps from " << options_.voxelmaps_path_;
         ready_ = true;
@@ -54,23 +53,21 @@ bool BBSRelocalizer::Init(const Options& options) {
         return false;
     }
 
-    std::vector<Eigen::Vector3d> tar_points;
+    std::vector<Eigen::Vector3f> tar_points;
     tar_points.reserve(map_cloud->size());
     for (const auto& pt : map_cloud->points) {
         if (std::isfinite(pt.x) && std::isfinite(pt.y) && std::isfinite(pt.z)) {
-            tar_points.emplace_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
+            tar_points.emplace_back(Eigen::Vector3f(pt.x, pt.y, pt.z));
         }
     }
-    LOG(INFO) << "[BBS] Building hierarchical voxel map from " << tar_points.size() << " points...";
+    LOG(INFO) << "[BBS] Building hierarchical voxel map from " << tar_points.size() << " points (GPU)...";
 
-    bbs_->set_tar_points(tar_points, options_.min_level_res_, options_.max_level_);
-    // 设置平移搜索范围为地图点云的包围盒
+    bbs_->set_tar_points(tar_points, static_cast<float>(options_.min_level_res_), options_.max_level_);
     bbs_->set_trans_search_range(tar_points);
 
     // 保存体素图，下次启动可直接加载
     if (!options_.voxelmaps_path_.empty()) {
         std::string dir = options_.voxelmaps_path_;
-        // 确保目录存在
         std::string mkdir_cmd = "mkdir -p " + dir;
         int rc = system(mkdir_cmd.c_str());
         (void)rc;
@@ -80,7 +77,7 @@ bool BBSRelocalizer::Init(const Options& options) {
     }
 
     ready_ = true;
-    LOG(INFO) << "[BBS] Voxel map ready";
+    LOG(INFO) << "[BBS] Voxel map ready (GPU)";
     return true;
 }
 
@@ -112,10 +109,10 @@ std::optional<SE3> BBSRelocalizer::Relocalize(CloudPtr scan) {
         return std::nullopt;
     }
 
-    std::vector<Eigen::Vector3d> src_points;
+    std::vector<Eigen::Vector3f> src_points;
     src_points.reserve(src_cloud->size());
     for (const auto& pt : src_cloud->points) {
-        src_points.emplace_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
+        src_points.emplace_back(Eigen::Vector3f(pt.x, pt.y, pt.z));
     }
 
     bbs_->set_src_points(src_points);
@@ -134,9 +131,10 @@ std::optional<SE3> BBSRelocalizer::Relocalize(CloudPtr scan) {
         return std::nullopt;
     }
 
-    Eigen::Matrix4d pose_mat = bbs_->get_global_pose();
-    Eigen::Matrix3d R = pose_mat.block<3, 3>(0, 0);
-    Eigen::Vector3d t = pose_mat.block<3, 1>(0, 3);
+    // GPU版返回 Matrix4f，转成 double
+    Eigen::Matrix4f pose_mat = bbs_->get_global_pose();
+    Eigen::Matrix3d R = pose_mat.block<3, 3>(0, 0).cast<double>();
+    Eigen::Vector3d t = pose_mat.block<3, 1>(0, 3).cast<double>();
     Quatd q(R);
     q.normalize();
 
