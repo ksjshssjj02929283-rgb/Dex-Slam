@@ -140,7 +140,7 @@ lidar_loc:
   use_rough_ndt_for_init: false      # 初始化角度搜索是否用粗分辨率NDT（小场景false，大场景true）
   lidar_loc_odom_th: 0.3
   init_with_fp: true
-  min_init_confidence: 2.5
+  min_init_confidence: 1.0
   update_dynamic_cloud: true
   update_err_h: 0.2
   update_err_v: 0.2
@@ -193,7 +193,7 @@ bbs:
   enable_recover: false          # 运行过程中不自动触发 BBS 重定位
   global_pcd_path: ""            # global.pcd 路径（空=自动用地图文件夹/global.pcd）
   voxelmaps_path: ""             # 预构建体素图路径（空=自动用地图文件夹/bbs3d_voxelmaps）
-  min_level_res: 0.5              # 最细层分辨率 [m]，分辨率更细但计算更重
+  min_level_res: 1.0              # 最细层分辨率 [m]，分辨率更细但计算更重
   max_level: 6                    # 层级数
   min_roll: -0.02                 # roll 搜索范围 [rad]（IMU 已估，小范围补偿）
   max_roll: 0.02
@@ -201,7 +201,7 @@ bbs:
   max_pitch: 0.02
   min_yaw: 0.0                    # yaw 搜索范围 [rad]（完全未知，搜满 2pi）
   max_yaw: 6.28
-  score_threshold_percentage: 0.9 # 命中点占比阈值，超过才算定位成功
+  score_threshold_percentage: 0.1 # 命中点占比阈值，超过才算定位成功
   src_leaf_size: 2.0              # 源点云降采样 [m]（0=不降采样）
-  timeout_msec: 5000             # 超时保护 [msec]，0=不超时
+  timeout_msec: 60000             # 超时保护 [msec]，0=不超时
   num_threads: 8                  # OpenMP 线程数

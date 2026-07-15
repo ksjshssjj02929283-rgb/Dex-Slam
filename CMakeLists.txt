@@ -84,6 +84,7 @@ install(PROGRAMS
 )
 
 add_subdirectory(thirdparty/livox_ros_driver)
+add_subdirectory(thirdparty/3d_bbs)
 
 add_subdirectory(src)
 

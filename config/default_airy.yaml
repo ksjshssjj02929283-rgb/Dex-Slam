@@ -201,7 +201,7 @@ bbs:
   max_pitch: 0.02
   min_yaw: 0.0                    # yaw 搜索范围 [rad]（完全未知，搜满 2pi）
   max_yaw: 6.28
-  score_threshold_percentage: 0.9 # 命中点占比阈值，超过才算定位成功
+  score_threshold_percentage: 0.1 # 命中点占比阈值，超过才算定位成功
   src_leaf_size: 2.0              # 源点云降采样 [m]（0=不降采样）
-  timeout_msec: 5000             # 超时保护 [msec]，0=不超时
+  timeout_msec: 0             # 超时保护 [msec]，0=不超时
   num_threads: 8                  # OpenMP 线程数
