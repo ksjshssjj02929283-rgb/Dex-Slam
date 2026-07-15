@@ -114,6 +114,23 @@ void PangolinWindow::UpdateLoopDebug(CloudPtr submap, CloudPtr scan, CloudPtr al
     impl_->loop_debug_need_update_.store(true);
 }
 
+void PangolinWindow::UpdateBBSResult(CloudPtr src_cloud, const SE3& pose, double score_pct,
+                                     double elapsed_ms, const std::string& trigger_msg) {
+    std::lock_guard<std::mutex> lock(impl_->mtx_bbs_result_);
+
+    if (src_cloud && !src_cloud->empty()) {
+        impl_->bbs_src_cloud_ = std::make_shared<PointCloudType>(*src_cloud);
+    } else {
+        impl_->bbs_src_cloud_ = nullptr;
+    }
+
+    impl_->bbs_pose_ = pose;
+    impl_->bbs_score_pct_ = score_pct;
+    impl_->bbs_elapsed_ms_ = elapsed_ms;
+    impl_->bbs_trigger_msg_ = trigger_msg;
+    impl_->bbs_result_need_update_.store(true);
+}
+
 void PangolinWindow::UpdateLoopEdges(const std::vector<std::pair<int, int>>& loop_edges) {
     std::lock_guard<std::mutex> lock(impl_->mtx_loop_info_);
     impl_->loop_info_.clear();

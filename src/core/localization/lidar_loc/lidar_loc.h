@@ -14,6 +14,7 @@
 #include "core/maps/tiled_map/tiled_map.h"
 
 #include "pclomp/ndt_omp_impl.hpp"
+#include "core/localization/relocalizer/bbs_relocalizer.h"
 
 namespace lightning::ui {
 class PangolinWindow;
@@ -54,6 +55,11 @@ class LidarLoc {
         float ivox_adjust_res_ = 0.5f;                 // IVox 精化时的下采样分辨率（米）
         int ivox_adjust_max_iter_ = 4;                 // IVox 精化最大迭代次数
         float ivox_adjust_max_dis_ = 0.5f;             // IVox 精化结果与 NDT 结果的最大偏移（米），超过则丢弃
+
+        bool use_bbs_init_ = false;                   // 冷启动时是否用 3D-BBS 全局重定位
+        bool use_bbs_recover_ = false;               // 运行过程中不自动触发 BBS 重定位
+        std::string bbs_global_pcd_path_;            // global.pcd 路径
+        std::string bbs_voxelmaps_path_;             // 预构建体素图路径（空=运行时构建）
 
         /// 点云过滤
         float filter_z_min_ = -1.0;
@@ -112,6 +118,9 @@ class LidarLoc {
 
     /// @brief 定位是否已经成功初始化
     bool LocInited();
+
+    /// @brief BBS 冷启动成功前，是否只输出 BBS 相关日志
+    bool ShouldOnlyLogBBSBeforeInit() const;
 
     /// @brief 激光定位重置接口
     void ResetLastPose(const SE3& last_pose);
@@ -215,11 +224,15 @@ class LidarLoc {
     std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;           // ui
     std::shared_ptr<lightning::RVizPublisher> rviz_pub_ = nullptr; // rviz publisher
     SE3 last_loc_pose_;
+    std::shared_ptr<BBSRelocalizer> bbs_reloc_;  // 3D-BBS 全局重定位
+    double bbs_last_reloc_time_ = 0.0;          // 上次 BBS 重定位时间（冷却用）
 
     std::mutex initial_pose_mutex_;  // 初始定位锁
     bool initial_pose_set_ = false;  // 定位是否被手动设置
     SE3 initial_pose_;               // 手动设置的初始位姿
     bool loc_inited_ = false;        // 定位是否初始化成功
+    int initial_pose_try_count_ = 0; // 当前初始位姿已尝试次数
+    static constexpr int kMaxInitialPoseTryCount = 3;
 
     double current_timestamp_ = 0;  // 本次输入的时间戳
     double last_timestamp_ = 0;     // 上次输入的时间戳

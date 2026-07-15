@@ -185,8 +185,10 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
     }
 
     auto lo_state = lio_->GetState();
-    LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
-              << lo_state.GetPose().translation().transpose();
+    if (!ShouldOnlyLogBBSBeforeInit()) {
+        LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
+                  << lo_state.GetPose().translation().transpose();
+    }
     lidar_loc_->ProcessLO(lo_state);
     pgo_->ProcessLidarOdom(lo_state);
 
@@ -357,6 +359,14 @@ NavState Localization::GetState() {
         return lidar_loc_->GetState();
     }
     return NavState{};
+}
+
+bool Localization::ShouldOnlyLogBBSBeforeInit() const {
+    if (!lidar_loc_) {
+        return false;
+    }
+
+    return lidar_loc_->ShouldOnlyLogBBSBeforeInit();
 }
 
 }  // namespace lightning::loc

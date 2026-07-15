@@ -82,6 +82,12 @@ bool LidarLoc::Init(const std::string& config_path) {
     try { options_.ivox_adjust_max_dis_ = yaml.GetValue<float>("lidar_loc", "ivox_adjust_max_dis"); } catch (...) {}
     try { options_.use_rough_ndt_for_init_ = yaml.GetValue<bool>("lidar_loc", "use_rough_ndt_for_init"); } catch (...) {}
 
+    // BBS 重定位参数（用 try-catch 兼容旧配置）
+    try { options_.use_bbs_init_         = yaml.GetValue<bool>("bbs", "enable_init"); } catch (...) {}
+    try { options_.use_bbs_recover_      = yaml.GetValue<bool>("bbs", "enable_recover"); } catch (...) {}
+    try { options_.bbs_global_pcd_path_  = yaml.GetValue<std::string>("bbs", "global_pcd_path"); } catch (...) {}
+    try { options_.bbs_voxelmaps_path_   = yaml.GetValue<std::string>("bbs", "voxelmaps_path"); } catch (...) {}
+
     lidar_loc::grid_search_angle_step = yaml.GetValue<double>("lidar_loc", "grid_search_angle_step");
     lidar_loc::grid_search_angle_range = yaml.GetValue<double>("lidar_loc", "grid_search_angle_range");
 
@@ -135,6 +141,44 @@ bool LidarLoc::Init(const std::string& config_path) {
         fp_recover.name_ = "recover";
         fp_recover.pose_ = pose;
         map_->AddFP(fp_recover);
+    }
+
+    // 初始化 3D-BBS 全局重定位
+    if (options_.use_bbs_init_ || options_.use_bbs_recover_) {
+        BBSRelocalizer::Options bbs_opt;
+        bbs_opt.enable_ = true;
+        // global.pcd 默认在地图文件夹下
+        std::string gpath = options_.bbs_global_pcd_path_;
+        if (gpath.empty()) {
+            gpath = options_.map_option_.map_path_ + "/global.pcd";
+        }
+        bbs_opt.global_pcd_path_ = gpath;
+        // 预构建体素图默认在地图文件夹下的 bbs3d_voxelmaps/
+        std::string vpath = options_.bbs_voxelmaps_path_;
+        if (vpath.empty()) {
+            vpath = options_.map_option_.map_path_ + "/bbs3d_voxelmaps";
+        }
+        bbs_opt.voxelmaps_path_ = vpath;
+        try { bbs_opt.min_level_res_ = yaml.GetValue<double>("bbs", "min_level_res"); } catch (...) {}
+        try { bbs_opt.max_level_   = yaml.GetValue<int>("bbs", "max_level"); } catch (...) {}
+        try { bbs_opt.min_roll_    = yaml.GetValue<double>("bbs", "min_roll"); } catch (...) {}
+        try { bbs_opt.max_roll_    = yaml.GetValue<double>("bbs", "max_roll"); } catch (...) {}
+        try { bbs_opt.min_pitch_   = yaml.GetValue<double>("bbs", "min_pitch"); } catch (...) {}
+        try { bbs_opt.max_pitch_   = yaml.GetValue<double>("bbs", "max_pitch"); } catch (...) {}
+        try { bbs_opt.min_yaw_     = yaml.GetValue<double>("bbs", "min_yaw"); } catch (...) {}
+        try { bbs_opt.max_yaw_     = yaml.GetValue<double>("bbs", "max_yaw"); } catch (...) {}
+        try { bbs_opt.score_threshold_percentage_ = yaml.GetValue<double>("bbs", "score_threshold_percentage"); } catch (...) {}
+        try { bbs_opt.src_leaf_size_  = yaml.GetValue<double>("bbs", "src_leaf_size"); } catch (...) {}
+        try { bbs_opt.timeout_msec_  = yaml.GetValue<int>("bbs", "timeout_msec"); } catch (...) {}
+        try { bbs_opt.num_threads_    = yaml.GetValue<int>("bbs", "num_threads"); } catch (...) {}
+
+        bbs_reloc_ = std::make_shared<BBSRelocalizer>();
+        if (bbs_reloc_->Init(bbs_opt)) {
+            LOG(INFO) << "[BBS] Relocalizer initialized, ready for global localization";
+        } else {
+            LOG(WARNING) << "[BBS] Relocalizer init failed, BBS disabled";
+            bbs_reloc_.reset();
+        }
     }
 
     update_map_thread_ = std::thread([this]() { LidarLoc::UpdateMapThread(); });
@@ -341,6 +385,7 @@ bool LidarLoc::InitWithFP(CloudPtr input, const SE3& fp_pose) {
 
         //  定位成功，则清空失败记录
         fp_init_fail_pose_vec_.clear();
+        initial_pose_try_count_ = 0;
     } else {
         // 添加失败历史记录
         LOG(INFO) << "init failed, score: " << fitness_score;
@@ -459,6 +504,18 @@ void LidarLoc::SetInitialPose(SE3 init_pose) {
     LOG(INFO) << "Set initial pose is: " << initial_pose_.translation().transpose();
 }
 
+bool LidarLoc::ShouldOnlyLogBBSBeforeInit() const {
+    if (loc_inited_) {
+        return false;
+    }
+
+    if (!options_.use_bbs_init_ || !bbs_reloc_ || !bbs_reloc_->Ready()) {
+        return false;
+    }
+
+    return initial_pose_try_count_ >= kMaxInitialPoseTryCount || !initial_pose_set_;
+}
+
 void LidarLoc::Align(const CloudPtr& input) {
     // 输入必须非空
     assert(input != nullptr);
@@ -480,7 +537,7 @@ void LidarLoc::Align(const CloudPtr& input) {
 
     /// 1. 车辆静止处理
     if (parking_ && loc_inited_) {
-        LOG(INFO) << "车辆静止，不做匹配";
+        LOG(INFO) << "车辆静止，Align不做匹配";
 
         UpdateState(input);
         current_abs_pose_ = last_abs_pose_;
@@ -504,11 +561,49 @@ void LidarLoc::Align(const CloudPtr& input) {
         SetInitRltState();
 
         if (initial_pose_set_) {
-            /// 尝试在给定点初始化，如果初始化成功，loc_inited_会被置为true
+            ++initial_pose_try_count_;
+            LOG(INFO) << "trying initial pose guess " << initial_pose_try_count_ << "/"
+                      << kMaxInitialPoseTryCount << ": " << initial_pose_.translation().transpose();
+
             if (InitWithFP(input, initial_pose_)) {
                 LOG(INFO) << "init with external pose: " << initial_pose_.translation().transpose();
                 initial_pose_set_ = false;
+                initial_pose_try_count_ = 0;
                 return;
+            }
+
+            if (initial_pose_try_count_ < kMaxInitialPoseTryCount) {
+                LOG(WARNING) << "initial pose guess failed, will retry: " << initial_pose_.translation().transpose();
+                return;
+            }
+
+            LOG(WARNING) << "initial pose guess failed " << initial_pose_try_count_
+                         << " times, fallback to BBS cold-start relocalization: "
+                         << initial_pose_.translation().transpose();
+            initial_pose_set_ = false;
+            initial_pose_try_count_ = 0;
+        }
+
+        // 3D-BBS 全局重定位：外部初值失败或完全无初值时，用 BnB 搜索全局位姿
+        if (!loc_inited_ && options_.use_bbs_init_ && bbs_reloc_ && bbs_reloc_->Ready()) {
+            LOG(INFO) << "[BBS] Triggering global relocalization after initial guess failure or without initial pose";
+            auto bbs_pose = bbs_reloc_->Relocalize(input);
+            if (bbs_pose) {
+                LOG(INFO) << "[BBS] Got global pose, refining with NDT";
+                if (ui_) {
+                    ui_->UpdateBBSResult(input, *bbs_pose, bbs_reloc_->LastScorePercentage(),
+                                         bbs_reloc_->LastElapsedMsec(), "cold_start_init");
+                }
+                map_->LoadOnPose(*bbs_pose);
+                UpdateGlobalMap();
+                if (InitWithFP(input, *bbs_pose)) {
+                    LOG(INFO) << "[BBS] Init success after BBS+NDT";
+                    fp_last_tried_time_ = 0;
+                    fp_init_fail_pose_vec_.clear();
+                    return;
+                } else {
+                    LOG(WARNING) << "[BBS] BBS pose found but NDT refinement failed";
+                }
             }
         }
 

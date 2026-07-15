@@ -172,6 +172,7 @@ add_library(lightning.core.localization STATIC
     core/localization/pose_graph/pgo_impl.cc
     core/localization/pose_graph/pose_extrapolator.cc
     core/localization/localization.cpp
+    core/localization/relocalizer/bbs_relocalizer.cc
 )
 
 target_link_libraries(lightning.core.localization
@@ -183,6 +184,7 @@ target_link_libraries(lightning.core.localization
     lightning.wrapper
     ${third_party_libs}
     ${PCL_LIBRARIES}
+    cpu_bbs3d
 )
 
 ament_target_dependencies(lightning.core.localization

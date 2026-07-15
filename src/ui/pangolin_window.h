@@ -54,6 +54,10 @@ class PangolinWindow {
                         const SE3& submap_pose, const SE3& scan_pose, const SE3& aligned_pose, 
                         double ndt_score);
 
+    /// 更新 BBS 重定位结果（源点云 + 全局位姿 + 分数 + 耗时）
+    void UpdateBBSResult(CloudPtr src_cloud, const SE3& pose, double score_pct,
+                         double elapsed_ms, const std::string& trigger_msg);
+
     /// 更新回环边信息
     void UpdateLoopEdges(const std::vector<std::pair<int, int>>& loop_edges);
 

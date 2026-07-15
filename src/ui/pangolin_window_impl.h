@@ -63,6 +63,7 @@ class PangolinWindowImpl {
     std::mutex mtx_gps_pose_;
     std::mutex mtx_loop_info_;
     std::mutex mtx_voxel_planes_;  // VoxelMap 平面数据锁
+    std::mutex mtx_bbs_result_;   // BBS 重定位结果锁
 
     std::mutex mtx_reset_;
 
@@ -75,6 +76,7 @@ class PangolinWindowImpl {
     std::atomic<bool> lidarloc_need_update_;       // 雷达位置？
     std::atomic<bool> loop_debug_need_update_;     // 回环调试数据更新
     std::atomic<bool> voxel_planes_need_update_;   // VoxelMap 平面数据更新
+    std::atomic<bool> bbs_result_need_update_;    // BBS 重定位结果更新
 
     pcl::PointCloud<PointType>::Ptr current_scan_ = nullptr;  // 当前scan
     SE3 newest_frontend_pose_;                                // 最新pose
@@ -91,6 +93,13 @@ class PangolinWindowImpl {
     SE3 loop_scan_pose_;
     SE3 loop_aligned_pose_;
     double loop_ndt_score_;
+
+    // BBS 重定位结果
+    CloudPtr bbs_src_cloud_;
+    SE3 bbs_pose_;
+    double bbs_score_pct_ = 0.0;
+    double bbs_elapsed_ms_ = 0.0;
+    std::string bbs_trigger_msg_;
 
     // 地图点云
     std::map<int, CloudPtr> cloud_global_map_;
@@ -130,6 +139,7 @@ class PangolinWindowImpl {
     bool UpdateCurrentScan();
     bool UpdateLoopDebug();    // 更新回环调试信息
     bool UpdateVoxelPlanes();  // 拷贝最新平面数据到渲染缓存
+    bool UpdateBBSResult();   // 更新 BBS 重定位结果
 
     void RenderLabels();
 
@@ -172,6 +182,14 @@ class PangolinWindowImpl {
     std::shared_ptr<ui::UiCloud> loop_submap_ui_;
     std::shared_ptr<ui::UiCloud> loop_scan_ui_;
     std::shared_ptr<ui::UiCloud> loop_aligned_ui_;
+
+    // BBS 重定位点云UI
+    std::shared_ptr<ui::UiCloud> bbs_cloud_ui_;
+    SE3 bbs_pose_ui_;
+    double bbs_score_pct_ui_ = 0.0;
+    double bbs_elapsed_ms_ui_ = 0.0;
+    bool bbs_result_valid_ui_ = false;
+    std::string bbs_trigger_msg_ui_;
 
     // trajectory
     std::shared_ptr<ui::UiTrajectory> traj_scans_ = nullptr;         // 激光扫描的轨迹
