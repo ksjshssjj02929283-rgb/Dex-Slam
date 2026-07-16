@@ -606,9 +606,10 @@ void LidarLoc::Align(const CloudPtr& input) {
                     ui_->UpdateBBSResult(input, *bbs_pose, bbs_reloc_->LastScorePercentage(),
                                          bbs_reloc_->LastElapsedMsec(), "cold_start_init");
                 }
-                map_->LoadOnPose(*bbs_pose);
+                SE3 bbs_pose_body(bbs_pose->so3() * current_lo_pose_.so3(), bbs_pose->translation());
+                map_->LoadOnPose(bbs_pose_body);
                 UpdateGlobalMap();
-                if (InitWithFP(input, *bbs_pose)) {
+                if (InitWithFP(input, bbs_pose_body)) {
                     LOG(INFO) << "[BBS] Init success after BBS+NDT";
                     fp_last_tried_time_ = 0;
                     fp_init_fail_pose_vec_.clear();
