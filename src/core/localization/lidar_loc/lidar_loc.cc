@@ -587,7 +587,19 @@ void LidarLoc::Align(const CloudPtr& input) {
         // 3D-BBS 全局重定位：外部初值失败或完全无初值时，用 BnB 搜索全局位姿
         if (!loc_inited_ && options_.use_bbs_init_ && bbs_reloc_ && bbs_reloc_->Ready()) {
             LOG(INFO) << "[BBS] Triggering global relocalization after initial guess failure or without initial pose";
-            auto bbs_pose = bbs_reloc_->Relocalize(input);
+            // Gravity-align source cloud using LO rotation before BBS
+            // (LiDAR mounted at 45deg, BBS only searches +/-0.02rad roll/pitch)
+            CloudPtr bbs_input(new PointCloudType());
+            if (current_lo_pose_set_) {
+                Eigen::Matrix4f rot_only = Eigen::Matrix4f::Identity();
+                rot_only.block<3,3>(0,0) = current_lo_pose_.rotationMatrix().cast<float>();
+                pcl::transformPointCloud(*input, *bbs_input, rot_only);
+            } else {
+                *bbs_input = *input;
+            }
+            LOG(INFO) << "[BBS] Gravity-aligning source cloud, LO rot angle: "
+                      << current_lo_pose_.so3().log().norm() * 180.0 / M_PI << " deg";
+            auto bbs_pose = bbs_reloc_->Relocalize(bbs_input);
             if (bbs_pose) {
                 LOG(INFO) << "[BBS] Got global pose, refining with NDT";
                 if (ui_) {
