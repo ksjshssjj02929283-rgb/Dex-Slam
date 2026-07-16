@@ -65,16 +65,8 @@ bool BBSRelocalizer::Init(const Options& options) {
     bbs_->set_tar_points(tar_points, static_cast<float>(options_.min_level_res_), options_.max_level_);
     bbs_->set_trans_search_range(tar_points);
 
-    // 保存体素图，下次启动可直接加载
-    if (!options_.voxelmaps_path_.empty()) {
-        std::string dir = options_.voxelmaps_path_;
-        std::string mkdir_cmd = "mkdir -p " + dir;
-        int rc = system(mkdir_cmd.c_str());
-        (void)rc;
-        if (bbs_->save_voxel_params(dir) && bbs_->save_voxelmaps_pcd(dir)) {
-            LOG(INFO) << "[BBS] Saved prebuilt voxelmaps to " << dir << " for fast reload next time";
-        }
-    }
+    // GPU版不支持save_voxel_params/save_voxelmaps_pcd，跳过保存
+    // 如需预构建体素图加速启动，可用CPU版的voxelmaps_saver工具离线生成
 
     ready_ = true;
     LOG(INFO) << "[BBS] Voxel map ready (GPU)";
