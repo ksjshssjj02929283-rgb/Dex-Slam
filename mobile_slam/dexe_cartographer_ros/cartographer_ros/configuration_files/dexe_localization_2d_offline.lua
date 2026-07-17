@@ -72,13 +72,6 @@ POSE_ESTIMATOR_2D.data_preprocessor.adaptive_voxel_filter.min_num_points = 200
 POSE_ESTIMATOR_2D.data_preprocessor.adaptive_voxel_filter.max_range = 15.
 
 -- 激光感知选项
-POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.predict_rec = false
-POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.reflect_rec = false
-POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.shape_rec = false
-POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.line_rec = false
-POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.angle_rec = false
-POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.intensity_threshold = 30
-POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.connect_threshold = 0.05
 POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.min_cluster_points = 5
 -- POSE_ESTIMATOR_2D.use_imu_data = false
 POSE_ESTIMATOR_2D.use_online_correlative_scan_matching = false

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-DCM localization launch file with configurable filter type.
+dexe localization launch file with configurable filter type.
 Supports EKF, UKF, and ESKF filters.
 Includes Cartographer 2D localization.
 """

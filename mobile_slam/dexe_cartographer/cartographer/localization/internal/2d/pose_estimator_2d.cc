@@ -834,10 +834,6 @@ sensor::FeatureData PoseEstimator2D::GetFeatureData(
         Eigen::Vector2d begin = origin * it.line.first.cast<double>().head<2>();
         Eigen::Vector2d end = origin * it.line.second.cast<double>().head<2>();
         res.line_data.push_back(sensor::LineData(begin, end));
-      } else if (it.target_name == "reflector") {
-        Eigen::Vector2d reflector = origin * Eigen::Vector2d{it.x, it.y};
-        res.reflector_data.push_back(
-          sensor::LandmarkPointData{time, transform::Rigid3d(), reflector});
       }
     }
   }

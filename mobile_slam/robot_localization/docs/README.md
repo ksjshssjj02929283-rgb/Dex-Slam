@@ -178,15 +178,15 @@ robot_localization/
 │   ├── ukf.yaml                    # UKF标准模板
 │   ├── navsat_transform.yaml       # GPS转换模板
 │   ├── dual_ekf_navsat_example.yaml # 双EKF+GPS完整示例
-│   ├── dcm_ekf.yaml               # 自定义配置示例
-│   └── dcm_ukf.yaml
+│   ├── dexe_ekf.yaml               # 自定义配置示例
+│   └── dexe_ukf.yaml
 │
 └── launch/
     ├── ekf.launch.py              # EKF启动文件
     ├── ukf.launch.py              # UKF启动文件
     ├── navsat_transform.launch.py # GPS转换启动文件
     ├── dual_ekf_navsat_example.launch.py # 完整示例
-    └── dcm_localization.launch.py # 自定义示例
+    └── dexe_localization.launch.py # 自定义示例
 ```
 
 ### 使用方法

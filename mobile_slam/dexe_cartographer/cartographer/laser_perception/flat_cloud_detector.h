@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "cartographer/sensor/point_cloud.h"
+#include "cartographer/sensor/sync_point_cloud.h"
 
 namespace cartographer {
 namespace laser_perception {

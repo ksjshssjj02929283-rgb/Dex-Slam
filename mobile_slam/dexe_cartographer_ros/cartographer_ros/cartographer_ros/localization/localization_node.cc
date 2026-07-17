@@ -1215,49 +1215,6 @@ bool LocalizationNode::StartFilter()
   }
 }
 
-// TODO: linfeng.guo 后面把这个client写到构造函数中
-// Alternative synchronous version (simpler but blocking)
-// bool LocalizationNode::SetInitialPoseInFilterSync(
-//     const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg) {
-  
-//   RCLCPP_INFO(node_->get_logger(), "Setting initial pose in filter");
-  
-//   if (!set_pose_client_) {
-//     RCLCPP_ERROR(node_->get_logger(), "SetPose client not initialized");
-//     return false;
-//   }
-  
-//   if (!set_pose_client_->wait_for_service(std::chrono::seconds(3))) {
-//     RCLCPP_ERROR(node_->get_logger(), "Timed out waiting for SetPose service");
-//     need_set_pose_in_filter_ = false;
-//     return false;
-//   }
-
-//   auto pose_cmd = std::make_shared<dcm_srvs::srv::SetPose::Request>();
-//   pose_cmd->pose = pose_cov_msg;
-
-//   try {
-//     auto result = set_pose_client_->async_send_request(pose_cmd).get();
-//     need_set_pose_in_filter_ = false;
-//     RCLCPP_WARN(node_->get_logger(), "SetPose service called successfully");
-//     return result->success;
-//   } catch (const std::exception& e) {
-//     RCLCPP_ERROR(node_->get_logger(), "Failed to call service set_pose: %s", e.what());
-//     return false;
-//   }
-// }
-
-// // Constructor addition - initialize service client (recommended practice)
-// // Add this to your LocalizationNode constructor:
-// /*
-// set_pose_client_ = this->create_client<dcm_srvs::srv::SetPose>("/robot_localization/set_pose");
-// */
-
-// // Header file addition - add this to your class definition:
-// /*
-// private:
-//   rclcpp::Client<dcm_srvs::srv::SetPose>::SharedPtr set_pose_client_;
-// */
 
 /* --------------------------------- handle message ---------------------------------------- */
 void LocalizationNode::HandleInitialPoseMessage(
