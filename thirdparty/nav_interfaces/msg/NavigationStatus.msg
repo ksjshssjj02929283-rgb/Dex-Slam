@@ -1,0 +1,7 @@
+int32 status
+
+int32 IDLE = 0
+int32 NAVIGATING = 1
+int32 COLLISON = 2
+int32 FINISHED = 3
+int32 FAILED = 4

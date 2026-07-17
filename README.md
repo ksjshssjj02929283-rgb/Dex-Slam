@@ -408,8 +408,8 @@ make -j$(nproc)
 sudo make install
 ```
 
-> **注意**: 项目依赖 `nav_interfaces` 自定义消息包，需提前编译并 source。
-> `livox_ros_driver2` 在 `thirdparty/` 内随本项目一起编译。
+> **注意**: `nav_interfaces` 与 `livox_ros_driver2` 均已内置于 `thirdparty/`,
+> 随本项目一起编译 (经 CMake `add_subdirectory` 集成), 无需单独编译或 source 其它工作区。
 
 ### 3. 编译
 
@@ -423,7 +423,8 @@ sudo make install
 ```
 
 - BBS 全局重定位使用 `gpu_bbs3d`（CUDA 加速，搜索 ~2s）
-- 需要安装 CUDA Toolkit，`nvcc` 在 PATH 中
+- 需要安装 CUDA Toolkit (≥11.4)。若 `nvcc` 不在 PATH, 脚本会自动探测 `/usr/local/cuda` 并导出;
+  手动等价: `export PATH=/usr/local/cuda/bin:$PATH && export CUDA_HOME=/usr/local/cuda`
 
 #### CPU 版（普通 PC，无 CUDA）
 
@@ -436,6 +437,32 @@ sudo make install
 
 - BBS 全局重定位使用 `cpu_bbs3d`（OpenMP 多线程，搜索较慢）
 - 无需 CUDA，适合在开发机上编译调试
+
+### 部署常见问题与解决办法
+
+换机部署实际踩到的坑及对应处理 (nav_interfaces 与 CUDA 两项已在本仓库修复):
+
+1. **`nav_interfaces` 找不到** (`Could not find a package configuration file provided by "nav_interfaces"`)
+   - 原因: 原 `cmake/packages.cmake` 用 `find_package(nav_interfaces REQUIRED)` 引用自定义消息包, 需单独编译安装后才能被找到。
+   - 处理: 已将 `nav_interfaces` 内置于 `thirdparty/nav_interfaces/`, 改为 `add_subdirectory` 随本项目一起编译 (与 `livox_ros_driver2` 同样方式); 移除 `find_package(nav_interfaces)`, `src/app/CMakeLists.txt` 改为按 target 链接 `nav_interfaces__rosidl_typesupport_cpp`。现只需一条 `./build_lightning.sh`。
+
+2. **GPU 编译报 `Could NOT find CUDA` / 找不到 `nvcc`**
+   - 原因: 装了 CUDA (如 `/usr/local/cuda-12.6`), 但 `nvcc` 未加入默认 PATH, 而脚本只 source 了 ROS2。
+   - 处理: `build_lightning_gpu.sh` 已增加自动探测, `nvcc` 不在 PATH 时自动用 `/usr/local/cuda`。手动等价:
+     ```bash
+     export PATH=/usr/local/cuda/bin:$PATH
+     export CUDA_HOME=/usr/local/cuda
+     ./build_lightning_gpu.sh
+     ```
+
+3. **`install_dep.sh` 缺 `libtbb-dev`**
+   - `scripts/install_dep.sh` 已补充 `libtbb-dev` (OpenMP/PCL 依赖)。完整依赖见上方 `### 2. 安装依赖`, Pangolin 须源码安装到 `/usr/local`。
+
+4. **Pangolin 版本**
+   - 示例 checkout v0.6, 实测 v0.9.3 也可正常编译运行, 不强制版本。
+
+5. **libtbb 链接告警** (`libtbb.so.2 ... may conflict with libtbb.so.12`)
+   - OpenCV 链接旧版 tbb 的告警, 不影响功能, 可忽略。
 
 ### 4. CMakeLists.txt 改动说明
 
@@ -477,21 +504,7 @@ target_compile_definitions(lightning.core.localization
 `bbs_relocalizer.cc` 中所有 `gpu::BBS3D` → `bbs_impl::BBS3D`，`float` → `BBSFloat`，
 `Vector3f` → `BBSVec3`，`get_global_pose()` 用 `auto` 自动适配返回类型。
 
-### 5. BBS→NDT 旋转修复
-
-`lidar_loc.cc` 中 BBS 位姿传给 NDT 精化时，原代码漏了重力对齐旋转 `R_lo`（含 LiDAR 安装倾角），
-导致 NDT 初值 pitch 差 45°、无法收敛。修复为复合旋转：
-
-```cpp
-// 修复前（BUG）:
-if (InitWithFP(input, *bbs_pose)) { ... }
-
-// 修复后:
-SE3 bbs_pose_body(bbs_pose->so3() * current_lo_pose_.so3(), bbs_pose->translation());
-if (InitWithFP(input, bbs_pose_body)) { ... }
-```
-
-### 6. 运行在线定位
+### 5. 运行在线定位
 
 ```bash
 source /opt/ros/humble/setup.bash

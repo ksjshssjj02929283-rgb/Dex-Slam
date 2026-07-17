@@ -19,7 +19,6 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-find_package(nav_interfaces REQUIRED)
 
 # OMP
 option(BUILD_CUDA "Build with CUDA GPU BBS3D support" OFF)
@@ -89,4 +88,3 @@ set(third_party_libs
         tbb
         ${rosbag2_cpp_LIBRARIES}
 )
-

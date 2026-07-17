@@ -38,8 +38,9 @@ ament_target_dependencies(run_slam_online
     "rclcpp"
     "std_msgs"
     "std_srvs"
-    "nav_interfaces"
 )
+add_dependencies(run_slam_online nav_interfaces__rosidl_typesupport_cpp)
+target_link_libraries(run_slam_online nav_interfaces__rosidl_typesupport_cpp)
 
 add_executable(run_loc_offline
         run_loc_offline.cc
@@ -63,8 +64,9 @@ ament_target_dependencies(run_loc_online
     "rclcpp"
     "std_msgs"
     "std_srvs"
-    "nav_interfaces"
 )
+add_dependencies(run_loc_online nav_interfaces__rosidl_typesupport_cpp)
+target_link_libraries(run_loc_online nav_interfaces__rosidl_typesupport_cpp)
 
 add_executable(test_ui
         test_ui.cc
