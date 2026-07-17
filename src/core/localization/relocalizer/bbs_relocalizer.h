@@ -9,7 +9,17 @@
 #include "common/eigen_types.h"
 #include "common/point_def.h"
 
+#ifdef BUILD_CUDA
 #include <gpu_bbs3d/bbs3d.cuh>
+namespace bbs_impl = gpu;
+using BBSFloat = float;
+using BBSVec3 = Eigen::Vector3f;
+#else
+#include <cpu_bbs3d/bbs3d.hpp>
+namespace bbs_impl = cpu;
+using BBSFloat = double;
+using BBSVec3 = Eigen::Vector3d;
+#endif
 
 namespace lightning::loc {
 
@@ -65,7 +75,7 @@ class BBSRelocalizer {
 
    private:
     Options options_;
-    std::unique_ptr<gpu::BBS3D> bbs_;
+    std::unique_ptr<bbs_impl::BBS3D> bbs_;
     bool ready_ = false;
     double last_elapsed_msec_ = 0.0;
     double last_score_percentage_ = 0.0;

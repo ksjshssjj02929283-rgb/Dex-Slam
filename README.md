@@ -376,3 +376,132 @@ imu和雷达外参默认为零就好，我们对这个不敏感。
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=gaoxiang12/lightning-lm&type=date&legend=top-left)](https://www.star-history.com/#gaoxiang12/lightning-lm&type=date&legend=top-left)
+
+## 快速编译指南（换机部署）
+
+### 1. 环境要求
+
+| 项目 | GPU 版 (Jetson) | CPU 版 (普通 PC) |
+|------|----------------|------------------|
+| OS | Ubuntu 22.04 | Ubuntu 22.04 |
+| ROS 2 | Humble | Humble |
+| CUDA | 需要 (≥11.4) | 不需要 |
+| 架构 | aarch64 / x86_64 | x86_64 |
+
+### 2. 安装依赖
+
+```bash
+# ROS2 Humble (如未安装)
+sudo apt update && sudo apt install ros-humble-desktop
+
+# 基础依赖
+sudo apt install libopencv-dev libpcl-dev pcl-tools \
+    libyaml-cpp-dev libgoogle-glog-dev libgflags-dev \
+    ros-humble-pcl-conversions libtbb-dev
+
+# Pangolin 可视化库 (从源码编译)
+git clone https://github.com/stevenlovegrove/Pangolin.git
+cd Pangolin && git checkout v0.6
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
+make -j$(nproc)
+sudo make install
+```
+
+> **注意**: 项目依赖 `nav_interfaces` 自定义消息包，需提前编译并 source。
+> `livox_ros_driver2` 在 `thirdparty/` 内随本项目一起编译。
+
+### 3. 编译
+
+#### GPU 版（Jetson 等带 CUDA 设备）
+
+```bash
+./build_lightning_gpu.sh
+# 等价于:
+# source /opt/ros/humble/setup.bash
+# colcon build --cmake-args -DBUILD_CUDA=ON
+```
+
+- BBS 全局重定位使用 `gpu_bbs3d`（CUDA 加速，搜索 ~2s）
+- 需要安装 CUDA Toolkit，`nvcc` 在 PATH 中
+
+#### CPU 版（普通 PC，无 CUDA）
+
+```bash
+./build_lightning.sh
+# 等价于:
+# source /opt/ros/humble/setup.bash
+# colcon build --cmake-args -DBUILD_CUDA=OFF
+```
+
+- BBS 全局重定位使用 `cpu_bbs3d`（OpenMP 多线程，搜索较慢）
+- 无需 CUDA，适合在开发机上编译调试
+
+### 4. CMakeLists.txt 改动说明
+
+本次改动使 CUDA 成为可选依赖，支持 GPU/CPU 双模式编译：
+
+**`CMakeLists.txt`** — 新增 `BUILD_CUDA` 选项：
+```cmake
+option(BUILD_CUDA "Build with CUDA GPU BBS3D support" OFF)
+```
+
+**`cmake/packages.cmake`** — CUDA 改为条件依赖：
+```cmake
+option(BUILD_CUDA "Build with CUDA GPU BBS3D support" OFF)
+if(BUILD_CUDA)
+    find_package(CUDA REQUIRED)
+    include_directories(${CUDA_INCLUDE_DIRS})
+endif()
+```
+
+**`src/CMakeLists.txt`** — 条件链接 BBS 库 + 编译宏：
+```cmake
+# 根据 BUILD_CUDA 链接 gpu_bbs3d 或 cpu_bbs3d
+$<IF:$<BOOL:${BUILD_CUDA}>,gpu_bbs3d,cpu_bbs3d>
+# 传递 BUILD_CUDA 宏给源码
+target_compile_definitions(lightning.core.localization
+    PRIVATE $<$<BOOL:${BUILD_CUDA}>:BUILD_CUDA>)
+```
+
+**`src/core/localization/relocalizer/bbs_relocalizer.h`** — 条件包含 + 类型别名：
+```cpp
+#ifdef BUILD_CUDA
+  #include <gpu_bbs3d/bbs3d.cuh>
+  namespace bbs_impl = gpu;   // float 精度
+#else
+  #include <cpu_bbs3d/bbs3d.hpp>
+  namespace bbs_impl = cpu;   // double 精度
+#endif
+```
+`bbs_relocalizer.cc` 中所有 `gpu::BBS3D` → `bbs_impl::BBS3D`，`float` → `BBSFloat`，
+`Vector3f` → `BBSVec3`，`get_global_pose()` 用 `auto` 自动适配返回类型。
+
+### 5. BBS→NDT 旋转修复
+
+`lidar_loc.cc` 中 BBS 位姿传给 NDT 精化时，原代码漏了重力对齐旋转 `R_lo`（含 LiDAR 安装倾角），
+导致 NDT 初值 pitch 差 45°、无法收敛。修复为复合旋转：
+
+```cpp
+// 修复前（BUG）:
+if (InitWithFP(input, *bbs_pose)) { ... }
+
+// 修复后:
+SE3 bbs_pose_body(bbs_pose->so3() * current_lo_pose_.so3(), bbs_pose->translation());
+if (InitWithFP(input, bbs_pose_body)) { ... }
+```
+
+### 6. 运行在线定位
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export DISPLAY=:0  # Pangolin 可视化需要 X display
+
+# 启动在线定位 (需有地图和实时传感器数据)
+ros2 launch lightning loc_online.launch.py lidar_type:=livox \
+    map_folder:=$HOME/.dexe/data/maps map_name:=final
+
+# 调用服务开始定位
+ros2 service call /localization_3d_manager/start_localization std_srvs/srv/Trigger
+```

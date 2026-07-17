@@ -184,8 +184,10 @@ target_link_libraries(lightning.core.localization
     lightning.wrapper
     ${third_party_libs}
     ${PCL_LIBRARIES}
-    gpu_bbs3d
+    $<IF:$<BOOL:${BUILD_CUDA}>,gpu_bbs3d,cpu_bbs3d>
 )
+
+target_compile_definitions(lightning.core.localization PRIVATE $<$<BOOL:${BUILD_CUDA}>:BUILD_CUDA>)
 
 ament_target_dependencies(lightning.core.localization
     "rclcpp"

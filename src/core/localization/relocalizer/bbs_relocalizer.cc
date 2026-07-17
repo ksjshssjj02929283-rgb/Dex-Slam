@@ -15,9 +15,9 @@ bool BBSRelocalizer::Init(const Options& options) {
         return false;
     }
 
-    bbs_ = std::make_unique<gpu::BBS3D>();
-    bbs_->set_score_threshold_percentage(static_cast<float>(options_.score_threshold_percentage_));
-    bbs_->set_voxel_expantion_rate(2.0f);
+    bbs_ = std::make_unique<bbs_impl::BBS3D>();
+    bbs_->set_score_threshold_percentage(static_cast<BBSFloat>(options_.score_threshold_percentage_));
+    bbs_->set_voxel_expantion_rate(static_cast<BBSFloat>(2.0));
 
     if (options_.timeout_msec_ > 0) {
         bbs_->enable_timeout();
@@ -26,9 +26,13 @@ bool BBSRelocalizer::Init(const Options& options) {
         bbs_->disable_timeout();
     }
 
+#ifndef BUILD_CUDA
+    bbs_->set_num_threads(options_.num_threads_);
+#endif
+
     // 角度搜索范围（roll/pitch 小范围，yaw 全范围）
-    Eigen::Vector3f min_rpy(options_.min_roll_, options_.min_pitch_, options_.min_yaw_);
-    Eigen::Vector3f max_rpy(options_.max_roll_, options_.max_pitch_, options_.max_yaw_);
+    BBSVec3 min_rpy(options_.min_roll_, options_.min_pitch_, options_.min_yaw_);
+    BBSVec3 max_rpy(options_.max_roll_, options_.max_pitch_, options_.max_yaw_);
     if (max_rpy.z() >= 6.28f) {
         max_rpy.z() = 2.0f * M_PI;
     }
@@ -53,16 +57,16 @@ bool BBSRelocalizer::Init(const Options& options) {
         return false;
     }
 
-    std::vector<Eigen::Vector3f> tar_points;
+    std::vector<BBSVec3> tar_points;
     tar_points.reserve(map_cloud->size());
     for (const auto& pt : map_cloud->points) {
         if (std::isfinite(pt.x) && std::isfinite(pt.y) && std::isfinite(pt.z)) {
-            tar_points.emplace_back(Eigen::Vector3f(pt.x, pt.y, pt.z));
+            tar_points.emplace_back(BBSVec3(pt.x, pt.y, pt.z));
         }
     }
     LOG(INFO) << "[BBS] Building hierarchical voxel map from " << tar_points.size() << " points (GPU)...";
 
-    bbs_->set_tar_points(tar_points, static_cast<float>(options_.min_level_res_), options_.max_level_);
+    bbs_->set_tar_points(tar_points, static_cast<BBSFloat>(options_.min_level_res_), options_.max_level_);
     bbs_->set_trans_search_range(tar_points);
 
     // GPU版不支持save_voxel_params/save_voxelmaps_pcd，跳过保存
@@ -101,10 +105,10 @@ std::optional<SE3> BBSRelocalizer::Relocalize(CloudPtr scan) {
         return std::nullopt;
     }
 
-    std::vector<Eigen::Vector3f> src_points;
+    std::vector<BBSVec3> src_points;
     src_points.reserve(src_cloud->size());
     for (const auto& pt : src_cloud->points) {
-        src_points.emplace_back(Eigen::Vector3f(pt.x, pt.y, pt.z));
+        src_points.emplace_back(BBSVec3(pt.x, pt.y, pt.z));
     }
 
     bbs_->set_src_points(src_points);
@@ -124,7 +128,7 @@ std::optional<SE3> BBSRelocalizer::Relocalize(CloudPtr scan) {
     }
 
     // GPU版返回 Matrix4f，转成 double
-    Eigen::Matrix4f pose_mat = bbs_->get_global_pose();
+    auto pose_mat = bbs_->get_global_pose();
     Eigen::Matrix3d R = pose_mat.block<3, 3>(0, 0).cast<double>();
     Eigen::Vector3d t = pose_mat.block<3, 1>(0, 3).cast<double>();
     Quatd q(R);
