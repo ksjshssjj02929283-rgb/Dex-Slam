@@ -62,6 +62,9 @@ RVizPublisher::RVizPublisher(rclcpp::Node::SharedPtr node, Options options)
     loop_aligned_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
         "/lightning/loop/aligned", 10);
 
+    bbs_cloud_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/lightning/bbs/cloud", 10);
+
     if (options_.pub_voxel_map) {
         voxel_map_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/lightning/voxel_map/planes", 10);
@@ -151,6 +154,21 @@ void RVizPublisher::UpdateLoopDebugClouds(CloudPtr loop_submap, CloudPtr current
                   << " pts, scan: " << loop_scan_->size() 
                   << " pts, aligned: " << loop_aligned_->size()
                   << " pts, NDT score: " << ndt_score;
+    }
+}
+
+void RVizPublisher::UpdateBBSResult(CloudPtr src_cloud, const SE3& pose, double score_pct,
+                                    double elapsed_ms, const std::string& trigger_msg) {
+    std::lock_guard<std::mutex> lock(mtx_bbs_);
+    if (src_cloud && !src_cloud->empty()) {
+        // 将 BBS 源点云按解算位姿变换到世界坐标系，与 Pangolin 中 bbs_cloud_ui_ 行为一致
+        bbs_cloud_ = CloudPtr(new PointCloudType());
+        pcl::transformPointCloud(*src_cloud, *bbs_cloud_, pose.matrix());
+        bbs_updated_ = true;
+
+        LOG(INFO) << "RViz: Updated BBS cloud: " << bbs_cloud_->size()
+                  << " pts, score=" << score_pct << ", time=" << elapsed_ms
+                  << "ms, trigger=" << trigger_msg;
     }
 }
 
@@ -504,6 +522,17 @@ void RVizPublisher::PublishTimerCallback() {
         }
         
         loop_debug_updated_ = false;
+    }
+
+    // 发布 BBS 重定位源点云（已变换到世界坐标系）
+    if (bbs_updated_ && bbs_cloud_pub_) {
+        std::lock_guard<std::mutex> lock(mtx_bbs_);
+        if (bbs_cloud_ && !bbs_cloud_->empty()) {
+            auto msg = ToRosCloud(bbs_cloud_, "map");
+            msg.header.stamp = now;
+            bbs_cloud_pub_->publish(msg);
+        }
+        bbs_updated_ = false;
     }
 
     // 发布 VoxelMap 平面（MarkerArray）
