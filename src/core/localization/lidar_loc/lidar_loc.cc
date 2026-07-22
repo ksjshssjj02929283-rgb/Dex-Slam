@@ -613,10 +613,22 @@ void LidarLoc::Align(const CloudPtr& input) {
                 SE3 bbs_pose_body(bbs_pose->so3() * current_lo_pose_.so3(), bbs_pose->translation());
                 map_->LoadOnPose(bbs_pose_body);
                 UpdateGlobalMap();
-                if (InitWithFP(input, bbs_pose_body)) {
-                    LOG(INFO) << "[BBS] Init success after BBS+NDT";
-                    fp_last_tried_time_ = 0;
-                    fp_init_fail_pose_vec_.clear();
+                // BBS is gravity-aligned 2.5D: Z is quantized to min_level_res (0.4m) and unreliable.
+                // Search Z offsets to compensate before NDT refinement.
+                bool bbs_ndt_success = false;
+                const Vec3d bbs_t = bbs_pose_body.translation();
+                for (double dz : {0.0, 0.4, -0.4, 0.8, -0.8}) {
+                    SE3 bbs_pose_z(bbs_pose_body.so3(),
+                                   Vec3d(bbs_t.x(), bbs_t.y(), bbs_t.z() + dz));
+                    if (InitWithFP(input, bbs_pose_z)) {
+                        LOG(INFO) << "[BBS] Init success after BBS+NDT (Z offset=" << dz << ")";
+                        fp_last_tried_time_ = 0;
+                        fp_init_fail_pose_vec_.clear();
+                        bbs_ndt_success = true;
+                        break;
+                    }
+                }
+                if (bbs_ndt_success) {
                     return;
                 } else {
                     LOG(WARNING) << "[BBS] BBS pose found but NDT refinement failed";
