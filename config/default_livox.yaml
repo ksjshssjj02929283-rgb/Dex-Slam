@@ -193,8 +193,8 @@ bbs:
   enable_recover: false          # 运行过程中不自动触发 BBS 重定位
   global_pcd_path: ""            # global.pcd 路径（空=自动用地图文件夹/global.pcd）
   voxelmaps_path: ""             # 预构建体素图路径（空=自动用地图文件夹/bbs3d_voxelmaps）
-  min_level_res: 0.4              # 最细层分辨率 [m]，分辨率更细但计算更重
-  max_level: 6                    # 层级数
+  min_level_res: 0.2              # 最细层分辨率 [m]，分辨率更细但计算更重
+  max_level: 7                    # 层级数
   min_roll: -0.02                 # roll 搜索范围 [rad]（IMU 已估，小范围补偿）
   max_roll: 0.02
   min_pitch: -0.02                # pitch 搜索范围 [rad]
