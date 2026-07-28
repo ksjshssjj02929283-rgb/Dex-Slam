@@ -151,8 +151,9 @@ LocalizationNode::LocalizationNode(
 
   global_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
       std::string("~/") + kGlobalPointCloudTopic, qos_latched);
+  // 全局特征图只在启动时发布一次，latched 让晚加入的订阅者（rviz）也能收到
   global_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      std::string("~/") + kGlobalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kGlobalFeatureMapTopic, qos_latched);
   local_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
       std::string("~/") + kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
   local_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(

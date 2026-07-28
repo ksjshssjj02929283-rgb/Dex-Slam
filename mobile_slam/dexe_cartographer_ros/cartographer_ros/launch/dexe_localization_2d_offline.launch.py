@@ -57,7 +57,7 @@ def generate_launch_description():
     configuration_directory = PathJoinSubstitution([carto_share, 'configuration_files'])
     
     # Construct map filestream path
-    map_filestream = PathJoinSubstitution([map_folder, map_name, 'map.pbstream'])
+    map_filestream = PathJoinSubstitution([map_folder, map_name, 'slam', 'map.pbstream'])
 
     # 话题重映射 - 将bag中的实际话题映射到cartographer期望的传感器ID
     topic_remappings = [
