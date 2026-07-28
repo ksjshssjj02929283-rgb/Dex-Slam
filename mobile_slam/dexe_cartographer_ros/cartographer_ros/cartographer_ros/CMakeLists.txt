@@ -71,6 +71,18 @@ install(TARGETS cartographer_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# Standalone regression test for the destructive start-mapping directory reset.
+google_binary(map_directory_reset_test
+  SRCS
+    mapping/map_directory_reset_test_main.cc
+)
+
+install(TARGETS map_directory_reset_test
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(cartographer_offline_node
   SRCS
     mapping/offline_node_main.cc

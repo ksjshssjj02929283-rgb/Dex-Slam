@@ -27,6 +27,7 @@
 #include "nav_interfaces/msg/mapping_state.hpp"
 
 #include "cartographer/mapping/map_builder.h"
+#include "cartographer_ros/mapping/map_directory.h"
 #include "cartographer_ros/mapping/node.h"
 #include "cartographer_ros/options/mapping_node_options.h"
 #include "cartographer_ros/mapping/ros_log_sink.h"
@@ -165,17 +166,35 @@ private:
       return;
     }
 
-    // 创建目录
-    if (!EnsureDirectoryExists(FLAGS_map_folder)) {
+    std::string map_name_error;
+    if (!ValidateMapName(map_name_, &map_name_error)) {
+      LOG(ERROR) << "Invalid map name '" << map_name_ << "': "
+                 << map_name_error;
       res->success = false;
-      res->message = "Failed to create map_folder";
+      res->message = "Invalid map_name: " + map_name_error;
       return;
     }
-    const std::string this_map_folder = FLAGS_map_folder + "/" + map_name_ + "/slam";  // 底图在 slam/ 子目录
-    if (!EnsureDirectoryExists(this_map_folder)) {
+
+    // A new mapping session always owns a clean map directory. This removes
+    // stale slam/assets/versions data before any trajectory is started.
+    const MapDirectoryResetResult reset_result =
+        ResetMapDirectory(FLAGS_map_folder, map_name_);
+    if (!reset_result.success) {
+      LOG(ERROR) << "Failed to reset map directory '"
+                 << reset_result.map_directory.string()
+                 << "': " << reset_result.error_message;
       res->success = false;
-      res->message = "Failed to create map subfolder";
+      res->message = "Failed to reset map directory: " +
+                     reset_result.error_message;
       return;
+    }
+    if (reset_result.replaced_existing) {
+      LOG(WARNING) << "Recreated existing map directory '"
+                   << reset_result.map_directory.string() << "' (removed "
+                   << reset_result.removed_entries << " entries).";
+    } else {
+      LOG(INFO) << "Created map directory '"
+                << reset_result.map_directory.string() << "'.";
     }
 
     // TF2 (ROS2): Buffer 绑定到本节点的 Clock
@@ -341,7 +360,11 @@ private:
   bool EnsureDirectoryExists(const std::string& path) {
     try {
       if (path.empty()) return false;
-      if (std::filesystem::exists(path)) return true;
+      if (std::filesystem::exists(path)) {
+        if (std::filesystem::is_directory(path)) return true;
+        LOG(ERROR) << "Path exists but is not a directory: '" << path << "'.";
+        return false;
+      }
       return std::filesystem::create_directories(path);
     } catch (const std::exception& e) {
       LOG(ERROR) << "Filesystem error for path '" << path << "': " << e.what();
@@ -438,25 +461,30 @@ private:
   void SetMapName(const std::shared_ptr<nav_interfaces::srv::SetMapName::Request> req,
                   std::shared_ptr<nav_interfaces::srv::SetMapName::Response> res)
   {
-    map_name_ = req->map_name;
-
-    if (FLAGS_map_folder.empty() || map_name_.empty()) {
+    if (FLAGS_map_folder.empty()) {
       LOG(ERROR) << "Need to specify --map_folder and --map_name.";
       res->success = false;
       return;
     }
 
+    std::string map_name_error;
+    if (!ValidateMapName(req->map_name, &map_name_error)) {
+      LOG(ERROR) << "Invalid map name '" << req->map_name << "': "
+                 << map_name_error;
+      res->success = false;
+      return;
+    }
     if (!EnsureDirectoryExists(FLAGS_map_folder)) {
       res->success = false;
       return;
     }
-    const std::string this_map_folder = FLAGS_map_folder + "/" + map_name_ + "/slam";  // 底图在 slam/ 子目录
-    if (!EnsureDirectoryExists(this_map_folder)) {
-      res->success = false;
-      return;
-    }
 
-    RCLCPP_INFO(this->get_logger(), "Set map name to %s", this_map_folder.c_str());
+    map_name_ = req->map_name;
+    const std::filesystem::path map_directory =
+        std::filesystem::path(FLAGS_map_folder) / map_name_;
+    RCLCPP_INFO(this->get_logger(),
+                "Set map name to %s; directory will be recreated when mapping starts",
+                map_directory.c_str());
     res->success = true;
   }
 

@@ -25,8 +25,10 @@
 #include <time.h>
 
 #include <chrono>
+#include <filesystem>
 
 #include "absl/strings/str_split.h"
+#include "cartographer_ros/mapping/map_directory.h"
 #include "cartographer_ros/mapping/node.h"
 #include "cartographer_ros/mapping/playable_bag.h"
 #include "cartographer_ros/mapping/urdf_reader.h"
@@ -124,6 +126,24 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     bag_filenames = if_bag_filenames;
   }
   cartographer_ros::MappingNodeOptions node_options;
+  std::filesystem::path map_slam_directory;
+  if (!FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
+    const MapDirectoryResetResult reset_result =
+        ResetMapDirectory(FLAGS_map_folder, FLAGS_map_name);
+    CHECK(reset_result.success)
+        << "Failed to reset offline map directory '"
+        << reset_result.map_directory.string() << "': "
+        << reset_result.error_message;
+    map_slam_directory = reset_result.slam_directory;
+    if (reset_result.replaced_existing) {
+      LOG(WARNING) << "Recreated existing offline map directory '"
+                   << reset_result.map_directory.string() << "' (removed "
+                   << reset_result.removed_entries << " entries).";
+    } else {
+      LOG(INFO) << "Created offline map directory '"
+                << reset_result.map_directory.string() << "'.";
+    }
+  }
   std::vector<std::string> configuration_basenames(
     std::sregex_token_iterator(
       FLAGS_configuration_basenames.begin(), FLAGS_configuration_basenames.end(), regex, -1),
@@ -465,19 +485,9 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
 #endif
 
   // Save map if map_folder and map_name are specified
-  if (rclcpp::ok() && !FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
+  if (rclcpp::ok() && !map_slam_directory.empty()) {
     LOG(INFO) << "Starting map save process...";
-    
-    // Create map folder structure: map_folder/map_name/slam/（底图在 slam/ 子目录）
-    std::string map_dir = FLAGS_map_folder + "/" + FLAGS_map_name + "/slam";
-    std::string mkdir_cmd = "mkdir -p " + map_dir;
-    int ret = system(mkdir_cmd.c_str());
-    if (ret != 0) {
-      LOG(ERROR) << "Failed to create map directory: " << map_dir;
-    } else {
-      LOG(INFO) << "Created map directory: " << map_dir;
-    }
-    
+
     // 0. Save optimized poses if enabled
     if (node_options.save_tracked_pose) {
       LOG(INFO) << "Saving optimized poses...";
@@ -486,13 +496,14 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
     }
     
     // 1. Save pbstream file: map_folder/map_name/map.pbstream
-    const std::string state_filename = map_dir + "/map.pbstream";
+    const std::string state_filename =
+        (map_slam_directory / "map.pbstream").string();
     LOG(INFO) << "Saving state to '" << state_filename << "'...";
     node.SerializeState(state_filename, true /* include_unfinished_submaps */);
     LOG(INFO) << "State saved to '" << state_filename << "'.";
     
     // 2. Save map files: map_folder/map_name/map.pgm and map.yaml
-    const std::string map_filestream = map_dir + "/map";
+    const std::string map_filestream = (map_slam_directory / "map").string();
     LOG(INFO) << "Saving map to '" << map_filestream << "' with resolution " 
               << FLAGS_resolution << " meters...";
     
