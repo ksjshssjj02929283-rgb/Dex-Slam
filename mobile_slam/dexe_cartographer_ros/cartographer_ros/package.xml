@@ -67,6 +67,7 @@
   <depend>nav_interfaces</depend>
 
   <exec_depend>launch</exec_depend>
+  <exec_depend>ros2cli</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
 
   <export>
