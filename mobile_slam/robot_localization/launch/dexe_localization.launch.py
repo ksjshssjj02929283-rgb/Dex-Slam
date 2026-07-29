@@ -35,6 +35,18 @@ def launch_setup(context, *args, **kwargs):
     # Get launch configuration values
     filter_type = LaunchConfiguration('filter_type').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
+    realtime_priority_text = LaunchConfiguration('realtime_priority').perform(context).strip()
+
+    try:
+        realtime_priority = int(realtime_priority_text)
+    except ValueError as ex:
+        raise ValueError('realtime_priority must be an integer in [0, 99]') from ex
+    if not 0 <= realtime_priority <= 99:
+        raise ValueError('realtime_priority must be in [0, 99]; 0 disables FIFO scheduling')
+
+    process_prefix = []
+    if realtime_priority > 0:
+        process_prefix.extend(['robot_localization', '-f', str(realtime_priority)])
     
     # Determine executable and params file based on filter type
     if filter_type.lower() == 'ekf':
@@ -60,6 +72,7 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         respawn=True,
         respawn_delay=2.0,
+        prefix=' '.join(process_prefix) if process_prefix else None,
         parameters=[
             params_file,
             {'use_sim_time': use_sim_time}
@@ -88,11 +101,18 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
-        description='Use simulation time'
+        description='Use simulation clock; keep false on the physical robot'
+    )
+
+    realtime_priority_arg = DeclareLaunchArgument(
+        'realtime_priority',
+        default_value='99',
+        description='SCHED_FIFO priority in [1, 99]; defaults to the maximum priority 99'
     )
     
     return LaunchDescription([
         filter_type_arg,
         use_sim_time_arg,
+        realtime_priority_arg,
         OpaqueFunction(function=launch_setup)
     ])
