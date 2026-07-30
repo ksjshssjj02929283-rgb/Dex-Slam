@@ -164,6 +164,11 @@ LocalizationNode::LocalizationNode(
       std::string("~/") + kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
   localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
       "~/state", kLatestOnlyPublisherQueueSize);
+  // Cross-node contract: localization_node pushes the accepted pose to the
+  // robot_localization filter through its fixed absolute topic.
+  set_pose_publisher_ =
+      node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+          "/robot_localization/set_pose", rclcpp::QoS(1));
 
   // 服务  
   submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
@@ -1084,6 +1089,12 @@ bool LocalizationNode::SetInitialPoseInFilter(
   // 走话题而非服务：ros_filter 的 set_pose 服务类型是 robot_localization/srv/SetPose，
   // 与本包的 nav_interfaces/srv/SetPose 类型不匹配，DDS 端点永远无法匹配（wait_for_service 必超时）。
   // 同名话题订阅与服务共用 setPoseCallback，效果等价且无阻塞。
+  if (!set_pose_publisher_) {
+    RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                          "Publisher /robot_localization/set_pose is not initialized; will retry");
+    return false;  // fail closed，不清 need_set_pose_in_filter_
+  }
+
   if (set_pose_publisher_->get_subscription_count() == 0) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
                          "No subscriber on %s yet, will retry",

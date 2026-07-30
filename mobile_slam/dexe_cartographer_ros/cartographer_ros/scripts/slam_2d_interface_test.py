@@ -258,6 +258,13 @@ class GraphSnapshot:
     topics: set[str]
 
 
+@dataclass(frozen=True)
+class TopicEndpoint:
+    node: str
+    endpoint_type: str
+    topic_type: str
+
+
 def lines(value: str) -> set[str]:
     return {
         line.strip()
@@ -329,6 +336,72 @@ def parse_scalar(text: str, field: str) -> str:
                 "",
             )
     return ""
+
+
+def parse_topic_endpoints(text: str) -> list[TopicEndpoint]:
+    endpoints: list[TopicEndpoint] = []
+    blocks = re.split(r"(?=^\s*Node name:\s*)", text, flags=re.MULTILINE)
+    for block in blocks:
+        node_name = parse_scalar(block, "Node name")
+        endpoint_type = parse_scalar(block, "Endpoint type").upper()
+        topic_type = parse_scalar(block, "Topic type")
+        if not node_name or endpoint_type not in {"PUBLISHER", "SUBSCRIPTION"}:
+            continue
+        namespace = parse_scalar(block, "Node namespace") or "/"
+        node = f"{namespace.rstrip('/')}/{node_name.lstrip('/')}"
+        if not node.startswith("/"):
+            node = f"/{node}"
+        endpoints.append(
+            TopicEndpoint(
+                node=node,
+                endpoint_type=endpoint_type,
+                topic_type=topic_type,
+            )
+        )
+    return endpoints
+
+
+def check_set_pose_endpoints(reporter: Reporter) -> list[str]:
+    result = reporter.run(
+        [
+            "ros2",
+            "topic",
+            "info",
+            "/robot_localization/set_pose",
+            "--verbose",
+        ],
+        timeout_s=10,
+    )
+    if result.returncode != 0:
+        return [
+            "无法读取 /robot_localization/set_pose 端点："
+            f"{result.stderr or result.stdout or f'exit {result.returncode}'}"
+        ]
+
+    expected_type = "geometry_msgs/msg/PoseWithCovarianceStamped"
+    endpoints = parse_topic_endpoints(result.stdout)
+    publishers = {
+        endpoint.node
+        for endpoint in endpoints
+        if endpoint.endpoint_type == "PUBLISHER"
+        and endpoint.topic_type == expected_type
+    }
+    subscriptions = {
+        endpoint.node
+        for endpoint in endpoints
+        if endpoint.endpoint_type == "SUBSCRIPTION"
+        and endpoint.topic_type == expected_type
+    }
+    missing: list[str] = []
+    if not has_node(publishers, "localization_node"):
+        missing.append(
+            "缺 localization_node 的 PoseWithCovarianceStamped publisher"
+        )
+    if not has_node(subscriptions, "robot_localization"):
+        missing.append(
+            "缺 robot_localization 的 PoseWithCovarianceStamped subscription"
+        )
+    return missing
 
 
 def bool_success(text: str) -> bool:
@@ -562,6 +635,7 @@ def check_localization_contract(
         "/map_manager/map_state",
         "/localization_node/state",
         "/robot_localization/odometry/filtered",
+        "/robot_localization/set_pose",
         "/map",
     }
     detail_parts = []
@@ -574,11 +648,16 @@ def check_localization_contract(
         detail_parts.append(f"缺服务 {services_missing}")
     if topics_missing:
         detail_parts.append(f"缺话题 {topics_missing}")
+    if "/robot_localization/set_pose" not in topics_missing:
+        detail_parts.extend(check_set_pose_endpoints(reporter))
     reporter.add(
         "LOC-A-02",
         "定位栈节点、服务与话题契约",
         PASS if not detail_parts else FAIL,
-        "4 节点、16 个关键服务和 4 个关键话题齐全"
+        (
+            "4 节点、16 个关键服务、5 个关键话题齐全；"
+            "set_pose 发布/订阅端点与消息类型正确"
+        )
         if not detail_parts
         else "；".join(detail_parts),
     )
