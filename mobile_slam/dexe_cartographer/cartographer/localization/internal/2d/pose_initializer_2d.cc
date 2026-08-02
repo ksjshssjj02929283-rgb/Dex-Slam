@@ -16,6 +16,7 @@
 
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -263,6 +264,9 @@ void PoseInitializer::Run()
 
 void PoseInitializer::RelocalzationOnce()
 {
+  using Clock = std::chrono::steady_clock;
+  const auto t_total_start = Clock::now();
+
   if (global_submap_ == nullptr) {
     LOG(ERROR) << "Global submap is not initialized, please set global submap first.";
     initializer_status_ = PoseInitializerStatus::NotInitialized;
@@ -399,6 +403,11 @@ void PoseInitializer::RelocalzationOnce()
   } else {
     initializer_status_ = PoseInitializerStatus::Success;
   }
+
+  const double total_ms =
+      std::chrono::duration<double, std::milli>(Clock::now() - t_total_start)
+          .count();
+  LOG(INFO) << "Pose relocalization took " << total_ms << " ms";
 
   // LOG(INFO) << "global pose estimate: "
   //           << global_pose_estimate.translation().x() << " "
