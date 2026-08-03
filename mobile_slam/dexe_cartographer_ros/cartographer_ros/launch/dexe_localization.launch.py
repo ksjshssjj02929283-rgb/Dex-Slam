@@ -53,12 +53,6 @@ def generate_launch_description():
         description='Use simulation clock; keep false on the physical robot'
     )
 
-    realtime_priority_arg = DeclareLaunchArgument(
-        'robot_localization_realtime_priority',
-        default_value='99',
-        description='robot_localization SCHED_FIFO priority; defaults to the maximum priority 99'
-    )
-
     # Get launch configurations
     map_folder = LaunchConfiguration('map_folder')
     map_name = LaunchConfiguration('map_name')
@@ -86,8 +80,6 @@ def generate_launch_description():
         launch_arguments={
             'filter_type': 'ukf',
             'use_sim_time': use_sim_time,
-            'realtime_priority': LaunchConfiguration(
-                'robot_localization_realtime_priority'),
         }.items()
     )
 
@@ -138,8 +130,6 @@ def generate_launch_description():
         map_name_arg,
         resolution_arg,
         use_sim_time_arg,
-        realtime_priority_arg,
-        
         # Robot localization
         robot_localization_launch,
         

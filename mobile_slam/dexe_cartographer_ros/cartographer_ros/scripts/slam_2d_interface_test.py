@@ -98,7 +98,7 @@ TEST_ACTION_FLOWS = {
     "LOC-A-05": "单次读取 LocalizationState，解析状态码与 score，并执行范围检查。",
     "LOC-A-06": "读取 UKF frequency 参数，核对配置的滤波频率为 25 Hz。",
     "LOC-A-07": "在固定采样窗口执行 ros2 topic hz，计算 filtered odometry 实际频率并对照 23~27 Hz。",
-    "LOC-A-08": "定位 ukf_node 进程，分别用 chrt 和 taskset 读取实时优先级与 CPU 亲和性。",
+    "LOC-A-08": "定位实际安装的 ukf_node，读取 build.sh 写入的 cap_sys_nice file capability，并用 ldd 核对 librl_lib.so 来自同一 install；再定位运行 PID，用 chrt 和 taskset 读取实时优先级与 CPU 亲和性。",
     "LOC-A-09": "记录原 MapState，调用测试图 load_map，并轮询同名地图 epoch 精确增加 1。",
     "LOC-A-10": "地图加载后持续采样 LocalizationState，确认最终进入 status=4。",
     "LOC-A-11": "先订阅 LocalizationState 并记录定位日志字节偏移，再调用全局重定位服务；优先确认 3→4，快速切换漏采状态 3 时以本轮成功日志和新状态 4 闭环，并从日志提取耗时与得分。",
@@ -2137,15 +2137,69 @@ def cpu_set(value: str) -> set[int]:
 
 
 def check_ekf_runtime(reporter: Reporter) -> None:
+    prefix_result = reporter.run(["ros2", "pkg", "prefix", "robot_localization"])
+    prefix_lines = [
+        line.strip() for line in prefix_result.stdout.splitlines() if line.strip()
+    ]
+    package_prefix = prefix_lines[-1] if prefix_lines else ""
+    ukf_executable = (
+        Path(package_prefix) / "lib" / "robot_localization" / "ukf_node"
+        if package_prefix
+        else Path("<unresolved>")
+    )
+    capability_result = reporter.run(["getcap", "-v", str(ukf_executable)])
+    capability_text = (
+        f"{capability_result.stdout}\n{capability_result.stderr}".strip()
+    )
+    capability_ok = (
+        prefix_result.returncode == 0
+        and capability_result.returncode == 0
+        and "cap_sys_nice=ep" in capability_text
+    )
+    expected_rl_library = (
+        Path(package_prefix) / "lib" / "librl_lib.so"
+        if package_prefix
+        else Path("<unresolved>")
+    )
+    ldd_result = reporter.run(["ldd", str(ukf_executable)])
+    ldd_text = f"{ldd_result.stdout}\n{ldd_result.stderr}".strip()
+    library_match = re.search(
+        r"^\s*librl_lib\.so\s+=>\s+(\S+)",
+        ldd_text,
+        re.MULTILINE,
+    )
+    actual_rl_library = library_match.group(1) if library_match else ""
+    library_ok = (
+        prefix_result.returncode == 0
+        and ldd_result.returncode == 0
+        and bool(actual_rl_library)
+        and Path(actual_rl_library).resolve() == expected_rl_library.resolve()
+    )
+
     pid_result = reporter.run(["pgrep", "-n", "-x", "ukf_node"])
     pid = pid_result.stdout.strip()
     if not pid.isdigit():
         reporter.add(
             "LOC-A-08",
-            "UKF 实际调度策略与 CPU 亲和性",
+            "UKF 构建授权、动态库、调度策略与 CPU 亲和性",
             FAIL,
-            "未找到 ukf_node 进程",
+            f"build_capability={capability_text or 'unavailable'}；"
+            f"librl_lib={actual_rl_library or 'unresolved'}；未找到 ukf_node 进程",
             [
+                interface_check(
+                    "file-capability",
+                    str(ukf_executable),
+                    "cap_sys_nice=ep",
+                    capability_text or "unavailable",
+                    capability_ok,
+                ),
+                interface_check(
+                    "dynamic-library",
+                    "librl_lib.so",
+                    str(expected_rl_library),
+                    actual_rl_library or ldd_text or "unresolved",
+                    library_ok,
+                ),
                 interface_check(
                     "process", "ukf_node", "running", "not found", False
                 )
@@ -2161,14 +2215,36 @@ def check_ekf_runtime(reporter: Reporter) -> None:
     priority = int(priority_match.group(1)) if priority_match else None
     affinity_match = re.search(r"affinity list:\s*([0-9,\-]+)", taskset_text)
     affinity = cpu_set(affinity_match.group(1)) if affinity_match else set()
-    passed = policy_ok and priority == 99 and affinity == {3, 4}
+    passed = (
+        capability_ok
+        and library_ok
+        and policy_ok
+        and priority == 99
+        and affinity == {3, 4}
+    )
     reporter.add(
         "LOC-A-08",
-        "UKF 实际调度策略与 CPU 亲和性",
+        "UKF 构建授权、动态库、调度策略与 CPU 亲和性",
         PASS if passed else FAIL,
+        f"capability={'cap_sys_nice=ep' if capability_ok else capability_text or 'unavailable'} "
+        f"librl_lib={actual_rl_library or 'unresolved'} "
         f"pid={pid} policy={'SCHED_FIFO' if policy_ok else 'other'} "
         f"priority={priority} cpus={sorted(affinity)}",
         [
+            interface_check(
+                "file-capability",
+                str(ukf_executable),
+                "cap_sys_nice=ep",
+                capability_text or "unavailable",
+                capability_ok,
+            ),
+            interface_check(
+                "dynamic-library",
+                "librl_lib.so",
+                str(expected_rl_library),
+                actual_rl_library or ldd_text or "unresolved",
+                library_ok,
+            ),
             interface_check(
                 "process-scheduler",
                 "ukf_node",
