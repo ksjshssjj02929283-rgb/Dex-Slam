@@ -1,24 +1,28 @@
-      
 #!/bin/bash
+set -e
 
-CURDIR=$(pwd)
-PROJECT_DIR=$(basename "$PWD")
+CURDIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(cd "${CURDIR}/.." && pwd)"
+INSTALL_DIR="${DEXE_MOBILE_SLAM_INSTALL_DIR:-${WORKSPACE_DIR}/install}"
+PROJECT_DIR=$(basename "${CURDIR}")
 PACKAGE_NAME=${PROJECT_DIR//_/-}
 echo "Running file installation for $PACKAGE_NAME..."
+echo "Using colcon install directory: ${INSTALL_DIR}"
 
 
 mkdir -p "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/$PACKAGE_NAME"
 mkdir -p "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/install"
 
-if [ ! -d "$CURDIR/install" ]; then
-    echo "Error: install directory not found!"
+if [ ! -d "${INSTALL_DIR}" ]; then
+    echo "Error: install directory not found: ${INSTALL_DIR}"
+    echo "Set DEXE_MOBILE_SLAM_INSTALL_DIR when packaging a non-default workspace."
     exit 1
 fi
 
-rm -rf "$CURDIR/install/cartographer*"
+rm -rf "${INSTALL_DIR}/cartographer*"
 
-find "$CURDIR/install" -maxdepth 1 -type f -exec cp {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/$PACKAGE_NAME/" \;
-find "$CURDIR/install" -maxdepth 1 -mindepth 1 -type d -exec cp -r {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/install/" \;
+find "${INSTALL_DIR}" -maxdepth 1 -type f -exec cp {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/$PACKAGE_NAME/" \;
+find "${INSTALL_DIR}" -maxdepth 1 -mindepth 1 -type d -exec cp -r {} "$CURDIR/debian/$PACKAGE_NAME/home/dexforce/w1/install/" \;
 
 # --- 自动生成 postinst:整棵 /home/dexforce/w1 chown 回 dexforce ---
 DEBIAN_DIR="$CURDIR/debian/$PACKAGE_NAME/DEBIAN"

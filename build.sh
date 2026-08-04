@@ -29,7 +29,12 @@ UKF_NODE="${INSTALL_DIR}/robot_localization/lib/robot_localization/ukf_node"
 EKF_NODE="${INSTALL_DIR}/robot_localization/lib/robot_localization/ekf_node"
 RL_LIBRARY="${INSTALL_DIR}/robot_localization/lib/librl_lib.so"
 
-for command_name in sudo setcap getcap ldconfig ldd; do
+REQUIRED_COMMANDS=(setcap getcap ldconfig ldd install)
+if [ "${EUID}" -ne 0 ]; then
+    REQUIRED_COMMANDS+=(sudo)
+fi
+
+for command_name in "${REQUIRED_COMMANDS[@]}"; do
     if ! command -v "${command_name}" >/dev/null 2>&1; then
         echo "❌ 缺少命令：${command_name}"
         [ "${command_name}" != "setcap" ] && [ "${command_name}" != "getcap" ] || \
@@ -37,6 +42,14 @@ for command_name in sudo setcap getcap ldconfig ldd; do
         exit 1
     fi
 done
+
+run_privileged() {
+    if [ "${EUID}" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
 
 for required_file in "${UKF_NODE}" "${EKF_NODE}" "${RL_LIBRARY}"; do
     if [ ! -f "${required_file}" ]; then
@@ -63,9 +76,11 @@ trap 'rm -f "${LDCONF_TMP}"' EXIT
 } > "${LDCONF_TMP}"
 
 echo "🔐 构建完成，配置 robot_localization 实时调度权限..."
-sudo -v
-sudo install -m 0644 "${LDCONF_TMP}" /etc/ld.so.conf.d/dexe_mobile_slam.conf
-sudo ldconfig
+if [ "${EUID}" -ne 0 ]; then
+    sudo -v
+fi
+run_privileged install -m 0644 "${LDCONF_TMP}" /etc/ld.so.conf.d/dexe_mobile_slam.conf
+run_privileged ldconfig
 
 resolved_rl_library="$(ldd "${UKF_NODE}" | awk '$1 == "librl_lib.so" {print $3; exit}')"
 if [ -z "${resolved_rl_library}" ] || \
@@ -78,7 +93,7 @@ fi
 
 apply_realtime_capability() {
     local executable="$1"
-    sudo setcap 'cap_sys_nice=+ep' "${executable}"
+    run_privileged setcap 'cap_sys_nice=+ep' "${executable}"
     local capabilities
     capabilities="$(getcap "${executable}")"
     if [[ "${capabilities}" != *"cap_sys_nice=ep"* ]]; then
