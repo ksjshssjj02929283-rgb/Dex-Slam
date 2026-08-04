@@ -234,12 +234,15 @@ void RVizPublisher::UpdateCurrentPose(const SE3& pose) {
     pose_msg.pose.orientation.w = q.w();
     pose_msg.pose.orientation.x = q.x();
     pose_msg.pose.orientation.y = q.y();
-    pose_msg.pose.orientation.z = q.z();
+   pose_msg.pose.orientation.z = q.z();
 
-    realtime_path_.poses.push_back(pose_msg);
-    if (realtime_path_.poses.size() > 10000) {
-        realtime_path_.poses.erase(realtime_path_.poses.begin());
-    }
+   if (++realtime_path_cnt_ % 5 == 0) {
+       realtime_path_.poses.push_back(pose_msg);
+   }
+   // 限制路径点数，避免Path消息超过FastDDS 64KB传输上限被丢弃
+   if (realtime_path_.poses.size() > 10000) {
+       realtime_path_.poses.erase(realtime_path_.poses.begin());
+   }
 }
 
 void RVizPublisher::UpdateNavState(const NavState& state) {

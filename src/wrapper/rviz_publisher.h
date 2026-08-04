@@ -124,8 +124,9 @@ private:
     bool map_updated_ = false;
     bool global_map_updated_ = false;
     bool dynamic_map_updated_ = false;
-    bool pose_updated_ = false;
-    bool loop_debug_updated_ = false;  // 回环调试数据更新标志
+   bool pose_updated_ = false;
+   int realtime_path_cnt_ = 0;  // 实时轨迹降采样计数器
+   bool loop_debug_updated_ = false;  // 回环调试数据更新标志
     bool voxel_map_updated_ = false;   // VoxelMap 平面更新标志
     bool gridmap_updated_ = false;     // 2D 栅格地图更新标志
 

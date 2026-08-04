@@ -89,7 +89,7 @@ system:
 rviz:
   enable: true
   pub_current_scan: true
-  pub_local_map: true
+  pub_local_map: false
   pub_global_map: true
   pub_trajectory: true
   pub_keyframes: true
