@@ -105,6 +105,18 @@ install(TARGETS cartographer_occupancy_grid_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# Standalone regression test for mapping_node submaps producing /map.
+google_binary(occupancy_grid_interface_test
+  SRCS
+    mapping/occupancy_grid_interface_test_main.cc
+)
+
+install(TARGETS occupancy_grid_interface_test
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(cartographer_rosbag_validate
   SRCS
     rosbag_validate/rosbag_validate_main.cc
