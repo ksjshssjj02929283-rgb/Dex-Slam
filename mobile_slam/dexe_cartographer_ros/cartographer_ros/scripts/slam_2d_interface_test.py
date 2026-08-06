@@ -50,7 +50,7 @@ DEFAULT_MANUAL_RESULT_ROOT = Path(
 DEFAULT_LOCALIZATION_LOG = Path(
     os.environ.get(
         "SLAM_2D_LOCALIZATION_LOG",
-        str(Path.home() / "log/syslog"),
+        "/var/log/syslog",
     )
 )
 DEFAULT_LOCALIZATION_LOG_TAG = os.environ.get(
@@ -1268,7 +1268,7 @@ def bool_success(text: str) -> bool:
 
 
 def resolve_localization_log_file(log_path: Path) -> Path:
-    """Accept either the 0.4.5 syslog directory or an explicit log file."""
+    """Accept either a syslog directory or an explicit log file."""
     return log_path / "syslog" if log_path.is_dir() else log_path
 
 
@@ -5079,9 +5079,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_LOCALIZATION_LOG,
         help=(
-            "0.4.5 shared syslog directory or explicit log file used for "
-            "same-trial timing and score (default: ~/log/syslog; active "
-            "file: syslog)"
+            "shared syslog directory or explicit log file used for "
+            "same-trial timing and score (default: /var/log/syslog)"
         ),
     )
     localization.add_argument(
