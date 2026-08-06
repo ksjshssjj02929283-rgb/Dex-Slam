@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Geekplus Inc
+// Copyright (c) 2026 Dexforce Inc
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -92,17 +92,6 @@ struct PointCloudWithOrigin
 proto::PointCloudWithOrigin ToProto(
   const PointCloudWithOrigin & point_cloud_with_origin);
 PointCloudWithOrigin FromProto(const proto::PointCloudWithOrigin & proto);
-
-struct SyncPointCloudWithOdom
-{
-  common::Time stamp;
-  OdometryData odom;
-  std::vector<PointCloudWithOrigin> sync_point_clouds;
-};
-
-proto::SyncPointCloudWithOdom ToProto(
-  const SyncPointCloudWithOdom & sync_point_cloud_with_odom);
-SyncPointCloudWithOdom FromProto(const proto::SyncPointCloudWithOdom & proto);
 
 struct SyncRangeData
 {

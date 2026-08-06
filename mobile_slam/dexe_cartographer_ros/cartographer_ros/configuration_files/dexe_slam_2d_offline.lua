@@ -1,11 +1,3 @@
---[[
-Author: Buddy_X guo_linfeng@foxmail.com
-Date: 2023-05-19 17:50:12
-LastEditors: Buddy_X guo_linfeng@foxmail.com
-LastEditTime: 2023-06-02 15:46:12
-FilePath: /0_dcm_ws/src/cartographer_ros/configuration_files/dcm_slam_2d.lua
-Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
---]]
 -- Copyright 2016 The Cartographer Authors
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +27,7 @@ options = {
   publish_frame_projected_to_2d = true,
   use_pose_extrapolator = false,
   use_odometry = true,
+  ignore_out_of_order = true,
   use_nav_sat = false,
   use_landmarks = false,
   num_laser_scans = 2,
@@ -80,13 +73,6 @@ TRAJECTORY_BUILDER_2D.data_preprocessor.adaptive_voxel_filter.min_num_points = 2
 TRAJECTORY_BUILDER_2D.data_preprocessor.adaptive_voxel_filter.max_range = 15.
 
 -- 激光感知选项
-TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.predict_rec = false
-TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.reflect_rec = false
-TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.shape_rec = false
-TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.line_rec = false
-TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.angle_rec = false
-TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.intensity_threshold = 30
-TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.connect_threshold = 0.05
 TRAJECTORY_BUILDER_2D.data_preprocessor.laser_perception.min_cluster_points = 5
 TRAJECTORY_BUILDER_2D.use_imu_data = false
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true

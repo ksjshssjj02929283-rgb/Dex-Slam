@@ -24,6 +24,9 @@
 namespace cartographer {
 namespace laser_perception {
 
+proto::LineDetectorXOptions CreateLineDetectorXOptions(
+    common::LuaParameterDictionary* parameter_dictionary);
+
 proto::LaserPerceptionOptions CreateLaserPerceptionOptions(
     common::LuaParameterDictionary* parameter_dictionary);
 

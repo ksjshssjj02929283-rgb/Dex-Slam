@@ -18,9 +18,11 @@
 #define CARTOGRAPHER_ROS_LOCALIZATION_MAP_PERSISTENCE_MANAGER_H_
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -42,7 +44,7 @@ namespace cartographer_ros {
  *     4. AtomicDirSwap::CommitStage({pbstream,png,yaml}) → 写 sentinel + fsync
  *     5. AtomicDirSwap::ActivateAndCleanup()    → 切换 + 归档 + 轮换历史 backup
  *
- *   历史 backup 保留数量由 max_backups（默认 5）控制，通过构造参数注入。
+ *   历史 backup 保留数量由 max_backups（默认 50）控制，通过构造参数注入。
  */
 class MapPersistenceManager {
  public:
@@ -50,13 +52,13 @@ class MapPersistenceManager {
    * @param node            ROS2 节点（用于打日志）
    * @param get_loc_node    返回当前 LocalizationNode* 的 callable
    * @param get_map_paths   返回 {map_folder, map_name} 的 callable
-   * @param max_backups     保留多少个历史 backup（默认 5）
+   * @param max_backups     保留多少个历史 backup（默认 50）
    */
   MapPersistenceManager(
       rclcpp::Node* node,
       std::function<localization::LocalizationNode*()> get_loc_node,
       std::function<std::pair<std::string, std::string>()> get_map_paths,
-      int max_backups = 5)
+      int max_backups = 50)
       : node_(node),
         get_loc_node_(std::move(get_loc_node)),
         get_map_paths_(std::move(get_map_paths)),
@@ -77,7 +79,8 @@ class MapPersistenceManager {
    *        （即在 FinishAllTrajectories() 之前调用）。
    * @return true 表示完整保存成功（含 commit + activate + 历史轮换）
    */
-  bool SaveNow() {
+  bool SaveNow(std::string* out_map_path = nullptr,
+               std::string* out_backup_ts = nullptr) {
     auto* loc = get_loc_node_();
     if (!loc) {
       RCLCPP_ERROR(node_->get_logger(),
@@ -91,7 +94,7 @@ class MapPersistenceManager {
       return false;
     }
 
-    const std::string target_dir = map_folder + "/" + map_name;
+    const std::string target_dir = map_folder + "/" + map_name + "/slam";  // 分层布局：底图在 slam/ 子目录
     AtomicDirSwap swap(target_dir, max_backups_);
 
     // Step 1: 准备 staging
@@ -101,6 +104,9 @@ class MapPersistenceManager {
                    "[MapPersistenceManager] BeginStage failed");
       return false;
     }
+
+    // 分层布局后底图 target=<map>/slam/、资产 <map>/assets/ 物理隔离，
+    //   save_map 天然不碰资产 → 原 PreserveMapAssets 已移除（无需把 map_assets.json 拷进 staging）。
 
     // Step 2: 写文件到 staging
     const std::string pbstream_in_staging = staging + "/map.pbstream";
@@ -122,6 +128,9 @@ class MapPersistenceManager {
       return false;
     }
 
+    if (out_map_path) *out_map_path = target_dir;
+    if (out_backup_ts) *out_backup_ts = LatestBackupTs(target_dir);
+
     RCLCPP_INFO(node_->get_logger(),
                 "[MapPersistenceManager] SaveNow completed for target: %s",
                 target_dir.c_str());
@@ -129,6 +138,15 @@ class MapPersistenceManager {
   }
 
  private:
+  // 取本次保存后最新历史 backup 的时间戳（SaveMap.srv 返回 backup_ts 用）。
+  std::string LatestBackupTs(const std::string& target_dir) {
+    const auto backups = AtomicDirSwap::ListHistoricalBackups(target_dir);
+    if (backups.empty()) return "";
+    const std::string& newest = backups.front();
+    const auto pos = newest.rfind("backup.");
+    return (pos == std::string::npos) ? "" : newest.substr(pos + 7);
+  }
+
   bool SavePbstream(localization::LocalizationNode* loc,
                     const std::string& filename) {
     RCLCPP_INFO(node_->get_logger(),

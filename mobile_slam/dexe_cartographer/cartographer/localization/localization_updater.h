@@ -57,6 +57,8 @@ public:
   bool SetInitialPose(const transform::Rigid3d &initial_pose);
   void TriggerGlobalRelocalization();
   std::optional<LocalizationState> GetLocalizationState();
+  // ScanMatch 后的地图重合率 [0,1]，作为定位置信度 score（来自 ConsistencyChecker）
+  double GetLocalizationConfidence();
 
   int AddTrajectoryBuilder(
       const std::set<SensorId> &expected_sensor_ids,

@@ -42,7 +42,7 @@ class TrajectoryDataCollector(Node):
         
         # Declare parameters
         self.declare_parameter('loc_pose_topic', '/loc_pose')
-        self.declare_parameter('filtered_odom_topic', '/odometry/filtered')
+        self.declare_parameter('filtered_odom_topic', '/robot_localization/odometry/filtered')
         self.declare_parameter('timeout_sec', 300.0)  # Default: 5 minutes
         
         # Get parameters

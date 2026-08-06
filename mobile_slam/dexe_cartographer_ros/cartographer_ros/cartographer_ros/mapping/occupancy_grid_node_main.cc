@@ -107,12 +107,12 @@ Node::Node(const double resolution, const double publish_period_sec)
   callback_group_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
   callback_group_executor_->add_callback_group(callback_group_, this->get_node_base_interface());
   client_ = this->create_client<cartographer_ros_msgs::srv::SubmapQuery>(
-        kSubmapQueryServiceName,
+        "/mapping_node/submap_query",
         rmw_qos_profile_services_default,
         callback_group_
         );
   submap_list_subscriber_ = this->create_subscription<cartographer_ros_msgs::msg::SubmapList>(
-      kSubmapListTopic, rclcpp::QoS(10),
+      "/mapping_node/submap_list", rclcpp::QoS(10),
       std::bind(&Node::HandleSubmapList, this, std::placeholders::_1));
   occupancy_grid_publisher_ = this->create_publisher<::nav_msgs::msg::OccupancyGrid>(
       kOccupancyGridTopic, rclcpp::QoS(10).transient_local());
@@ -176,30 +176,29 @@ void Node::HandleSubmapList(
 {
   absl::MutexLock locker(&mutex_);
 
-  // 1. 检查submap_list话题是否被订阅
-  // We do not do any work if nobody listens.
-  if (this->count_publishers(kSubmapListTopic) == 0){
-    return;
-  }
+  // The callback itself proves that a message arrived from the configured
+  // /mapping_node/submap_list subscription. Do not repeat graph discovery with
+  // the legacy relative name "submap_list", which resolves to /submap_list for
+  // this node and would discard every valid mapping-node update.
 
-  // 2. 获取所有的submap id，存入submap_ids_to_delete，嘉定所有的都不需要展示
+  // 1. 获取所有的submap id，存入submap_ids_to_delete，假定所有的都不需要展示
   // Keep track of submap IDs that don't appear in the message anymore.
   std::set<SubmapId> submap_ids_to_delete;
   for (const auto& pair : submap_slices_) {
     submap_ids_to_delete.insert(pair.first);
   }
 
-  // 3. 遍历submap_list中的所有submap
+  // 2. 遍历submap_list中的所有submap
   for (const auto& submap_msg : msg->submap) {
     const SubmapId id{submap_msg.trajectory_id, submap_msg.submap_index};
-    // 3.1 处理过的submap，从submap_ids_to_delete中删除，即该id需要展示
+    // 2.1 处理过的submap，从submap_ids_to_delete中删除，即该id需要展示
     submap_ids_to_delete.erase(id);
-    // 3.2 （当submap是frozen，且不需要展示frozen_submaps） ||（当submap不是frozen，且不需要展示unfrozen_submaps时），跳过
+    // 2.2 （当submap是frozen，且不需要展示frozen_submaps） ||（当submap不是frozen，且不需要展示unfrozen_submaps时），跳过
     if ((submap_msg.is_frozen && !FLAGS_include_frozen_submaps) ||
         (!submap_msg.is_frozen && !FLAGS_include_unfrozen_submaps)) {
       continue;
     }
-    // 3.3 从submap_slices_中获取要处理的submap_slice
+    // 2.3 从submap_slices_中获取要处理的submap_slice
     SubmapSlice& submap_slice = submap_slices_[id];
     submap_slice.pose = ToRigid3d(submap_msg.pose);
     submap_slice.metadata_version = submap_msg.submap_version;
@@ -207,7 +206,7 @@ void Node::HandleSubmapList(
         submap_slice.version == submap_msg.submap_version) {
       continue;
     }
-    // 3.4 获取submap的texture
+    // 2.4 获取submap的texture
     auto fetched_textures = cartographer_ros::FetchSubmapTextures(
           id, client_, callback_group_executor_,
           std::chrono::milliseconds(int(publish_period_sec_ * 1000)));
@@ -220,21 +219,21 @@ void Node::HandleSubmapList(
     // We use the first texture only. By convention this is the highest
     // resolution texture and that is the one we want to use to construct the
     // map for ROS.
-  // 3.5 对submap_slice进行赋值
+    // 2.5 对submap_slice进行赋值
     const auto fetched_texture = fetched_textures->textures.begin();
     submap_slice.width = fetched_texture->width;
     submap_slice.height = fetched_texture->height;
     submap_slice.slice_pose = fetched_texture->slice_pose;
     submap_slice.resolution = fetched_texture->resolution;
     submap_slice.cairo_data.clear();
-    // 3.6 将submap的texture画到submap_slice上
+    // 2.6 将submap的texture画到submap_slice上
     submap_slice.surface = ::cartographer::io::DrawTexture(
         fetched_texture->pixels.intensity, fetched_texture->pixels.alpha,
         fetched_texture->width, fetched_texture->height,
         &submap_slice.cairo_data);
   }
 
-  // 4. 删除已经不需要展示的submap
+  // 3. 删除已经不需要展示的submap
   // Delete all submaps that didn't appear in the message.
   for (const auto& id : submap_ids_to_delete) {
     submap_slices_.erase(id);

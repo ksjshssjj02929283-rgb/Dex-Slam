@@ -19,6 +19,7 @@
 
 #include <errno.h>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #ifndef WIN32
 #include <sys/resource.h>
@@ -146,11 +147,29 @@ void RunLocOfflineNode(const LocalizationUpdaterFactory& localization_updater_fa
                        tf_buffer, loc_offline_node);
   
   // 加载地图 - 两步加载：先LoadState，再LoadMapData
-  LOG(INFO) << "Loading map from: " << FLAGS_map_filestream;
-  node.LoadState(FLAGS_map_filestream, FLAGS_load_frozen_state);
+  // 分层布局兼容：传入路径不存在时，在 slam/ 子目录与旧扁平布局间自动切换
+  std::string map_filestream = FLAGS_map_filestream;
+  if (!std::ifstream(map_filestream).good()) {
+    const std::string flat_suffix = "/map.pbstream";
+    const std::string layered_suffix = "/slam/map.pbstream";
+    std::string candidate = map_filestream;
+    size_t pos = candidate.rfind(layered_suffix);
+    if (pos != std::string::npos) {
+      candidate.replace(pos, layered_suffix.size(), flat_suffix);
+    } else if ((pos = candidate.rfind(flat_suffix)) != std::string::npos) {
+      candidate.replace(pos, flat_suffix.size(), layered_suffix);
+    }
+    if (candidate != map_filestream && std::ifstream(candidate).good()) {
+      LOG(WARNING) << "Map not found at '" << map_filestream << "', using '"
+                   << candidate << "'";
+      map_filestream = candidate;
+    }
+  }
+  LOG(INFO) << "Loading map from: " << map_filestream;
+  node.LoadState(map_filestream, FLAGS_load_frozen_state);
   
   // 构建map.yaml路径并加载地图数据（关键步骤！）
-  std::string map_yaml_path = FLAGS_map_filestream;
+  std::string map_yaml_path = map_filestream;
   size_t pos = map_yaml_path.rfind("/map.pbstream");
   if (pos != std::string::npos) {
     map_yaml_path.replace(pos, std::string("/map.pbstream").length(), "/map.yaml");

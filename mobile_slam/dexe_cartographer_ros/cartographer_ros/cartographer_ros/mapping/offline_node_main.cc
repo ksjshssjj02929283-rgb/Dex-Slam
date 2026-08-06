@@ -35,8 +35,10 @@ int main(int argc, char** argv) {
     return ::cartographer::mapping::CreateMapBuilder(map_builder_options);
   };
   // noted by hz: 注册离线建图的节点
+  // 统一域名：离线建图节点名 = "mapping_node"（与在线建图一致）
+  // → 话题/服务全部落 /mapping_node/ 域，rviz 配置 / occupancy_grid / 下游消费方在线离线通用。
   rclcpp::Node::SharedPtr cartographer_offline_node =
-      rclcpp::Node::make_shared("cartographer_offline_node");
+      rclcpp::Node::make_shared("mapping_node");
   cartographer_ros::RunOfflineNode(map_builder_factory, cartographer_offline_node);
 
   rclcpp::shutdown();

@@ -17,7 +17,7 @@
 
 <package format="3">
   <name>cartographer_ros</name>
-  <version>0.4.5</version>
+  <version>0.4.6</version>
   <description>
     Cartographer is a system that provides real-time simultaneous localization
     and mapping (SLAM) in 2D and 3D across multiple platforms and sensor
@@ -67,6 +67,7 @@
   <depend>nav_interfaces</depend>
 
   <exec_depend>launch</exec_depend>
+  <exec_depend>ros2cli</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
 
   <export>

@@ -134,22 +134,17 @@ absl::optional<ProcessedSensorData> DataPreprocessor::ProcessSingleSensorData(
   processed_data.undistorted_range_data = undistort_range->data;
   
   if (options_.enable_feature_detection() && laser_perception != nullptr) {
-    // 特征检测
-    sensor::SyncPointCloudWithOdom sync_point_cloud;
-    sync_point_cloud.stamp = undistort_range->time;
-    // sync_point_cloud.odom = curr_odom_data_;  // 注意：这里需要从外部获取当前里程计数据
-    
+    // 特征检测：直接使用去畸变后的点云
     sensor::PointCloudWithOrigin cloud;
     cloud.origin = undistort_range->data.origin.cast<double>();
     for (size_t i = 0; i < undistort_range->data.returns.points().size(); i++) {
       cloud.sync_points_base_link.push_back(undistort_range->data.returns.points()[i].position);
     }
     cloud.intensities = undistort_range->data.returns.intensities();
-    sync_point_cloud.sync_point_clouds.push_back(cloud);
-    
+
     // 单独进行特征检测
     std::vector<laser_perception::FeatureMsgWithOrigin> feature_data_origin = 
-        laser_perception->laserUpdate(sync_point_cloud);
+        laser_perception->laserUpdate(cloud);
     processed_data.feature_data = GetFeatureData(sync_time, feature_data_origin);
     
     // 获取处理后的点云数据
@@ -268,33 +263,7 @@ void DataPreprocessor::CreateLaserPerception(const std::string& sensor_id) {
   
   // 从配置选项创建LaserPerceptionOptions
   laser_perception::proto::LaserPerceptionOptions laser_options;
-  laser_options.set_predict_rec(options_.laser_perception_options().predict_rec());
-  laser_options.set_reflect_rec(options_.laser_perception_options().reflect_rec());
-  laser_options.set_shape_rec(options_.laser_perception_options().shape_rec());
-  laser_options.set_line_rec(options_.laser_perception_options().line_rec());
-  laser_options.set_angle_rec(options_.laser_perception_options().angle_rec());
-  laser_options.set_intensity_threshold(options_.laser_perception_options().intensity_threshold());
-  laser_options.set_connect_threshold(options_.laser_perception_options().connect_threshold());
   laser_options.set_min_cluster_points(options_.laser_perception_options().min_cluster_points());
-  laser_options.set_search_distance(options_.laser_perception_options().search_distance());
-  laser_options.set_max_dis_error(options_.laser_perception_options().max_dis_error());
-  laser_options.set_max_ang_error(options_.laser_perception_options().max_ang_error());
-  laser_options.set_start_rec_dis(options_.laser_perception_options().start_rec_dis());
-  laser_options.set_target_file(options_.laser_perception_options().target_file());
-  laser_options.set_model_file(options_.laser_perception_options().model_file());
-  laser_options.set_min_select_points(options_.laser_perception_options().min_select_points());
-  laser_options.set_reflector_error(options_.laser_perception_options().reflector_error());
-  laser_options.set_reflector_radius(options_.laser_perception_options().reflector_radius());
-  laser_options.set_min_line_length(options_.laser_perception_options().min_line_length());
-  laser_options.set_shape_match_score(options_.laser_perception_options().shape_match_score());
-  laser_options.set_shape_match_close_degree(options_.laser_perception_options().shape_match_close_degree());
-  laser_options.set_shape_dis_to_robot_center(options_.laser_perception_options().shape_dis_to_robot_center());
-  laser_options.set_intensity_max_threshold(options_.laser_perception_options().intensity_max_threshold());
-  laser_options.set_laser_intensity_type(options_.laser_perception_options().laser_intensity_type());
-  laser_options.set_intensity_max_range_threshold(options_.laser_perception_options().intensity_max_range_threshold());
-  laser_options.set_intensity_min_range_threshold(options_.laser_perception_options().intensity_min_range_threshold());
-  laser_options.set_reflector_error_range(options_.laser_perception_options().reflector_error_range());
-  laser_options.set_angle_increment(options_.laser_perception_options().angle_increment());
   
   laser_perceptions_[sensor_id] = std::make_unique<laser_perception::LaserPerception>(laser_options);
   LOG(INFO) << "DataPreprocessor: Created laser perception for sensor: " << sensor_id;
@@ -315,10 +284,6 @@ sensor::FeatureData DataPreprocessor::GetFeatureData(
         Eigen::Vector2d begin = origin * it.line.first.cast<double>().head<2>();
         Eigen::Vector2d end = origin * it.line.second.cast<double>().head<2>();
         res.line_data.push_back(sensor::LineData(begin, end));
-      } else if (it.target_name == "reflector") {
-        Eigen::Vector2d reflector = origin * Eigen::Vector2d{it.x, it.y};
-        res.reflector_data.push_back(
-          sensor::LandmarkPointData{time, transform::Rigid3d(), reflector});
       }
     }
   }

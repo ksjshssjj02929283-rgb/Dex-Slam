@@ -184,6 +184,12 @@ install(DIRECTORY launch urdf configuration_files rviz
 
 # 安装脚本
 install(PROGRAMS
+  scripts/slam_2d_interface_test.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME slam_2d_interface_test
+)
+
+install(PROGRAMS
   scripts/tf_remove_frames.py
   scripts/evaluate/collect_trajectory_data.py
   scripts/evaluate/evaluate_static_localization.py

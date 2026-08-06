@@ -68,7 +68,7 @@ def generate_launch_description():
     offline_node = Node(
         package='cartographer_ros',
         executable='cartographer_offline_node',
-        name='cartographer_offline_node',
+        name='mapping_node',
         output='screen',
         parameters=[{'use_sim_time': True}],
         arguments=[

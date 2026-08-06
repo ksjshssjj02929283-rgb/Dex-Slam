@@ -230,14 +230,22 @@ void LocalMapUpdater2D::TriggerAsyncRebuild()
       std::launch::async,
       [this, source_snapshot, origin_snapshot]() {
         common::TicToc t;
-        auto result = BuildLocalSubmap(source_snapshot, origin_snapshot);
+        // source_snapshot is only a shared_ptr copy, not an immutable map
+        // snapshot. UpdateDynamicMap() mutates the same Submap2D under
+        // data_mutex_, so rebuilding without the lock races with grid/cloud/
+        // line-map insertion and can intermittently crash.
+        std::shared_ptr<mapping::Submap2D> result;
+        {
+          std::lock_guard<std::mutex> lock(data_mutex_);
+          result = BuildLocalSubmap(source_snapshot, origin_snapshot);
+        }
         LOG(INFO) << "Async BuildLocalSubmap done in " << t.toc() << " ms";
         return result;
       });
 }
 
 // ============================================================
-// BuildLocalSubmap：纯计算，无锁，可在后台线程安全调用
+// BuildLocalSubmap：纯计算；调用方必须保证 source_submap 在构建期间不被写入
 // ============================================================
 
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(

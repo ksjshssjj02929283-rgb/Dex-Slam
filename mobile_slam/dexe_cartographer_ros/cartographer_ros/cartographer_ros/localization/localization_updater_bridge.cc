@@ -166,6 +166,11 @@ LocalizationUpdaterBridge::GetLocalizationState() const
   return localization_updater_->GetLocalizationState();
 }
 
+double LocalizationUpdaterBridge::GetLocalizationConfidence() const
+{
+  return localization_updater_->GetLocalizationConfidence();
+}
+
 bool LocalizationUpdaterBridge::ResetMapOrigin(
     const std::string& map_base_filename,
     const std::string& pbstream_filename,

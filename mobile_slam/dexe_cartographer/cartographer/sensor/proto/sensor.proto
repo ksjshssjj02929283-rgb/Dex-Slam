@@ -154,13 +154,6 @@ message PointCloudWithOrigin
   repeated float intensities = 4;
 }
 
-message SyncPointCloudWithOdom
-{
-  int64 stamp = 1;
-  sensor.proto.OdometryData odom = 2;
-  repeated sensor.proto.PointCloudWithOrigin sync_point_clouds = 3;
-}
-
 message SyncRangeData
 {
   //transform.proto.Vector3d origin = 1;

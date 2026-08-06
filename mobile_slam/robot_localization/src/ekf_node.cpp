@@ -39,8 +39,14 @@
 #include <robot_localization/ros_filter_types.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "realtime_scheduling.hpp"
+
 int main(int argc, char ** argv)
 {
+  if (!robot_localization::ConfigureRealtimeScheduling()) {
+    return EXIT_FAILURE;
+  }
+
   rclcpp::init(argc, argv);
   rclcpp::NodeOptions options;
   options.arguments({"ekf_filter_node"});
