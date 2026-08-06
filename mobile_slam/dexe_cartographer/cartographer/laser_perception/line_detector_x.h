@@ -10,8 +10,6 @@
 
 #include "cartographer/laser_perception/point_set.h"
 #include "cartographer/laser_perception/segment.h"
-#include "cartographer/laser_perception/config.h"
-#include "cartographer/laser_perception/visualization.h"
 
 namespace cartographer
 {
@@ -47,8 +45,6 @@ typedef struct _RangeData
 //参数，从launch文件中读入
 typedef struct _Params
 {
-  double angle_increment;//角度增量
-  double angle_start;//初始角度
   double least_thresh;//正交拟合阈值
   double min_line_length;//拟合线段最短距离
   double predict_distance;//真实点与与预测点之间的距离阈值
@@ -148,8 +144,6 @@ public:
   std::list<Segment> detectLines(const std::list<Point> input_points);
 
   //设置参数
-  void set_angle_increment(double);
-  void set_angle_start(double);
   void set_least_threshold(double);
   void set_min_line_length(double);
   void set_predict_distance(double);

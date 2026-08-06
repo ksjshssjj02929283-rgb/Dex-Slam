@@ -163,6 +163,16 @@ ament_target_dependencies(
   rclcpp
 )
 
+# UKF/EKF receive file capabilities after installation. Secure execution
+# cannot rely on LD_LIBRARY_PATH, so keep this package's direct libraries
+# discoverable relative to the installed ELF locations.
+set_target_properties(${library_name} PROPERTIES
+  INSTALL_RPATH "$ORIGIN"
+)
+set_target_properties(ekf_node ukf_node PROPERTIES
+  INSTALL_RPATH "$ORIGIN/.."
+)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_cppcheck REQUIRED)

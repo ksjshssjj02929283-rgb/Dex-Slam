@@ -144,21 +144,21 @@ Node::Node(
   // Step: 1 注册发布器
   submap_list_publisher_ =
       node_->create_publisher<::cartographer_ros_msgs::msg::SubmapList>(
-          kSubmapListTopic, kLatestOnlyPublisherQueueSize);
+          std::string("~/") + kSubmapListTopic, kLatestOnlyPublisherQueueSize);
   trajectory_node_list_publisher_ =
       node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
-          kTrajectoryNodeListTopic, kLatestOnlyPublisherQueueSize);
+          std::string("~/") + kTrajectoryNodeListTopic, kLatestOnlyPublisherQueueSize);
   landmark_poses_list_publisher_ =
       node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
-          kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
+          std::string("~/") + kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
   constraint_list_publisher_ =
       node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
-          kConstraintListTopic, kLatestOnlyPublisherQueueSize);
+          std::string("~/") + kConstraintListTopic, kLatestOnlyPublisherQueueSize);
   // 发布跟踪的位姿
   if (node_options_.publish_tracked_pose) { // node_options里面默认是false，如果想要改成true，需要在lua里设置
     tracked_pose_publisher_ =
         node_->create_publisher<::geometry_msgs::msg::PoseStamped>(
-            kTrackedPoseTopic, kLatestOnlyPublisherQueueSize);
+            std::string("~/") + kTrackedPoseTopic, kLatestOnlyPublisherQueueSize);
   }
   // tracked_path_publisher_ =
   //     node_->create_publisher<::visualization_msgs::msg::MarkerArray>(
@@ -173,44 +173,44 @@ Node::Node(
 
   scan_matched_point_cloud_publisher_ =
       node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-        kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
+        std::string("~/") + kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
   local_map_cloud_publisher_ =
       node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-          kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
+          std::string("~/") + kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
   matched_feature_publisher_ =
       node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-          kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
+          std::string("~/") + kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
   local_feature_map_publisher_ =
       node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-          kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+          std::string("~/") + kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
 
   // Step: 2 注册服务
   submap_query_server_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
-      kSubmapQueryServiceName,
+      std::string("~/") + kSubmapQueryServiceName,
       std::bind(
           &Node::HandleSubmapQuery, this, std::placeholders::_1, std::placeholders::_2));
   trajectory_query_server = node_->create_service<cartographer_ros_msgs::srv::TrajectoryQuery>(
-      kTrajectoryQueryServiceName,
+      std::string("~/") + kTrajectoryQueryServiceName,
       std::bind(
           &Node::HandleTrajectoryQuery, this, std::placeholders::_1, std::placeholders::_2));
   start_trajectory_server_ = node_->create_service<cartographer_ros_msgs::srv::StartTrajectory>(
-      kStartTrajectoryServiceName,
+      std::string("~/") + kStartTrajectoryServiceName,
       std::bind(
           &Node::HandleStartTrajectory, this, std::placeholders::_1, std::placeholders::_2));
   finish_trajectory_server_ = node_->create_service<cartographer_ros_msgs::srv::FinishTrajectory>(
-      kFinishTrajectoryServiceName,
+      std::string("~/") + kFinishTrajectoryServiceName,
       std::bind(
           &Node::HandleFinishTrajectory, this, std::placeholders::_1, std::placeholders::_2));
   write_state_server_ = node_->create_service<cartographer_ros_msgs::srv::WriteState>(
-      kWriteStateServiceName,
+      std::string("~/") + kWriteStateServiceName,
       std::bind(
           &Node::HandleWriteState, this, std::placeholders::_1, std::placeholders::_2));
   get_trajectory_states_server_ = node_->create_service<cartographer_ros_msgs::srv::GetTrajectoryStates>(
-      kGetTrajectoryStatesServiceName,
+      std::string("~/") + kGetTrajectoryStatesServiceName,
       std::bind(
           &Node::HandleGetTrajectoryStates, this, std::placeholders::_1, std::placeholders::_2));
   read_metrics_server_ = node_->create_service<cartographer_ros_msgs::srv::ReadMetrics>(
-      kReadMetricsServiceName,
+      std::string("~/") + kReadMetricsServiceName,
       std::bind(
           &Node::HandleReadMetrics, this, std::placeholders::_1, std::placeholders::_2));
 

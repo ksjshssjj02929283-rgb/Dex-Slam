@@ -247,8 +247,8 @@ params/
 ├── ukf.yaml                        # UKF标准模板
 ├── navsat_transform.yaml           # GPS转换模板
 ├── dual_ekf_navsat_example.yaml   # ⭐ 完整双EKF+GPS示例
-├── dcm_ekf.yaml                    # 自定义EKF示例
-└── dcm_ukf.yaml                    # 自定义UKF示例
+├── dexe_ekf.yaml                    # 自定义EKF示例
+└── dexe_ukf.yaml                    # 自定义UKF示例
 ```
 
 **使用建议**:

@@ -1,8 +1,0 @@
-# Request
-string timestamp           # 形如 "20260522-153012"；空字符串=最新可用 backup
----
-# Response
-bool success
-string message             # 失败时给出可用 timestamp 列表（用 ", " 拼接）
-string restored_from       # 实际回退到的 backup 完整路径
-string archived_current_as # 当前 target 被归档为哪个 backup 路径（保留原内容）

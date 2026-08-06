@@ -202,6 +202,11 @@ std::optional<LocalizationState> LocalizationUpdater::GetLocalizationState()
   return trajectory_builders_[last_trajectory_id]->GetLocalizationState();
 }
 
+double LocalizationUpdater::GetLocalizationConfidence()
+{
+  return pose_estimator_2d_ ? pose_estimator_2d_->GetLocalizationConfidence() : 0.0;
+}
+
 
 /**
  * @brief 根据传感器类型id和配置，创建LocalTrajectoryBuilder和CreateGlobalTrajectoryBuilder

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-DCM localization launch file with configurable filter type.
+dexe localization launch file with configurable filter type.
 Supports EKF, UKF, and ESKF filters.
 Includes Cartographer 2D localization.
 """
@@ -35,7 +35,6 @@ def launch_setup(context, *args, **kwargs):
     # Get launch configuration values
     filter_type = LaunchConfiguration('filter_type').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time')
-    
     # Determine executable and params file based on filter type
     if filter_type.lower() == 'ekf':
         executable = 'ekf_node'
@@ -65,8 +64,9 @@ def launch_setup(context, *args, **kwargs):
             {'use_sim_time': use_sim_time}
         ],
         remappings=[
-            # Add any topic remappings here if needed
-            # ('odometry/filtered', '/odometry/local'),
+            # 输出 topic 收敛到节点私有域 /robot_localization/（EKF 状态估计输出）
+            ('odometry/filtered', '~/odometry/filtered'),
+            ('accel/filtered', '~/accel/filtered'),
         ]
     )
     
@@ -87,9 +87,9 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
-        description='Use simulation time'
+        description='Use simulation clock; keep false on the physical robot'
     )
-    
+
     return LaunchDescription([
         filter_type_arg,
         use_sim_time_arg,

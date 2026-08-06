@@ -1,10 +1,10 @@
-### DCM UKF config file ###
+### dexe UKF config file ###
 robot_localization:
     ros__parameters:
 # The frequency, in Hz, at which the filter will output a position estimate. Note that the filter will not begin
 # computation until it receives at least one message from one of the inputs. It will then run continuously at the
 # frequency specified here, regardless of whether it receives more measurements. Defaults to 30 if unspecified.
-        frequency: 50.0
+        frequency: 25.0
 
 # The period, in seconds, after which we consider a sensor to have timed out. In this event, we carry out a predict
 # cycle on the EKF without correcting it. This parameter can be thought of as the minimum frequency with which the
@@ -51,7 +51,7 @@ robot_localization:
 
 # Whether to use lagged data smoothing
         smooth_lagged_data: true
-        history_length: 0.5
+        history_length: 2.0
         # predict_to_current_time: true
 
 # REP-105 (http://www.ros.org/reps/rep-0105.html) specifies four principal coordinate frames: base_link, odom, map, and
@@ -129,7 +129,7 @@ robot_localization:
 # ============================
 # Localization Pose Input Configuration
 # ============================
-        pose0: /loc_pose
+        pose0: /localization_node/loc_pose
         pose0_config: [true,  true,  false,
                        false, false, true,
                        false, false, false,

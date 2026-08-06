@@ -84,6 +84,13 @@ struct GlobalRelocInfo {
   double t_ceres_ms = 0.0;
   double t_validate_ms = 0.0;
   double t_total_ms = 0.0;
+  // --- profiling breakdown (M1, 2026-06-25): localize the untimed gap ---
+  // 5 段计时之和远小于 t_total，缺口落在这些未计时区，逐一拆开定位真瓶颈。
+  double t_setup_ms = 0.0;           // t_total_start -> t_bbs：BBS 前的准备区（检查 + 匹配器构造），缺口主嫌疑
+  double t_fcsm_build_ms = 0.0;      // 原版 FastCorrelativeScanMatcher2D 构造（建金字塔，不读 pbstream 固化）
+  double t_validate_fcsm_ms = 0.0;   // 验证里的原版 FCSM Match（重复全局匹配）
+  double t_validate_rtcsm_ms = 0.0;  // 验证里的 RTCSM Match
+  int call_index = 0;                // 1 = 进程启动后首次（冷启动）重定位，用于区分一次性开销
   bool matched = false;
   float bbs_score = 0.0f;
   transform::Rigid2d pose_estimate = transform::Rigid2d::Identity();
@@ -149,6 +156,12 @@ class PoseInitializer {
                                const sensor::PointCloud& cloud, float min_score,
                                float* score, transform::Rigid2d* pose);
 
+  // 轻量位姿打分（M2, DEC-002）：对单个位姿（不做搜索）计算扫描点的平均占据概率，
+  // 口径同 RTCSM ComputeCandidateScore，用于替代 validate 里的全局重匹配。
+  float ScorePoseAgainstGrid(const transform::Rigid2d& pose,
+                             const sensor::PointCloud& point_cloud,
+                             const mapping::Grid2D& grid) const;
+
 private:
   const proto::PoseInitializerOptions2D options_;
 
@@ -156,11 +169,15 @@ private:
 
   std::shared_ptr<transform::Rigid2d> initial_pose_;
   std::shared_ptr<transform::Rigid2d> global_pose_estimate_;
+  // 主链路 BBS 全局解（校验门②复用：加速 BBS 确定性，重跑会返回同一位姿，故存下来直接比 delta，
+  // 不重复 ~490ms 全局搜索；DEC-003）。
+  transform::Rigid2d last_global_bbs_pose_ = transform::Rigid2d::Identity();
   bool need_apply_initial_pose_ = false;
   bool need_global_relocalization_ = false;  // 标识需要进行全局重定位
 
   // 最近一次 GlobalRelocalzationOnce 的耗时与结果；经 getter 读取。
   GlobalRelocInfo last_global_reloc_info_;
+  int global_reloc_call_count_ = 0;  // M1 profiling：统计进程内全局重定位调用次数（区分冷/稳态）
 
   bool working_ = false;
 

@@ -133,79 +133,76 @@ LocalizationNode::LocalizationNode(
 
   // 发布者  
   submap_list_publisher_ = node_->create_publisher<cartographer_ros_msgs::msg::SubmapList>(
-      kSubmapListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kSubmapListTopic, kLatestOnlyPublisherQueueSize);
   trajectory_node_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kTrajectoryNodeListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kTrajectoryNodeListTopic, kLatestOnlyPublisherQueueSize);
   landmark_poses_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kLandmarkPosesListTopic, kLatestOnlyPublisherQueueSize);
   constraint_list_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kConstraintListTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kConstraintListTopic, kLatestOnlyPublisherQueueSize);
 
   // 发布跟踪的位姿
   if (node_options_.publish_tracked_pose) {
     loc_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        kLocaliztionPoseTopic, rclcpp::SystemDefaultsQoS());
+        std::string("~/") + kLocaliztionPoseTopic, rclcpp::SystemDefaultsQoS());
     tracked_path_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
-        kTrackedPathTopic, kLatestOnlyPublisherQueueSize);
+        std::string("~/") + kTrackedPathTopic, kLatestOnlyPublisherQueueSize);
   }
 
   global_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kGlobalPointCloudTopic, qos_latched);
+      std::string("~/") + kGlobalPointCloudTopic, qos_latched);
+  // 全局特征图只在启动时发布一次，latched 让晚加入的订阅者（rviz）也能收到
   global_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kGlobalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kGlobalFeatureMapTopic, qos_latched);
   local_map_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
   local_feature_map_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kLocalFeatureMapTopic, kLatestOnlyPublisherQueueSize);
   matched_feature_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
-      kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
   scan_matched_point_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-      kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
+      std::string("~/") + kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
   localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
-      kLocalizationStateTopic, kLatestOnlyPublisherQueueSize);
-  set_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-      "/robot_localization/set_pose", rclcpp::QoS(1));
+      "~/state", kLatestOnlyPublisherQueueSize);
+  // Cross-node contract: localization_node pushes the accepted pose to the
+  // robot_localization filter through its fixed absolute topic.
+  set_pose_publisher_ =
+      node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+          "/robot_localization/set_pose", rclcpp::QoS(1));
 
   // 服务  
   submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
-      kSubmapQueryServiceName,
+      std::string("~/") + kSubmapQueryServiceName,
       std::bind(&LocalizationNode::HandleSubmapQuery, this, 
                 std::placeholders::_1, std::placeholders::_2));
 
   trajectory_query_service_ = node_->create_service<cartographer_ros_msgs::srv::TrajectoryQuery>(
-      kTrajectoryQueryServiceName,
+      std::string("~/") + kTrajectoryQueryServiceName,
       std::bind(&LocalizationNode::HandleTrajectoryQuery, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   start_trajectory_service_ = node_->create_service<cartographer_ros_msgs::srv::StartTrajectory>(
-      kStartTrajectoryServiceName,
+      std::string("~/") + kStartTrajectoryServiceName,
       std::bind(&LocalizationNode::HandleStartTrajectory, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   finish_trajectory_service_ = node_->create_service<cartographer_ros_msgs::srv::FinishTrajectory>(
-      kFinishTrajectoryServiceName,
+      std::string("~/") + kFinishTrajectoryServiceName,
       std::bind(&LocalizationNode::HandleFinishTrajectory, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   write_state_service_ = node_->create_service<cartographer_ros_msgs::srv::WriteState>(
-      kWriteStateServiceName,
+      std::string("~/") + kWriteStateServiceName,
       std::bind(&LocalizationNode::HandleWriteState, this,
                 std::placeholders::_1, std::placeholders::_2));
 
   get_trajectory_states_service_ = node_->create_service<cartographer_ros_msgs::srv::GetTrajectoryStates>(
-      kGetTrajectoryStatesServiceName,
+      std::string("~/") + kGetTrajectoryStatesServiceName,
       std::bind(&LocalizationNode::HandleGetTrajectoryStates, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  relocalization_service_ = node_->create_service<nav_interfaces::srv::SetPose>(
-      kHandleRelocalizationServiceName,
-      std::bind(&LocalizationNode::HandleRelocalization, this,
-                std::placeholders::_1, std::placeholders::_2));
-
-  set_map_changed_service_ = node_->create_service<std_srvs::srv::Trigger>(
-      kHandleSetMapChangedServiceName,
-      std::bind(&LocalizationNode::HandleSetMapChanged, this,
-                std::placeholders::_1, std::placeholders::_2));
+  // 注：~/relocalization（局部重定位，SetPose）为控制类服务，已按门面+引擎原则
+  // 移到外围层 LocalizationManagerNode 注册；核心仅暴露 Relocalize() 方法。
 
   // 定时器（Wall timers 与 regular timer）
   using namespace std::chrono_literals;
@@ -305,6 +302,10 @@ void LocalizationNode::PublishLocalizationState()
 {
   const auto loc_state = localization_updater_bridge_.GetLocalizationState();
   nav_interfaces::msg::LocalizationState loc_state_msg;
+
+  // ScanMatch 后的地图重合率作为定位置信度 score（来自 ConsistencyChecker）
+  loc_state_msg.score = static_cast<float>(
+      localization_updater_bridge_.GetLocalizationConfidence());
 
   if (!loc_state.has_value()) {
     // 未初始化或不可用时可选择填充一个默认状态
@@ -1050,26 +1051,25 @@ void LocalizationNode::HandleWriteState(
   }
 }
 
-void LocalizationNode::HandleRelocalization(
-    const std::shared_ptr<nav_interfaces::srv::SetPose::Request> request,
-    std::shared_ptr<nav_interfaces::srv::SetPose::Response> response)
+// 引擎能力方法：局部重定位——将定位滤波器初始位姿设为
+// 指定位姿（须在 map_frame）。控制类 ROS 服务 ~/relocalization 由外围层注册并转调本方法。
+bool LocalizationNode::Relocalize(
+    const geometry_msgs::msg::PoseWithCovarianceStamped& pose)
 {
-  if (request->pose.header.frame_id == "") {
-    // This should be removed at some point
+  if (pose.header.frame_id == "") {
     RCLCPP_WARN(node_->get_logger(),
                 "Received initial pose with empty frame_id. Using default frame_id = map.");
   }
   // We only accept initial pose estimates in the global frame, #5148.
-  else if (StripSlash(request->pose.header.frame_id) != node_options_.map_frame) {
+  else if (StripSlash(pose.header.frame_id) != node_options_.map_frame) {
     RCLCPP_WARN(node_->get_logger(),
                 "Ignoring initial pose in frame \"%s\"; initial poses must be in the global frame, \"%s\"",
-                StripSlash(request->pose.header.frame_id).c_str(),
+                StripSlash(pose.header.frame_id).c_str(),
                 node_options_.map_frame.c_str());
-    response->success = false;
-    return;
+    return false;
   }
 
-  const carto::transform::Rigid3d initial_pose = ToRigid3d(request->pose.pose.pose);
+  const carto::transform::Rigid3d initial_pose = ToRigid3d(pose.pose.pose);
 
   need_set_pose_in_filter_ = true;
   auto initial_pose_2d = carto::transform::Project2D(initial_pose);
@@ -1078,15 +1078,9 @@ void LocalizationNode::HandleRelocalization(
               initial_pose_2d.translation().x(),
               initial_pose_2d.translation().y(),
               initial_pose_2d.rotation().angle());
-  response->success = localization_updater_bridge_.SetInitialPose(initial_pose);
+  return localization_updater_bridge_.SetInitialPose(initial_pose);
 }
 
-void LocalizationNode::HandleSetMapChanged(
-    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-{
-  response->success = true;
-}
 
 /* --------------------------------- service client ---------------------------------------- */
 bool LocalizationNode::SetInitialPoseInFilter(
@@ -1095,6 +1089,12 @@ bool LocalizationNode::SetInitialPoseInFilter(
   // 走话题而非服务：ros_filter 的 set_pose 服务类型是 robot_localization/srv/SetPose，
   // 与本包的 nav_interfaces/srv/SetPose 类型不匹配，DDS 端点永远无法匹配（wait_for_service 必超时）。
   // 同名话题订阅与服务共用 setPoseCallback，效果等价且无阻塞。
+  if (!set_pose_publisher_) {
+    RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                          "Publisher /robot_localization/set_pose is not initialized; will retry");
+    return false;  // fail closed，不清 need_set_pose_in_filter_
+  }
+
   if (set_pose_publisher_->get_subscription_count() == 0) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
                          "No subscriber on %s yet, will retry",
@@ -1227,49 +1227,6 @@ bool LocalizationNode::StartFilter()
   }
 }
 
-// TODO: linfeng.guo 后面把这个client写到构造函数中
-// Alternative synchronous version (simpler but blocking)
-// bool LocalizationNode::SetInitialPoseInFilterSync(
-//     const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg) {
-  
-//   RCLCPP_INFO(node_->get_logger(), "Setting initial pose in filter");
-  
-//   if (!set_pose_client_) {
-//     RCLCPP_ERROR(node_->get_logger(), "SetPose client not initialized");
-//     return false;
-//   }
-  
-//   if (!set_pose_client_->wait_for_service(std::chrono::seconds(3))) {
-//     RCLCPP_ERROR(node_->get_logger(), "Timed out waiting for SetPose service");
-//     need_set_pose_in_filter_ = false;
-//     return false;
-//   }
-
-//   auto pose_cmd = std::make_shared<dcm_srvs::srv::SetPose::Request>();
-//   pose_cmd->pose = pose_cov_msg;
-
-//   try {
-//     auto result = set_pose_client_->async_send_request(pose_cmd).get();
-//     need_set_pose_in_filter_ = false;
-//     RCLCPP_WARN(node_->get_logger(), "SetPose service called successfully");
-//     return result->success;
-//   } catch (const std::exception& e) {
-//     RCLCPP_ERROR(node_->get_logger(), "Failed to call service set_pose: %s", e.what());
-//     return false;
-//   }
-// }
-
-// // Constructor addition - initialize service client (recommended practice)
-// // Add this to your LocalizationNode constructor:
-// /*
-// set_pose_client_ = this->create_client<dcm_srvs::srv::SetPose>("/robot_localization/set_pose");
-// */
-
-// // Header file addition - add this to your class definition:
-// /*
-// private:
-//   rclcpp::Client<dcm_srvs::srv::SetPose>::SharedPtr set_pose_client_;
-// */
 
 /* --------------------------------- handle message ---------------------------------------- */
 void LocalizationNode::HandleInitialPoseMessage(

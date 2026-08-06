@@ -103,6 +103,8 @@ class LocalizationUpdaterBridge {
   void TriggerGlobalRelocalization();
 
   std::optional<::cartographer::localization::LocalizationState> GetLocalizationState() const;
+  // ScanMatch 后的地图重合率 [0,1]，作为定位置信度 score
+  double GetLocalizationConfidence() const;
 
   // 重置地图原点：以当前机器人在地图中的定位位姿作为新原点，
   // 将 pose graph 中所有数据变换到新坐标系，然后保存新的地图文件和 pbstream。

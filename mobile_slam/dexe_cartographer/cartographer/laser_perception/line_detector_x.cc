@@ -14,9 +14,6 @@
 #include <list>
 #include <utility>
 #include <vector>
-#include "cartographer/laser_perception/figure_fitting.h"
-#include "cartographer/laser_perception/math_tool.h"
-#include "cartographer/laser_perception/point.h"
 #include "cartographer/laser_perception/line_detector_x.h"
 
 namespace cartographer
@@ -27,8 +24,6 @@ namespace laser_perception
 //构造函数
 LineDetectorX::LineDetectorX()
 {
-  // set_angle_increment(0.00582000007853);
-  // set_angle_start(-1.91986215115);
   set_least_threshold(0.03);
   set_min_line_length(0.4);
   set_predict_distance(0.05);
@@ -43,16 +38,6 @@ LineDetectorX::~LineDetectorX()
 }
 
 //set paramters
-void LineDetectorX::set_angle_increment(double angle_increment)
-{
-  params_.angle_increment = angle_increment;
-}
-
-void LineDetectorX::set_angle_start(double angle_start)
-{
-  params_.angle_start = angle_start;
-}
-
 void LineDetectorX::set_least_threshold(double least_thresh)
 {
   params_.least_thresh = least_thresh;
@@ -284,7 +269,6 @@ bool LineDetectorX::detectline(const int start,const int num)
     
     // 计算预测点
     theta = std::atan2(range_data_.ys[k], range_data_.xs[k]);
-    // theta = params_.angle_increment * k + params_.angle_start;
     if(fabs((fabs(theta) - M_PI / 2)) < 1e-05) {
       m_pn.x = 0;
       m_pn.y = m_least.c;

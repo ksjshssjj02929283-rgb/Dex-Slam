@@ -16,14 +16,20 @@
 
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
 
+#include <chrono>
+#include <cmath>
 #include <limits>
 #include <memory>
+#include <utility>
 
 #include "pcl/common/transforms.h"
 #include "pcl/io/pcd_io.h"
 
 #include "absl/memory/memory.h"
+#include "cartographer/mapping/2d/grid_2d.h"
+#include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+#include "cartographer/mapping/internal/2d/tsdf_2d.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/sensor/sync_point_cloud.h"
@@ -258,6 +264,9 @@ void PoseInitializer::Run()
 
 void PoseInitializer::RelocalzationOnce()
 {
+  using Clock = std::chrono::steady_clock;
+  const auto t_total_start = Clock::now();
+
   if (global_submap_ == nullptr) {
     LOG(ERROR) << "Global submap is not initialized, please set global submap first.";
     initializer_status_ = PoseInitializerStatus::NotInitialized;
@@ -395,6 +404,11 @@ void PoseInitializer::RelocalzationOnce()
     initializer_status_ = PoseInitializerStatus::Success;
   }
 
+  const double total_ms =
+      std::chrono::duration<double, std::milli>(Clock::now() - t_total_start)
+          .count();
+  LOG(INFO) << "Pose relocalization took " << total_ms << " ms";
+
   // LOG(INFO) << "global pose estimate: "
   //           << global_pose_estimate.translation().x() << " "
   //           << global_pose_estimate.translation().y() << " "
@@ -416,6 +430,7 @@ void PoseInitializer::GlobalRelocalzationOnce()
   // 每次执行都把本次信息记进成员，调用方用 GetLastGlobalRelocInfo() 读取。
   last_global_reloc_info_ = GlobalRelocInfo{};
   GlobalRelocInfo& info = last_global_reloc_info_;
+  info.call_index = ++global_reloc_call_count_;  // M1 profiling：1 = 冷启动首帧
 
   if (global_submap_ == nullptr) {
     LOG(ERROR) << "Global submap is not initialized, please set global submap first.";
@@ -440,12 +455,9 @@ void PoseInitializer::GlobalRelocalzationOnce()
     return;
   }
 
-  if (fast_correlative_scan_matcher_ == nullptr) {
-    fast_correlative_scan_matcher_ =
-        std::make_unique<mapping::scan_matching::FastCorrelativeScanMatcher2D>(
-          *global_grid, options_.fast_correlative_scan_matcher_options());
-  }
-
+  // M2（DEC-002）：原版 FCSM 仅旧 validate 的全局重匹配在用，已被轻量打分（ScorePoseAgainstGrid）
+  // 替代 → GlobalReloc 路径不再构造它，省去冷启动 ~508ms 金字塔构建（M1 实测 t_fcsm_build）。
+  // t_fcsm_build_ms 保持 0（不再发生）。该成员在 original 匹配器路径 / RelocalzationOnce 仍按需懒构造，保留。
   initializer_status_ = PoseInitializerStatus::GlobalEstimating;
 
   // 全局重定位：使用MatchFullSubmap进行全图匹配
@@ -454,6 +466,10 @@ void PoseInitializer::GlobalRelocalzationOnce()
   // 创建一个临时位姿用于存储全局匹配结果
   auto global_match_pose = std::make_shared<transform::Rigid2d>();
   float global_score = 0.0;
+
+  // M1 profiling：t_total_start -> 此处的整个准备区（检查 + grid 获取 + 匹配器构造），
+  // 5 段计时不覆盖它，缺口若在这里，t_setup_ms 会接近 ~1126ms。
+  info.t_setup_ms = elapsed_ms(t_total_start);
 
   const auto t_bbs = Clock::now();
   bool global_match_success = MatchFullSubmapDispatch(
@@ -475,6 +491,9 @@ void PoseInitializer::GlobalRelocalzationOnce()
   }
 
   LOG(INFO) << "Global match pose: " << *global_match_pose;
+
+  // 存下 BBS 全局解供校验门②复用（DEC-003，避免重跑确定性全局搜索）。
+  last_global_bbs_pose_ = *global_match_pose;
 
   // 使用全局匹配的结果作为初始位姿进行精细匹配
   initial_pose_ = global_match_pose;
@@ -552,6 +571,18 @@ void PoseInitializer::GlobalRelocalzationOnce()
     info.pose_estimate = *global_pose_estimate_;
   }
 
+  LOG(INFO) << "Global relocalization info: "
+            << "call_index=" << info.call_index << ", "
+            << "t_setup_ms=" << info.t_setup_ms << ", "
+            << "t_fcsm_build_ms=" << info.t_fcsm_build_ms << ", "
+            << "t_bbs_ms=" << info.t_bbs_ms << ", "
+            << "t_rtcsm_ms=" << info.t_rtcsm_ms << ", "
+            << "t_line_ms=" << info.t_line_ms << ", "
+            << "t_ceres_ms=" << info.t_ceres_ms << ", "
+            << "t_validate_ms=" << info.t_validate_ms << ", "
+            << "t_validate_fcsm_ms=" << info.t_validate_fcsm_ms << ", "
+            << "t_validate_rtcsm_ms=" << info.t_validate_rtcsm_ms;
+
   const double total_ms = elapsed_ms(t_total_start);
   info.t_total_ms = total_ms;
   info.matched = (initializer_status_ == PoseInitializerStatus::Success);
@@ -560,68 +591,131 @@ void PoseInitializer::GlobalRelocalzationOnce()
 
 bool PoseInitializer::IsRelocalizationSuccess()
 {
-  if (fast_correlative_scan_matcher_ == nullptr) {
-    LOG(ERROR) << "fast correlative scan matcher is not initialized.";
-    return false;
-  }
+  // 校验（DEC-003 方案 A）：位姿已由 BBS→RTCSM→Ceres 算出。三道门「得分 + 位姿一致性都看」：
+  //   门① 绝对质量：最终位姿打分 ≥ min_score
+  //   门② 全局-精配一致性：最终位姿 vs 主链路 BBS 全局解的 delta（复用 last_global_bbs_pose_，
+  //       零额外搜索——加速 BBS 确定性，重跑 MatchFullSubmap 会返回同一位姿，故不重跑）
+  //   门③ 局部稳定性：以最终位姿为初值 RTCSM 0.5m 重搜，确认仍收敛同一处且分够高
+  // 旧实现（原版未加速 FCSM 5m 重搜 + RTCSM）实测 1670ms/帧，本版预计 ~RTCSM 一次（~百 ms）。
+  // ⚠️ 下面 delta 阈值为初值，需 M3 用真实成/败样本标定。
+  using Clock = std::chrono::steady_clock;
+  const auto elapsed_ms = [](const Clock::time_point& s) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - s).count();
+  };
+  // 门②比的是粗 BBS 解 vs 精位姿 → 放宽到「发散级」；门③比精位姿 vs RTCSM 精修 → 沿用原校验紧阈值。
+  constexpr double kBbsConsistencyDistThresh = 0.30;   // m，门②（BBS 粗解，放宽）
+  constexpr double kBbsConsistencyYawThresh = 0.15;    // rad，门②
+  constexpr double kLocalStabilityDistThresh = 0.05;   // m，门③（沿用原校验）
+  constexpr double kLocalStabilityYawThresh = 0.1;     // rad，门③
 
   if (global_pose_estimate_ == nullptr) {
     LOG(WARNING) << "Has no estimated global pose.";
     return false;
   }
-
-  std::shared_ptr<transform::Rigid2d> best_pose = absl::make_unique<transform::Rigid2d>();
-
-  float score = 0.0;
-  bool fast_match_success =
-            fast_correlative_scan_matcher_->Match(
-                  *global_pose_estimate_,
-                  *curr_cloud_,
-                  options_.global_localization_min_score(),
-                  &score,
-                  best_pose.get());
-
-  if (fast_match_success &&
-      score < options_.global_localization_min_score())
-  {
-    LOG(INFO) << "Initial pose is not good. curren score is too small in validation: " << score;
+  if (curr_cloud_ == nullptr || curr_cloud_->empty()) {
+    LOG(WARNING) << "No current cloud for relocalization validation.";
+    return false;
+  }
+  const mapping::Grid2D* global_grid = global_submap_->grid();
+  if (!global_grid) {
+    LOG(ERROR) << "Global grid is not available in submap for validation.";
     return false;
   }
 
-  transform::Rigid2d online_correlative_pose;
+  const float min_score = options_.global_localization_min_score();
+
+  // 门①：绝对质量
+  const float final_score =
+      ScorePoseAgainstGrid(*global_pose_estimate_, *curr_cloud_, *global_grid);
+  if (final_score < min_score) {
+    LOG(ERROR) << "Validation gate1 failed: final pose score " << final_score
+               << " < " << min_score;
+    return false;
+  }
+
+  // 门②：最终位姿 vs 主链路 BBS 全局解的一致性（复用，零额外搜索）
+  const double bbs_dist =
+      (last_global_bbs_pose_.translation() - global_pose_estimate_->translation()).norm();
+  double bbs_yaw = std::abs(last_global_bbs_pose_.rotation().angle() -
+                            global_pose_estimate_->rotation().angle());
+  bbs_yaw = normalized_angle(bbs_yaw);
+  if (bbs_dist > kBbsConsistencyDistThresh || bbs_yaw > kBbsConsistencyYawThresh) {
+    LOG(ERROR) << "Validation gate2 failed: refined pose diverged from BBS global "
+               << "solution, dist=" << bbs_dist << " yaw=" << bbs_yaw;
+    return false;
+  }
+
+  // 门③：局部稳定性——以最终位姿为初值 RTCSM 0.5m 重搜
   if (options_.use_online_correlative_scan_matching()) {
-    auto global_grid = global_submap_->grid();
-    if (!global_grid) {
-      LOG(ERROR) << "Global grid is not available in submap for validation.";
+    const auto t_validate_rtcsm = Clock::now();
+    transform::Rigid2d rtcsm_pose;
+    const double rtcsm_score = real_time_correlative_scan_matcher_->Match(
+        *global_pose_estimate_, *curr_cloud_, *global_grid, &rtcsm_pose);
+    last_global_reloc_info_.t_validate_rtcsm_ms = elapsed_ms(t_validate_rtcsm);
+
+    if (rtcsm_score < min_score) {
+      LOG(ERROR) << "Validation gate3 failed: RTCSM recheck score " << rtcsm_score
+                 << " < " << min_score;
       return false;
     }
-    
-    score = real_time_correlative_scan_matcher_->Match(
-      *global_pose_estimate_, *curr_cloud_,
-      *global_grid, best_pose.get());
-
-    if (score < options_.global_localization_min_score()) {
-      LOG(WARNING) << "online correlative scan matcher score is too low.";
-      LOG(INFO) << "online correlative scan matcher score: " << score;
+    const double rtcsm_dist =
+        (rtcsm_pose.translation() - global_pose_estimate_->translation()).norm();
+    double rtcsm_yaw = std::abs(rtcsm_pose.rotation().angle() -
+                                global_pose_estimate_->rotation().angle());
+    rtcsm_yaw = normalized_angle(rtcsm_yaw);
+    if (rtcsm_dist > kLocalStabilityDistThresh ||
+        rtcsm_yaw > kLocalStabilityYawThresh) {
+      LOG(ERROR) << "Validation gate3 failed: RTCSM recheck pose unstable, dist="
+                 << rtcsm_dist << " yaw=" << rtcsm_yaw;
       return false;
     }
   }
 
-  double delta_dist = (global_pose_estimate_->translation() - best_pose->translation()).norm();
-  double delta_yaw = std::abs(global_pose_estimate_->rotation().angle() - best_pose->rotation().angle());
-  delta_yaw = normalized_angle(delta_yaw);
-
-  LOG(INFO) << "Initial pose validation: \n delta dist: " << delta_dist << " delta yaw: " << delta_yaw << std::endl;
-
-  if (delta_dist > 0.05 || delta_yaw > 0.1) {
-    LOG(ERROR) << "Initial pose is not good.";
-    return false;
-  }
+  LOG(INFO) << "Relocalization validation passed: final_score=" << final_score
+            << " bbs_dist=" << bbs_dist << " bbs_yaw=" << bbs_yaw;
   return true;
+}
 
-  // 与全局地图匹配的点数大于50%
+// 轻量位姿打分（M2, DEC-002）：镜像 RTCSM 的 ComputeCandidateScore，在 offset=0（位姿本身）
+// 求扫描点平均占据概率。不做任何搜索，复杂度 O(点数)，实测从 1670ms/帧降到数 ms。
+float PoseInitializer::ScorePoseAgainstGrid(
+    const transform::Rigid2d& pose,
+    const sensor::PointCloud& point_cloud,
+    const mapping::Grid2D& grid) const
+{
+  if (point_cloud.empty()) {
+    return 0.f;
+  }
+  const mapping::MapLimits& limits = grid.limits();
 
-  // 如果有线特征，则与全局线特征匹配距离小于xx，
+  if (grid.GetGridType() == mapping::GridType::TSDF) {
+    const auto& tsdf = static_cast<const mapping::TSDF2D&>(grid);
+    float score = 0.f;
+    float summed_weight = 0.f;
+    for (const sensor::RangefinderPoint& point : point_cloud) {
+      const Eigen::Vector2d world =
+          pose * Eigen::Vector2d(point.position.x(), point.position.y());
+      const Eigen::Array2i cell = limits.GetCellIndex(world.cast<float>());
+      const std::pair<float, float> tsd_and_weight = tsdf.GetTSDAndWeight(cell);
+      const float normalized_tsd_score =
+          (tsdf.GetMaxCorrespondenceCost() - std::abs(tsd_and_weight.first)) /
+          tsdf.GetMaxCorrespondenceCost();
+      score += normalized_tsd_score * tsd_and_weight.second;
+      summed_weight += tsd_and_weight.second;
+    }
+    return summed_weight == 0.f ? 0.f : score / summed_weight;
+  }
+
+  // 默认 ProbabilityGrid：平均占据概率（与 global_localization_min_score 同尺度）。
+  const auto& probability_grid = static_cast<const mapping::ProbabilityGrid&>(grid);
+  float score = 0.f;
+  for (const sensor::RangefinderPoint& point : point_cloud) {
+    const Eigen::Vector2d world =
+        pose * Eigen::Vector2d(point.position.x(), point.position.y());
+    const Eigen::Array2i cell = limits.GetCellIndex(world.cast<float>());
+    score += probability_grid.GetProbability(cell);  // 越界内部返回 kMinProbability
+  }
+  return score / static_cast<float>(point_cloud.size());
 }
 
 

@@ -47,10 +47,17 @@ def generate_launch_description():
         description='Resolution for occupancy grid'
     )
 
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation clock; keep false on the physical robot'
+    )
+
     # Get launch configurations
     map_folder = LaunchConfiguration('map_folder')
     map_name = LaunchConfiguration('map_name')
     resolution = LaunchConfiguration('resolution')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     # Get package directory for configuration files
     cartographer_ros_share = FindPackageShare('cartographer_ros')
@@ -72,6 +79,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(robot_localization_launch_file),
         launch_arguments={
             'filter_type': 'ukf',
+            'use_sim_time': use_sim_time,
         }.items()
     )
 
@@ -83,7 +91,7 @@ def generate_launch_description():
         output='screen',
         respawn=False,
         parameters=[
-            {'use_sim_time': False}
+            {'use_sim_time': use_sim_time}
         ],
         arguments=[
             '-configuration_directory', configuration_directory,
@@ -109,7 +117,7 @@ def generate_launch_description():
         output='screen',
         respawn=False,
         parameters=[
-            {'use_sim_time': False}
+            {'use_sim_time': use_sim_time}
         ],
         arguments=[
             '-resolution', resolution
@@ -121,7 +129,7 @@ def generate_launch_description():
         map_folder_arg,
         map_name_arg,
         resolution_arg,
-        
+        use_sim_time_arg,
         # Robot localization
         robot_localization_launch,
         

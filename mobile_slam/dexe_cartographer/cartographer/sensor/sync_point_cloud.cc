@@ -1,4 +1,4 @@
-// Copyright (c) 2021 Geekplus Inc
+// Copyright (c) 2026 Dexforce Inc
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -167,34 +167,6 @@ PointCloudWithOrigin FromProto(
   return point_cloud_with_origin;
 }
 
-/*struct SyncPointCloudWithOdom
-{
-  common::Time stamp;
-  Odometry odom;
-  std::vector<PointCloudWithOrigin> sync_point_clouds;
-};*/
-proto::SyncPointCloudWithOdom ToProto(
-  const SyncPointCloudWithOdom & sync_point_cloud_with_odom)
-{
-  proto::SyncPointCloudWithOdom proto;
-  proto.set_stamp(common::ToUniversal(sync_point_cloud_with_odom.stamp));
-  *proto.mutable_odom() = ToProto(sync_point_cloud_with_odom.odom);
-  for (const auto & point_cloud_with_origin : sync_point_cloud_with_odom.sync_point_clouds) {
-    *proto.add_sync_point_clouds() = ToProto(point_cloud_with_origin);
-  }
-  return proto;
-}
-SyncPointCloudWithOdom FromProto(
-  const proto::SyncPointCloudWithOdom & proto)
-{
-  SyncPointCloudWithOdom sync_point_cloud_with_odom;
-  sync_point_cloud_with_odom.stamp = common::FromUniversal(proto.stamp());
-  sync_point_cloud_with_odom.odom = FromProto(proto.odom());
-  for (const auto & sync_point_cloud : proto.sync_point_clouds()) {
-    sync_point_cloud_with_odom.sync_point_clouds.push_back(FromProto(sync_point_cloud));
-  }
-  return sync_point_cloud_with_odom;
-}
 /*struct RangeData
 {
   Eigen::Vector3d origin;
