@@ -27,6 +27,7 @@ options = {
   publish_frame_projected_to_2d = true,
   use_pose_extrapolator = false,
   use_odometry = true,
+  ignore_out_of_order = true,
   use_nav_sat = false,
   use_landmarks = false,
   num_laser_scans = 2,
