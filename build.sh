@@ -91,19 +91,33 @@ if [ -z "${resolved_rl_library}" ] || \
     exit 1
 fi
 
-apply_realtime_capability() {
-    local executable="$1"
-    run_privileged setcap 'cap_sys_nice=+ep' "${executable}"
-    local capabilities
-    capabilities="$(getcap "${executable}")"
-    if [[ "${capabilities}" != *"cap_sys_nice=ep"* ]]; then
-        echo "❌ CAP_SYS_NICE 校验失败：${executable}"
-        echo "   actual=${capabilities:-none}"
-        exit 1
-    fi
-    echo "✅ ${capabilities}"
-}
+# setcap 逻辑与 deb postinst / dexe-auto drop-in 共用同一份脚本，避免多处重复。
+ENSURE_CAPS_SCRIPT="${SOURCE_DIR}/ensure_realtime_caps.sh"
+if [ ! -x "${ENSURE_CAPS_SCRIPT}" ]; then
+    echo "❌ 缺少 capability 脚本或未置可执行位：${ENSURE_CAPS_SCRIPT}"
+    exit 1
+fi
+# STRICT=1：构建期保持 fail-closed。sudo 默认不透传环境变量，所以用 env 传。
+run_privileged env STRICT=1 "${ENSURE_CAPS_SCRIPT}" "${INSTALL_DIR}"
 
-apply_realtime_capability "${UKF_NODE}"
-apply_realtime_capability "${EKF_NODE}"
+# 共享部署树上还有 20+ 个兄弟包的 deb postinst 会 `chown -R /home/dexforce/w1`，
+# 而 chown(2) 对非目录无条件清除 security.capability。源码工作区构建同样会被后续任何一次
+# 兄弟包安装抹掉，因此在有 dexe-auto.service 的机器上一并下发自愈 drop-in（调用同一个
+# 脚本），让每次服务启动前重新授权。开发机没有该 unit，自动跳过。
+if systemctl cat dexe-auto.service >/dev/null 2>&1; then
+    SERVICE_DROPIN=/etc/systemd/system/dexe-auto.service.d/10-dexe-slam-realtime.conf
+    DROPIN_TMP="$(mktemp)"
+    cat > "${DROPIN_TMP}" <<EOF
+[Service]
+ExecStartPre=-+${ENSURE_CAPS_SCRIPT} ${INSTALL_DIR}
+EOF
+    run_privileged mkdir -p "$(dirname "${SERVICE_DROPIN}")"
+    run_privileged install -m 0644 "${DROPIN_TMP}" "${SERVICE_DROPIN}"
+    rm -f "${DROPIN_TMP}"
+    run_privileged systemctl daemon-reload || true
+    echo "✅ 已下发实时权限自愈 drop-in：${SERVICE_DROPIN}"
+else
+    echo "ℹ️ 未检测到 dexe-auto.service，跳过实时权限自愈 drop-in（开发机正常现象）。"
+fi
+
 echo "✅ robot_localization 构建、动态库注册和实时权限配置完成。"
