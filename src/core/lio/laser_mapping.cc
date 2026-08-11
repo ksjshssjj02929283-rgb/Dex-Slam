@@ -1,15 +1,15 @@
 #include <pcl/common/transforms.h>
 #include <yaml-cpp/yaml.h>
 #include <execution>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 
 #include "common/options.h"
 #include "core/lightning_math.hpp"
 #include "laser_mapping.h"
 #include "ui/pangolin_window.h"
-#include "wrapper/rviz_publisher.h"
 #include "wrapper/ros_utils.h"
+#include "wrapper/rviz_publisher.h"
 
 namespace lightning {
 
@@ -32,11 +32,11 @@ bool LaserMapping::Init(const std::string &config_yaml) {
     }
     if (use_ivox_) {
         // 将 ivox_options_ 转换为 IVoxConfig，统一通过 IVoxManager 管理
-        ivox_config_.resolution            = ivox_options_.resolution_;
-        ivox_config_.nearby_type           = ivox_options_.nearby_type_;
-        ivox_config_.capacity              = ivox_options_.capacity_;
-        ivox_config_.filter_size_map_min   = static_cast<float>(filter_size_map_min_);
-        ivox_config_.esti_plane_threshold  = fasterlio::ESTI_PLANE_THRESHOLD;
+        ivox_config_.resolution = ivox_options_.resolution_;
+        ivox_config_.nearby_type = ivox_options_.nearby_type_;
+        ivox_config_.capacity = ivox_options_.capacity_;
+        ivox_config_.filter_size_map_min = static_cast<float>(filter_size_map_min_);
+        ivox_config_.esti_plane_threshold = fasterlio::ESTI_PLANE_THRESHOLD;
         ivox_manager_ = std::make_shared<IVoxManagerType>(ivox_config_);
     }
     LOG(INFO) << "LaserMapping: use_ivox=" << use_ivox_ << " use_voxel_map=" << use_voxel_map_;
@@ -97,14 +97,12 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
         }
 
         // IVox 参数（可选，有默认值）
-        if (yaml["fasterlio"]["use_ivox"])
-            use_ivox_ = yaml["fasterlio"]["use_ivox"].as<bool>();
+        if (yaml["fasterlio"]["use_ivox"]) use_ivox_ = yaml["fasterlio"]["use_ivox"].as<bool>();
         if (yaml["fasterlio"]["ivox_grid_resolution"])
             ivox_options_.resolution_ = yaml["fasterlio"]["ivox_grid_resolution"].as<float>();
         if (yaml["fasterlio"]["ivox_nearby_type"]) {
             int ivox_nearby_type = yaml["fasterlio"]["ivox_nearby_type"].as<int>();
-            if (ivox_nearby_type == 0)
-                ivox_options_.nearby_type_ = IVoxType::NearbyType::CENTER;
+            if (ivox_nearby_type == 0) ivox_options_.nearby_type_ = IVoxType::NearbyType::CENTER;
             else if (ivox_nearby_type == 6)
                 ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY6;
             else if (ivox_nearby_type == 18)
@@ -116,8 +114,7 @@ bool LaserMapping::LoadParamsFromYAML(const std::string &yaml_file) {
                 ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY18;
             }
         }
-        if (yaml["fasterlio"]["use_voxel_map"])
-            use_voxel_map_ = yaml["fasterlio"]["use_voxel_map"].as<bool>();
+        if (yaml["fasterlio"]["use_voxel_map"]) use_voxel_map_ = yaml["fasterlio"]["use_voxel_map"].as<bool>();
 
         if (yaml["fasterlio"]["voxel_map"] && yaml["fasterlio"]["voxel_map"]["pub_voxel_map"])
             pub_voxel_map_ = yaml["fasterlio"]["voxel_map"]["pub_voxel_map"].as<bool>();
@@ -258,7 +255,7 @@ bool LaserMapping::Run() {
                 Eigen::Vector3d p_world = R_wl * p_body + t_wl;
                 pv.point_body = p_body;
                 pv.point_world = p_world;
-                pv.point = p_world;   // OctoTree 内部使用世界坐标
+                pv.point = p_world;  // OctoTree 内部使用世界坐标
                 Eigen::Matrix3d body_cov = voxel_map_->CalcBodyCov(p_body);
                 pv.cov = VoxelMapType::PropagateCovToWorld(body_cov, p_body, R_wl, cov_rot, cov_trans);
                 pv_first.push_back(pv);
@@ -276,7 +273,7 @@ bool LaserMapping::Run() {
             int first_pts = static_cast<int>(scan_first_down->size());
             scan_down_world_->resize(first_pts);
             for (int i = 0; i < first_pts; ++i) {
-                const auto& pb = scan_first_down->points[i];
+                const auto &pb = scan_first_down->points[i];
                 Eigen::Vector3d p_world = R_wl * pb.getVector3fMap().cast<double>() + t_wl;
                 scan_down_world_->points[i].x = static_cast<float>(p_world(0));
                 scan_down_world_->points[i].y = static_cast<float>(p_world(1));
@@ -371,14 +368,14 @@ bool LaserMapping::Run() {
                     int cnt = scan_down_body_->size();
                     pv_list_.resize(cnt);
                     for (int ii = 0; ii < cnt; ++ii) {
-                        const Eigen::Vector3d& pb = body_points_list_[ii];
+                        const Eigen::Vector3d &pb = body_points_list_[ii];
                         Eigen::Vector3d pw = R_wl_ok * pb + t_wl_ok;
                         pv_list_[ii].point_body = pb;
                         pv_list_[ii].point_world = pw;
                         pv_list_[ii].point = pw;
                         // 使用预计算的 body_cov
-                        pv_list_[ii].cov = VoxelMapType::PropagateCovToWorld(
-                            body_cov_list_[ii], pb, R_wl_ok, cov_rot_ok, cov_trans_ok);
+                        pv_list_[ii].cov = VoxelMapType::PropagateCovToWorld(body_cov_list_[ii], pb, R_wl_ok,
+                                                                             cov_rot_ok, cov_trans_ok);
                     }
                 }
 
@@ -414,13 +411,17 @@ bool LaserMapping::Run() {
     }
 
     /// 更新kf_for_imu
-    kf_imu_ = kf_;
-    if (!measures_.imu_.empty()) {
-        double t = measures_.imu_.back()->timestamp;
-        for (auto &imu : imu_buffer_) {
-            double dt = imu->timestamp - t;
-            kf_imu_.Predict(dt, p_imu_->Q_, imu->angular_velocity, imu->linear_acceleration);
-            t = imu->timestamp;
+    {
+        UL lock(mtx_buffer_);
+
+        kf_imu_ = kf_;
+        if (!measures_.imu_.empty()) {
+            double t = measures_.imu_.back()->timestamp;
+            for (auto &imu : imu_buffer_) {
+                double dt = imu->timestamp - t;
+                kf_imu_.Predict(dt, p_imu_->Q_, imu->angular_velocity, imu->linear_acceleration);
+                t = imu->timestamp;
+            }
         }
     }
 
@@ -528,6 +529,8 @@ void LaserMapping::ProcessPointCloud2(CloudPtr cloud) {
 }
 
 bool LaserMapping::SyncPackages() {
+    UL lock(mtx_buffer_);
+
     if (lidar_buffer_.empty() || imu_buffer_.empty()) {
         return false;
     }
@@ -587,9 +590,7 @@ void LaserMapping::MapIncremental() {
     // VoxelMap 地图更新（受 use_voxel_map_ 开关控制）
     if (use_voxel_map_) {
         if (!pv_list_.empty()) {
-            Timer::Evaluate(
-                [&, this]() { voxel_map_->UpdateMap(pv_list_); },
-                "    VoxelMap Update");
+            Timer::Evaluate([&, this]() { voxel_map_->UpdateMap(pv_list_); }, "    VoxelMap Update");
         }
     }
 
@@ -635,11 +636,8 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
                 auto R_wl = (s.rot_ * s.offset_R_lidar_).cast<float>();
                 auto t_wl = (s.rot_ * s.offset_t_lidar_ + s.pos_).cast<float>();
 
-                ivox_manager_->FindCorrespondences(
-                    scan_down_body_, scan_down_world_,
-                    R_wl.matrix(), t_wl,
-                    corr_pts_, corr_norm_, residuals_,
-                    nearest_points_);
+                ivox_manager_->FindCorrespondences(scan_down_body_, scan_down_world_, R_wl.matrix(), t_wl, corr_pts_,
+                                                   corr_norm_, residuals_, nearest_points_);
             },
             "    ObsModel (IVox Match)");
     } else {
@@ -657,21 +655,21 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
         if (iekf_first_iter_) {
             iekf_first_iter_ = false;
 
-            auto& P = kf_.GetP();
-            Eigen::Matrix3d cov_rot   = P.block<3, 3>(3, 3);
+            auto &P = kf_.GetP();
+            Eigen::Matrix3d cov_rot = P.block<3, 3>(3, 3);
             Eigen::Matrix3d cov_trans = P.block<3, 3>(0, 0);
 
             Timer::Evaluate(
                 [&, this]() {
                     pv_list_.resize(cnt_pts);
                     std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&](const size_t &i) {
-                        const Eigen::Vector3d& p_body = body_points_list_[i];
+                        const Eigen::Vector3d &p_body = body_points_list_[i];
                         Eigen::Vector3d p_world = R_wl_d * p_body + t_wl_d;
-                        pv_list_[i].point_body  = p_body;
+                        pv_list_[i].point_body = p_body;
                         pv_list_[i].point_world = p_world;
-                        pv_list_[i].point       = p_world;
-                        pv_list_[i].cov = VoxelMapType::PropagateCovToWorld(
-                            body_cov_list_[i], p_body, R_wl_d, cov_rot, cov_trans);
+                        pv_list_[i].point = p_world;
+                        pv_list_[i].cov =
+                            VoxelMapType::PropagateCovToWorld(body_cov_list_[i], p_body, R_wl_d, cov_rot, cov_trans);
                     });
                 },
                 "    ObsModel (Prepare Points)");
@@ -699,8 +697,8 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
         ptpl_list_.clear();
     }
 
-    int ivox_feat_num = use_ivox_     ? static_cast<int>(corr_pts_.size())  : 0;
-    int vmap_feat_num = use_voxel_map_? static_cast<int>(ptpl_list_.size()) : 0;
+    int ivox_feat_num = use_ivox_ ? static_cast<int>(corr_pts_.size()) : 0;
+    int vmap_feat_num = use_voxel_map_ ? static_cast<int>(ptpl_list_.size()) : 0;
     effect_feat_num_ = ivox_feat_num + vmap_feat_num;
 
     if (effect_feat_num_ < 1) {
@@ -718,7 +716,7 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
 
             const Mat3f off_R = s.offset_R_lidar_.matrix().cast<float>();
             const Vec3f off_t = s.offset_t_lidar_.cast<float>();
-            const Mat3f Rt    = s.rot_.matrix().transpose().cast<float>();
+            const Mat3f Rt = s.rot_.matrix().transpose().cast<float>();
 
             // --- 前段：IVox ---
             if (use_ivox_ && ivox_feat_num > 0) {
@@ -726,21 +724,21 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
                 for (int i = 0; i < ivox_feat_num; ++i) ivox_idx[i] = i;
 
                 std::for_each(std::execution::par_unseq, ivox_idx.begin(), ivox_idx.end(), [&](const size_t &i) {
-                    Vec3f point_this_be  = corr_pts_[i].head<3>();
+                    Vec3f point_this_be = corr_pts_[i].head<3>();
                     Mat3f point_be_crossmat = math::SKEW_SYM_MATRIX(point_this_be);
-                    Vec3f point_this     = off_R * point_this_be + off_t;
+                    Vec3f point_this = off_R * point_this_be + off_t;
                     Mat3f point_crossmat = math::SKEW_SYM_MATRIX(point_this);
-                    Vec3f norm_vec       = corr_norm_[i].head<3>();
+                    Vec3f norm_vec = corr_norm_[i].head<3>();
                     Vec3f C(Rt * norm_vec);
                     Vec3f A(point_crossmat * C);
 
                     if (extrinsic_est_en_) {
                         Vec3f B(point_be_crossmat * off_R.transpose() * C);
-                        obs.h_x_.block<1, 12>(i, 0) << norm_vec[0], norm_vec[1], norm_vec[2],
-                            A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2];
+                        obs.h_x_.block<1, 12>(i, 0) << norm_vec[0], norm_vec[1], norm_vec[2], A[0], A[1], A[2], B[0],
+                            B[1], B[2], C[0], C[1], C[2];
                     } else {
-                        obs.h_x_.block<1, 12>(i, 0) << norm_vec[0], norm_vec[1], norm_vec[2],
-                            A[0], A[1], A[2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                        obs.h_x_.block<1, 12>(i, 0) << norm_vec[0], norm_vec[1], norm_vec[2], A[0], A[1], A[2], 0.0,
+                            0.0, 0.0, 0.0, 0.0, 0.0;
                     }
                     obs.residual_(i) = -corr_pts_[i][3];
                 });
@@ -753,23 +751,23 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
 
                 std::for_each(std::execution::par_unseq, vmap_idx.begin(), vmap_idx.end(), [&](const size_t &i) {
                     const int row = ivox_feat_num + static_cast<int>(i);
-                    const auto& match = ptpl_list_[i];
+                    const auto &match = ptpl_list_[i];
 
-                    Vec3f point_this_be  = match.point.cast<float>();
+                    Vec3f point_this_be = match.point.cast<float>();
                     Mat3f point_be_crossmat = math::SKEW_SYM_MATRIX(point_this_be);
-                    Vec3f point_this     = off_R * point_this_be + off_t;
+                    Vec3f point_this = off_R * point_this_be + off_t;
                     Mat3f point_crossmat = math::SKEW_SYM_MATRIX(point_this);
-                    Vec3f norm_vec       = match.normal.cast<float>();
+                    Vec3f norm_vec = match.normal.cast<float>();
                     Vec3f C(Rt * norm_vec);
                     Vec3f A(point_crossmat * C);
 
                     if (extrinsic_est_en_) {
                         Vec3f B(point_be_crossmat * off_R.transpose() * C);
-                        obs.h_x_.block<1, 12>(row, 0) << norm_vec[0], norm_vec[1], norm_vec[2],
-                            A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2];
+                        obs.h_x_.block<1, 12>(row, 0) << norm_vec[0], norm_vec[1], norm_vec[2], A[0], A[1], A[2], B[0],
+                            B[1], B[2], C[0], C[1], C[2];
                     } else {
-                        obs.h_x_.block<1, 12>(row, 0) << norm_vec[0], norm_vec[1], norm_vec[2],
-                            A[0], A[1], A[2], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+                        obs.h_x_.block<1, 12>(row, 0) << norm_vec[0], norm_vec[1], norm_vec[2], A[0], A[1], A[2], 0.0,
+                            0.0, 0.0, 0.0, 0.0, 0.0;
                     }
                     float res = static_cast<float>(match.normal.dot(match.point_world) + match.d);
                     obs.residual_(row) = -res;
@@ -795,7 +793,7 @@ void LaserMapping::ObsModel(NavState &s, ESKF::CustomObservationModel &obs) {
     }
     std::sort(res_sq2.begin(), res_sq2.end());
     obs.lidar_residual_mean_ = res_sq2[res_sq2.size() / 2];
-    obs.lidar_residual_max_  = res_sq2[res_sq2.size() - 1];
+    obs.lidar_residual_max_ = res_sq2[res_sq2.size() - 1];
 }
 
 ///////////////////////////  private method /////////////////////////////////////////////////////////////////////
@@ -859,6 +857,7 @@ void LaserMapping::SaveMap() {
 }
 
 CloudPtr LaserMapping::GetRecentCloud() {
+    UL lock(mtx_buffer_);
     if (lidar_buffer_.empty()) {
         return nullptr;
     }
