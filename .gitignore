@@ -9,3 +9,9 @@ bin
 
 **cmake-build-debug**
 **cmake-build-release**
+
+# 编译日志与隔离构建目录 (CPU/GPU 验证时产生的 build_cpu*/install_gpu* 等)
+build_logs/
+build_*/
+install_*/
+log_*/

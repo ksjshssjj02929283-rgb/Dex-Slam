@@ -66,6 +66,9 @@ class Localization {
     /// 由外部设置pose，适用于手动重定位
     void SetExternalPose(const Eigen::Quaterniond& q, const Eigen::Vector3d& t);
 
+    /// BBS 冷启动成功前是否仅保留 BBS 相关日志
+    bool ShouldOnlyLogBBSBeforeInit() const;
+
     /// TODO: 其他初始化逻辑
 
     /// TODO: 处理odom消息

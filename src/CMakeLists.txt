@@ -173,6 +173,7 @@ add_library(lightning.core.localization STATIC
     core/localization/pose_graph/pgo_debug_logger.cc
     core/localization/pose_graph/pose_extrapolator.cc
     core/localization/localization.cpp
+    core/localization/relocalizer/bbs_relocalizer.cc
 )
 
 target_link_libraries(lightning.core.localization
@@ -184,7 +185,10 @@ target_link_libraries(lightning.core.localization
     lightning.wrapper
     ${third_party_libs}
     ${PCL_LIBRARIES}
+    $<IF:$<BOOL:${BUILD_CUDA}>,gpu_bbs3d,cpu_bbs3d>
 )
+
+target_compile_definitions(lightning.core.localization PRIVATE $<$<BOOL:${BUILD_CUDA}>:BUILD_CUDA>)
 
 ament_target_dependencies(lightning.core.localization
     "rclcpp"

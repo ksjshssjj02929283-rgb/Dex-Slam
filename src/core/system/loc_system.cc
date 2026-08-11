@@ -48,9 +48,10 @@ bool LocSystem::Init(const std::string &yaml_path, const std::string &map_path) 
         livox_topic_ = yaml.GetValue<std::string>("common", "livox_lidar_topic");
 
         rclcpp::QoS qos(10);
+        rclcpp::QoS imu_qos(rclcpp::KeepLast(2000));  // 200Hz IMU: large buffer to survive executor delays
 
         imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
-            imu_topic_, qos, [this](sensor_msgs::msg::Imu::SharedPtr msg) {
+            imu_topic_, imu_qos, [this](sensor_msgs::msg::Imu::SharedPtr msg) {
                 IMUPtr imu = std::make_shared<IMU>();
                 imu->timestamp = ToSec(msg->header.stamp);
                 imu->linear_acceleration =

@@ -72,7 +72,7 @@ g2p5:
 
 system:
   with_loop_closing: true # 是否需要回环检测
-  with_ui: true # 是否需要3D UI
+  with_ui: false # 是否需要3D UI
   with_2dui: false # 是否需要2D UI
   with_g2p5: true # 是否需要栅格地图
   step_on_kf: false # 是否在关键帧处暂停
@@ -186,3 +186,22 @@ ui:
   car_width: 1.6
   car_height: 1.7
   scans: 1
+
+### 3D-BBS global relocalization ===========================================================
+bbs:
+  enable_init: true              # 冷启动时是否用 3D-BBS 全局重定位初始化
+  enable_recover: false          # 运行过程中不自动触发 BBS 重定位
+  global_pcd_path: ""            # global.pcd 路径（空=自动用地图文件夹/global.pcd）
+  voxelmaps_path: ""             # 预构建体素图路径（空=自动用地图文件夹/bbs3d_voxelmaps）
+  min_level_res: 0.5              # 最细层分辨率 [m]，分辨率更细但计算更重
+  max_level: 6                    # 层级数
+  min_roll: -0.02                 # roll 搜索范围 [rad]（IMU 已估，小范围补偿）
+  max_roll: 0.02
+  min_pitch: -0.02                # pitch 搜索范围 [rad]
+  max_pitch: 0.02
+  min_yaw: 0.0                    # yaw 搜索范围 [rad]（完全未知，搜满 2pi）
+  max_yaw: 6.28
+  score_threshold_percentage: 0.1 # 命中点占比阈值，超过才算定位成功
+  src_leaf_size: 2.0              # 源点云降采样 [m]（0=不降采样）
+  timeout_msec: 0             # 超时保护 [msec]，0=不超时
+  num_threads: 8                  # OpenMP 线程数

@@ -185,8 +185,10 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
     }
 
     auto lo_state = lio_->GetState();
-    LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
-              << lo_state.GetPose().translation().transpose();
+    if (!ShouldOnlyLogBBSBeforeInit()) {
+        LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
+                  << lo_state.GetPose().translation().transpose();
+    }
     lidar_loc_->ProcessLO(lo_state);
     pgo_->ProcessLidarOdom(lo_state);
 
@@ -242,7 +244,9 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
     // 发布定位结果到 RViz
     if (rviz_pub_) {
         rviz_pub_->UpdateCurrentScan(scan_undist, res.pose_);
-        rviz_pub_->UpdateBackendPath(res.pose_);
+        if (res.status_ == LocalizationStatus::GOOD) {
+            rviz_pub_->UpdateBackendPath(res.pose_);
+        }
     }
 
     if (loc_state_callback_) {
@@ -357,6 +361,14 @@ NavState Localization::GetState() {
         return lidar_loc_->GetState();
     }
     return NavState{};
+}
+
+bool Localization::ShouldOnlyLogBBSBeforeInit() const {
+    if (!lidar_loc_) {
+        return false;
+    }
+
+    return lidar_loc_->ShouldOnlyLogBBSBeforeInit();
 }
 
 }  // namespace lightning::loc

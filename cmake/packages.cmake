@@ -21,6 +21,11 @@ find_package(rosbag2_cpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # OMP
+option(BUILD_CUDA "Build with CUDA GPU BBS3D support" OFF)
+if(BUILD_CUDA)
+    find_package(CUDA REQUIRED)
+    include_directories(${CUDA_INCLUDE_DIRS})
+endif()
 find_package(OpenMP)
 if (OPENMP_FOUND)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
@@ -83,4 +88,3 @@ set(third_party_libs
         tbb
         ${rosbag2_cpp_LIBRARIES}
 )
-

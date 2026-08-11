@@ -376,3 +376,145 @@ imu和雷达外参默认为零就好，我们对这个不敏感。
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=gaoxiang12/lightning-lm&type=date&legend=top-left)](https://www.star-history.com/#gaoxiang12/lightning-lm&type=date&legend=top-left)
+
+## 快速编译指南（换机部署）
+
+### 1. 环境要求
+
+| 项目 | GPU 版 (Jetson) | CPU 版 (普通 PC) |
+|------|----------------|------------------|
+| OS | Ubuntu 22.04 | Ubuntu 22.04 |
+| ROS 2 | Humble | Humble |
+| CUDA | 需要 (≥11.4) | 不需要 |
+| 架构 | aarch64 / x86_64 | x86_64 |
+
+### 2. 安装依赖
+
+```bash
+# ROS2 Humble (如未安装)
+sudo apt update && sudo apt install ros-humble-desktop
+
+# 基础依赖
+sudo apt install libopencv-dev libpcl-dev pcl-tools \
+    libyaml-cpp-dev libgoogle-glog-dev libgflags-dev \
+    ros-humble-pcl-conversions libtbb-dev
+
+# Pangolin 可视化库 (从源码编译)
+git clone https://github.com/stevenlovegrove/Pangolin.git
+cd Pangolin && git checkout v0.6
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
+make -j$(nproc)
+sudo make install
+```
+
+> **注意**: `nav_interfaces` 与 `livox_ros_driver2` 均已内置于 `thirdparty/`,
+> 随本项目一起编译 (经 CMake `add_subdirectory` 集成), 无需单独编译或 source 其它工作区。
+
+### 3. 编译
+
+#### GPU 版（Jetson 等带 CUDA 设备）
+
+```bash
+./build_lightning_gpu.sh
+# 等价于:
+# source /opt/ros/humble/setup.bash
+# colcon build --cmake-args -DBUILD_CUDA=ON
+```
+
+- BBS 全局重定位使用 `gpu_bbs3d`（CUDA 加速，搜索 ~2s）
+- 需要安装 CUDA Toolkit (≥11.4)。若 `nvcc` 不在 PATH, 脚本会自动探测 `/usr/local/cuda` 并导出;
+  手动等价: `export PATH=/usr/local/cuda/bin:$PATH && export CUDA_HOME=/usr/local/cuda`
+
+#### CPU 版（普通 PC，无 CUDA）
+
+```bash
+./build_lightning.sh
+# 等价于:
+# source /opt/ros/humble/setup.bash
+# colcon build --cmake-args -DBUILD_CUDA=OFF
+```
+
+- BBS 全局重定位使用 `cpu_bbs3d`（OpenMP 多线程，搜索较慢）
+- 无需 CUDA，适合在开发机上编译调试
+
+### 部署常见问题与解决办法
+
+换机部署实际踩到的坑及对应处理 (nav_interfaces 与 CUDA 两项已在本仓库修复):
+
+1. **`nav_interfaces` 找不到** (`Could not find a package configuration file provided by "nav_interfaces"`)
+   - 原因: 原 `cmake/packages.cmake` 用 `find_package(nav_interfaces REQUIRED)` 引用自定义消息包, 需单独编译安装后才能被找到。
+   - 处理: 已将 `nav_interfaces` 内置于 `thirdparty/nav_interfaces/`, 改为 `add_subdirectory` 随本项目一起编译 (与 `livox_ros_driver2` 同样方式); 移除 `find_package(nav_interfaces)`, `src/app/CMakeLists.txt` 改为按 target 链接 `nav_interfaces__rosidl_typesupport_cpp`。现只需一条 `./build_lightning.sh`。
+
+2. **GPU 编译报 `Could NOT find CUDA` / 找不到 `nvcc`**
+   - 原因: 装了 CUDA (如 `/usr/local/cuda-12.6`), 但 `nvcc` 未加入默认 PATH, 而脚本只 source 了 ROS2。
+   - 处理: `build_lightning_gpu.sh` 已增加自动探测, `nvcc` 不在 PATH 时自动用 `/usr/local/cuda`。手动等价:
+     ```bash
+     export PATH=/usr/local/cuda/bin:$PATH
+     export CUDA_HOME=/usr/local/cuda
+     ./build_lightning_gpu.sh
+     ```
+
+3. **`install_dep.sh` 缺 `libtbb-dev`**
+   - `scripts/install_dep.sh` 已补充 `libtbb-dev` (OpenMP/PCL 依赖)。完整依赖见上方 `### 2. 安装依赖`, Pangolin 须源码安装到 `/usr/local`。
+
+4. **Pangolin 版本**
+   - 示例 checkout v0.6, 实测 v0.9.3 也可正常编译运行, 不强制版本。
+
+5. **libtbb 链接告警** (`libtbb.so.2 ... may conflict with libtbb.so.12`)
+   - OpenCV 链接旧版 tbb 的告警, 不影响功能, 可忽略。
+
+### 4. CMakeLists.txt 改动说明
+
+本次改动使 CUDA 成为可选依赖，支持 GPU/CPU 双模式编译：
+
+**`CMakeLists.txt`** — 新增 `BUILD_CUDA` 选项：
+```cmake
+option(BUILD_CUDA "Build with CUDA GPU BBS3D support" OFF)
+```
+
+**`cmake/packages.cmake`** — CUDA 改为条件依赖：
+```cmake
+option(BUILD_CUDA "Build with CUDA GPU BBS3D support" OFF)
+if(BUILD_CUDA)
+    find_package(CUDA REQUIRED)
+    include_directories(${CUDA_INCLUDE_DIRS})
+endif()
+```
+
+**`src/CMakeLists.txt`** — 条件链接 BBS 库 + 编译宏：
+```cmake
+# 根据 BUILD_CUDA 链接 gpu_bbs3d 或 cpu_bbs3d
+$<IF:$<BOOL:${BUILD_CUDA}>,gpu_bbs3d,cpu_bbs3d>
+# 传递 BUILD_CUDA 宏给源码
+target_compile_definitions(lightning.core.localization
+    PRIVATE $<$<BOOL:${BUILD_CUDA}>:BUILD_CUDA>)
+```
+
+**`src/core/localization/relocalizer/bbs_relocalizer.h`** — 条件包含 + 类型别名：
+```cpp
+#ifdef BUILD_CUDA
+  #include <gpu_bbs3d/bbs3d.cuh>
+  namespace bbs_impl = gpu;   // float 精度
+#else
+  #include <cpu_bbs3d/bbs3d.hpp>
+  namespace bbs_impl = cpu;   // double 精度
+#endif
+```
+`bbs_relocalizer.cc` 中所有 `gpu::BBS3D` → `bbs_impl::BBS3D`，`float` → `BBSFloat`，
+`Vector3f` → `BBSVec3`，`get_global_pose()` 用 `auto` 自动适配返回类型。
+
+### 5. 运行在线定位
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export DISPLAY=:0  # Pangolin 可视化需要 X display
+
+# 启动在线定位 (需有地图和实时传感器数据)
+ros2 launch lightning loc_online.launch.py lidar_type:=livox \
+    map_folder:=$HOME/.dexe/data/maps map_name:=final
+
+# 调用服务开始定位
+ros2 service call /localization_3d_manager/start_localization std_srvs/srv/Trigger
+```

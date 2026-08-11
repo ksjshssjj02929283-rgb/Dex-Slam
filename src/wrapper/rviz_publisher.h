@@ -48,6 +48,8 @@ public:
     void UpdateLoopDebugClouds(CloudPtr loop_submap, CloudPtr current_scan, CloudPtr aligned_scan,
                                const SE3& loop_pose, const SE3& current_pose, const SE3& aligned_pose,
                                double ndt_score);  // 回环调试点云（包含配准结果）
+    void UpdateBBSResult(CloudPtr src_cloud, const SE3& pose, double score_pct,
+                         double elapsed_ms, const std::string& trigger_msg);  // BBS 重定位源点云
     void UpdateFrontendPath(const SE3& pose);
     void UpdateBackendPath(const SE3& pose);
     void UpdateCurrentPose(const SE3& pose);  // 实时位姿
@@ -79,6 +81,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_submap_pub_;      // 回环submap
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_scan_pub_;        // 回环当前scan
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_aligned_pub_;     // 配准后的scan
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr bbs_cloud_pub_;        // BBS 源点云（变换到世界系）
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr voxel_map_pub_; // VoxelMap 平面
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_map_pub_;           // 2D 栅格地图
 
@@ -112,12 +115,18 @@ private:
     SE3 loop_aligned_pose_;
     double loop_ndt_score_;
 
+    // BBS 重定位数据
+    CloudPtr bbs_cloud_;
+    std::mutex mtx_bbs_;
+    bool bbs_updated_ = false;
+
     bool scan_updated_ = false;
     bool map_updated_ = false;
     bool global_map_updated_ = false;
     bool dynamic_map_updated_ = false;
-    bool pose_updated_ = false;
-    bool loop_debug_updated_ = false;  // 回环调试数据更新标志
+   bool pose_updated_ = false;
+   int realtime_path_cnt_ = 0;  // 实时轨迹降采样计数器
+   bool loop_debug_updated_ = false;  // 回环调试数据更新标志
     bool voxel_map_updated_ = false;   // VoxelMap 平面更新标志
     bool gridmap_updated_ = false;     // 2D 栅格地图更新标志
 

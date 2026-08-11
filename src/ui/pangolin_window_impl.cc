@@ -5,6 +5,7 @@
 #include "common/options.h"
 #include "common/std_types.h"
 #include "core/lightning_math.hpp"
+#include <pcl/common/transforms.h>
 #include "ui/pangolin_window_impl.h"
 
 namespace lightning::ui {
@@ -350,6 +351,23 @@ void PangolinWindowImpl::DrawAll() {
     if (loop_aligned_ui_) {
         loop_aligned_ui_->Render();
     }
+
+    // 渲染 BBS 重定位结果点云 (亮橙色) 和位姿标记
+    if (bbs_result_valid_ui_ && bbs_cloud_ui_) {
+        glPointSize(3);
+        bbs_cloud_ui_->Render();
+        glPointSize(1.0);
+
+        // 用大球体标记 BBS 找到的位姿
+        glPointSize(20.0);
+        glBegin(GL_POINTS);
+        glColor3f(1.0, 0.5, 0.0);  // 亮橙色
+        auto bp = bbs_pose_ui_.translation();
+        glVertex3f(bp[0], bp[1], bp[2]);
+        glEnd();
+        glPointSize(1.0);
+    }
+
     glPointSize(1.0);  // 恢复默认点尺寸
 
     // 绘制 VoxelMap 平面
@@ -359,6 +377,39 @@ void PangolinWindowImpl::DrawAll() {
 
     // 文字
     RenderLabels();
+}
+
+bool PangolinWindowImpl::UpdateBBSResult() {
+    if (!bbs_result_need_update_.load()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mtx_bbs_result_);
+
+    if (bbs_src_cloud_ && !bbs_src_cloud_->empty()) {
+        // 将源点云按 BBS 位姿变换到世界坐标系
+        CloudPtr cloud_world(new PointCloudType());
+        pcl::transformPointCloud(*bbs_src_cloud_, *cloud_world, bbs_pose_.matrix());
+
+        bbs_cloud_ui_ = std::make_shared<ui::UiCloud>();
+        bbs_cloud_ui_->SetCloud(cloud_world, SE3());  // 已变换到世界系
+        bbs_cloud_ui_->SetCustomColor(Vec4f(1.0, 0.5, 0.0, 1.0));  // 亮橙色
+        bbs_cloud_ui_->SetRenderColor(ui::UiCloud::UseColor::CUSTOM_COLOR);
+
+        bbs_pose_ui_ = bbs_pose_;
+        bbs_score_pct_ui_ = bbs_score_pct_;
+        bbs_elapsed_ms_ui_ = bbs_elapsed_ms_;
+        bbs_trigger_msg_ui_ = bbs_trigger_msg_;
+        bbs_result_valid_ui_ = true;
+
+        LOG(INFO) << "[UI] BBS result updated: score=" << bbs_score_pct_
+                  << ", time=" << bbs_elapsed_ms_ << "ms";
+    } else {
+        bbs_result_valid_ui_ = false;
+    }
+
+    bbs_result_need_update_.store(false);
+    return true;
 }
 
 bool PangolinWindowImpl::UpdateVoxelPlanes() {
@@ -431,6 +482,7 @@ void PangolinWindowImpl::RenderClouds() {
     UpdateCurrentScan();
     UpdateLoopDebug();  // 更新回环调试信息
     UpdateVoxelPlanes(); // 更新 VoxelMap 平面
+    UpdateBBSResult();  // 更新 BBS 重定位结果
 
     // 绘制
     pangolin::Display(dis_3d_main_name_).Activate(s_cam_main_);
