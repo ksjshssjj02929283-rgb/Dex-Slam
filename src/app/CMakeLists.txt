@@ -77,5 +77,18 @@ target_link_libraries(test_ui
         ${third_party_libs}
 )
 
-install(TARGETS run_slam_offline run_slam_online run_loc_offline run_loc_online
+add_executable(map_odom_tf_broadcaster
+        ../wrapper/map_odom_tf_broadcaster.cc
+)
+
+ament_target_dependencies(map_odom_tf_broadcaster
+    "rclcpp"
+    "nav_msgs"
+    "geometry_msgs"
+    "tf2_ros"
+    "tf2_geometry_msgs"
+    "tf2"
+)
+
+install(TARGETS run_slam_offline run_slam_online run_loc_offline run_loc_online map_odom_tf_broadcaster
         DESTINATION lib/${PROJECT_NAME})

@@ -84,7 +84,7 @@ system:
   evaluation: false
   lidar_loc_skip_num: 4
   lidar_odom_skip_num: 2
-  pub_tf: true
+  pub_tf: false
 
 rviz:
   enable: true
