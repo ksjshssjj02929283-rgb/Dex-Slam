@@ -21,7 +21,10 @@ def launch_setup(context, *args, **kwargs):
     rviz_config = LaunchConfiguration('rviz_config').perform(context)
     config_file = resolve_config_file(pkg_dir, lidar_type)
 
-    return [
+    enable_map_odom_tf = LaunchConfiguration('enable_map_odom_tf').perform(context)
+    odom_topic = LaunchConfiguration('odom_topic').perform(context)
+
+    nodes = [
         Node(
             package='lightning',
             executable='run_loc_online',
@@ -33,6 +36,7 @@ def launch_setup(context, *args, **kwargs):
                 '--map_name', map_name,
             ],
         ),
+
         Node(
             package='rviz2',
             executable='rviz2',
@@ -41,6 +45,25 @@ def launch_setup(context, *args, **kwargs):
             arguments=['-d', rviz_config],
         ),
     ]
+
+    if enable_map_odom_tf.lower() == 'true':
+        nodes.append(
+            Node(
+                package='lightning',
+                executable='map_odom_tf_broadcaster',
+                name='map_odom_tf_broadcaster',
+                output='screen',
+                parameters=[{
+                    'odom_topic': odom_topic,
+                    'pose_topic': '/lightning/pose/current',
+                    'odom_frame': 'odom',
+                    'base_link_frame': 'base_link',
+                    'map_frame': 'map',
+                }],
+            )
+        )
+
+    return nodes
 
 
 def generate_launch_description():
@@ -65,6 +88,16 @@ def generate_launch_description():
             'rviz_config',
             default_value=os.path.join(pkg_dir, 'rviz', 'lightning.rviz'),
             description='RViz configuration file path',
+        ),
+        DeclareLaunchArgument(
+            'enable_map_odom_tf',
+            default_value='true',
+            description='Enable map->odom TF broadcasting',
+        ),
+        DeclareLaunchArgument(
+            'odom_topic',
+            default_value='/feedback/odom',
+            description='Wheel odometry topic name',
         ),
         OpaqueFunction(function=launch_setup),
     ])
