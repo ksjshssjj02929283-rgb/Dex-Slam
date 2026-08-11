@@ -558,7 +558,61 @@ def plot_stage_comparison(df, output_pdf):
     plt.close()
     print("✓ 优化后+外推+平滑输出对比图已生成")
     
-    # ===== 附加图：Z轴对比（三组） =====
+    # ===== 第四组：优化后+外推对比 =====
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle('优化后+外推对比（相对位姿）', fontsize=16, fontweight='bold')
+    
+    optim_extrap_stages = [
+        ('OPTIMIZED', '优化后', COLORS['OPTIMIZED'], '-'),
+        ('EXTRAPOLATED', '外推', COLORS['EXTRAPOLATED'], '--'),
+    ]
+    
+    # XY轨迹
+    ax = axes[0]
+    for stage, label, color, ls in optim_extrap_stages:
+        stage_df = df[df['stage'] == stage]
+        if len(stage_df) > 0:
+            ax.plot(stage_df['tx'], stage_df['ty'],
+                   label=label, color=color, linestyle=ls, linewidth=2, alpha=0.8)
+    ax.set_xlabel('X (m) - 相对初始位置')
+    ax.set_ylabel('Y (m) - 相对初始位置')
+    ax.set_title('XY轨迹')
+    ax.legend(fontsize=9, framealpha=0.9)
+    ax.grid(True, alpha=0.3)
+    ax.axis('equal')
+    
+    # X轴时间序列
+    ax = axes[1]
+    for stage, label, color, ls in optim_extrap_stages:
+        stage_df = df[df['stage'] == stage]
+        if len(stage_df) > 0:
+            ax.plot(stage_df['time_relative'], stage_df['tx'],
+                   label=label, color=color, linestyle=ls, linewidth=1.5, alpha=0.8)
+    ax.set_xlabel('时间 (s)')
+    ax.set_ylabel('X (m) - 相对初始位置')
+    ax.set_title('X轴对比')
+    ax.legend(fontsize=9, framealpha=0.9)
+    ax.grid(True, alpha=0.3)
+    
+    # Y轴时间序列
+    ax = axes[2]
+    for stage, label, color, ls in optim_extrap_stages:
+        stage_df = df[df['stage'] == stage]
+        if len(stage_df) > 0:
+            ax.plot(stage_df['time_relative'], stage_df['ty'],
+                   label=label, color=color, linestyle=ls, linewidth=1.5, alpha=0.8)
+    ax.set_xlabel('时间 (s)')
+    ax.set_ylabel('Y (m) - 相对初始位置')
+    ax.set_title('Y轴对比')
+    ax.legend(fontsize=9, framealpha=0.9)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    output_pdf.savefig(fig)
+    plt.close()
+    print("✓ 优化后+外推对比图已生成")
+    
+    # ===== 附加图：Z轴对比（四组） =====
     # Z轴 - 输入源
     fig, ax = plt.subplots(1, 1, figsize=(12, 5))
     fig.suptitle('Z轴对比 - 输入源（相对位姿）', fontsize=14, fontweight='bold')
@@ -591,6 +645,22 @@ def plot_stage_comparison(df, output_pdf):
     output_pdf.savefig(fig)
     plt.close()
     
+    # Z轴 - 优化后+外推
+    fig, ax = plt.subplots(1, 1, figsize=(12, 5))
+    fig.suptitle('Z轴对比 - 优化后+外推（相对位姿）', fontsize=14, fontweight='bold')
+    for stage, label, color, ls in optim_extrap_stages:
+        stage_df = df[df['stage'] == stage]
+        if len(stage_df) > 0:
+            ax.plot(stage_df['time_relative'], stage_df['tz'],
+                   label=label, color=color, linestyle=ls, linewidth=1.5, alpha=0.8)
+    ax.set_xlabel('时间 (s)')
+    ax.set_ylabel('Z (m) - 相对初始位置')
+    ax.legend(fontsize=9, framealpha=0.9)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    output_pdf.savefig(fig)
+    plt.close()
+    
     # Z轴 - 输出阶段
     fig, ax = plt.subplots(1, 1, figsize=(12, 5))
     fig.suptitle('Z轴对比 - 优化后+外推+平滑（相对位姿）', fontsize=14, fontweight='bold')
@@ -606,7 +676,7 @@ def plot_stage_comparison(df, output_pdf):
     plt.tight_layout()
     output_pdf.savefig(fig)
     plt.close()
-    print("✓ Z轴对比图已生成（三组）")
+    print("✓ Z轴对比图已生成（四组）")
     
     # ===== 附加图：平滑因子和置信度 =====
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
