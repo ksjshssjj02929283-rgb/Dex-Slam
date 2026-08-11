@@ -37,13 +37,13 @@ fasterlio:
   esti_plane_threshold: 0.1        # default=0.1
 
   # IVox 参数（与 VoxelMap 共同用于点面匹配定位）
-  use_ivox: true                   # 是否启用 IVox 约束（前段）
+  use_ivox: false                   # 是否启用 IVox 约束（前段）
   ivox_grid_resolution: 0.4        # IVox 体素大小（米），NEARBY6 时适当缩小补偿邻域减少
   ivox_nearby_type: 6              # 邻域类型: 0/6/18/26，改为6，kNN搜索降至37%
   ivox_range_delete: true           # 是否删除超出距离的 grid
   ivox_max_range: 100.0              # 保留 grid 的最大距离（米）
 
-  use_voxel_map: false              # 是否启用 VoxelMap 约束（后段）
+  use_voxel_map: true              # 是否启用 VoxelMap 约束（后段）
 
   use_aa: true  # use anderson-acceleration
 
