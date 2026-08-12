@@ -56,9 +56,26 @@ void PGO::PubResult() {
             localization_unusual_tag_ = false;
         }
 
+        // ========== PubResult调用外推前的状态 ==========
+        LOG(INFO) << std::setprecision(6) << std::fixed << "========== [PubResult开始] =========="
+                  << "\n[PGO优化结果] 时间: " << impl_->result_.timestamp_ << ", 位姿: t=["
+                  << impl_->result_.pose_.translation().transpose() << "]"
+                  << ", 置信度: " << impl_->result_.confidence_ << "\n[DR队列] 最新时间: "
+                  << (impl_->dr_pose_queue_.empty() ? -1.0 : impl_->dr_pose_queue_.back().timestamp_)
+                  << ", 大小: " << impl_->dr_pose_queue_.size() << "\n[LO队列] 最新时间: "
+                  << (impl_->lidar_odom_pose_queue_.empty() ? -1.0 : impl_->lidar_odom_pose_queue_.back().timestamp_)
+                  << ", 大小: " << impl_->lidar_odom_pose_queue_.size() << "\n[LidarLoc队列] 最新时间: "
+                  << (impl_->lidar_loc_pose_queue_.empty() ? -1.0 : impl_->lidar_loc_pose_queue_.back().timestamp_)
+                  << ", 大小: " << impl_->lidar_loc_pose_queue_.size();
+
         auto result = impl_->result_;
         ExtrapolateLocResult(result);
         double dt = result.timestamp_ - impl_->result_.timestamp_;
+
+        LOG(INFO) << std::setprecision(6) << std::fixed << "[外推后结果]"
+                  << "\n  - 时间: " << result.timestamp_ << ", 位姿: t=[" << result.pose_.translation().transpose()
+                  << "]"
+                  << "\n  - 外推时间差: " << dt << " s";
 
         // 记录外推后的位姿
         if (debug_log_enabled_) {
@@ -118,9 +135,24 @@ void PGO::PubResult() {
         impl_->result_.timestamp_ = result.timestamp_;
         impl_->result_.pose_ = result.pose_;
 
+        // ========== 平滑处理 ==========
+        const SE3 pose_before_smooth = result.pose_;
+        const double time_before_smooth = result.timestamp_;
+
+        LOG(INFO) << std::setprecision(6) << std::fixed << "[平滑处理前]"
+                  << "\n  - 时间: " << time_before_smooth << ", 位姿: t=["
+                  << pose_before_smooth.translation().transpose() << "]";
+
         SE3 extra_pose = result.pose_;
         smoother_->PushPose(result.pose_);
         result.pose_ = smoother_->GetPose();
+
+        LOG(INFO) << std::setprecision(6) << std::fixed << "[平滑处理后]"
+                  << "\n  - 时间: " << result.timestamp_ << ", 位姿: t=[" << result.pose_.translation().transpose()
+                  << "]"
+                  << "\n  - 平滑因子: " << smoother_->GetSmoothFactor()
+                  << "\n  - 平移变化: " << (result.pose_.translation() - pose_before_smooth.translation()).norm()
+                  << " m";
 
         // 记录平滑后的最终输出位姿
         if (debug_log_enabled_) {
@@ -189,6 +221,10 @@ bool PGO::ProcessDR(const NavState& dr_result) {
         PGODebugLogger::Instance().LogDRInput(dr_result.timestamp_, dr_result.GetPose());
     }
 
+    LOG(INFO) << std::setprecision(6) << std::fixed << "[ProcessDR] 收到DR数据: 时间=" << dr_result.timestamp_
+              << ", 位姿: t=[" << dr_result.GetPose().translation().transpose() << "]"
+              << ", DR队列大小: " << impl_->dr_pose_queue_.size();
+
     if (!impl_->dr_pose_queue_.empty() && !is_parking_) {
         PubResult();
     } else if (is_parking_ && high_freq_output_func_) {
@@ -226,6 +262,11 @@ bool PGO::ProcessLidarOdom(const NavState& lio_result) {
     if (debug_log_enabled_) {
         PGODebugLogger::Instance().LogLOInput(lio_result.timestamp_, lio_result.GetPose());
     }
+
+    LOG(INFO) << std::setprecision(6) << std::fixed << "[ProcessLidarOdom] 收到LO数据: 时间=" << lio_result.timestamp_
+              << ", 位姿: t=[" << lio_result.GetPose().translation().transpose() << "]"
+              << ", LO队列大小: " << impl_->lidar_odom_pose_queue_.size()
+              << ", 可靠性: " << lio_result.lidar_odom_reliable_;
 
     if (!lio_result.lidar_odom_reliable_) {
         impl_->lidar_odom_conflict_with_dr_ = true;
@@ -396,6 +437,26 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
     SE3 interp_pose;
     NavState best_match;
 
+    // ========== 外推前状态记录 ==========
+    const double time_before_extrap = output_result.timestamp_;
+    const SE3 pose_before_extrap = output_result.pose_;
+
+    LOG(INFO) << std::setprecision(6) << std::fixed << "========== [外推开始] =========="
+              << "\n[外推前] 时间: " << time_before_extrap << "\n[外推前] 位姿: t=["
+              << pose_before_extrap.translation().transpose() << "]";
+
+    // 打印各输入源最新时间
+    LOG(INFO) << std::setprecision(6) << std::fixed << "[输入源状态]"
+              << "\n  - PGO优化结果时间: " << impl_->result_.timestamp_
+              << "\n  - DR队列最新时间: " << (dr_pose_queue.empty() ? -1.0 : dr_pose_queue.back().timestamp_)
+              << " (队列大小: " << dr_pose_queue.size() << ")"
+              << "\n  - LO队列最新时间: " << (lo_pose_queue.empty() ? -1.0 : lo_pose_queue.back().timestamp_)
+              << " (队列大小: " << lo_pose_queue.size() << ")"
+              << "\n  - LidarLoc队列最新时间: "
+              << (impl_->lidar_loc_pose_queue_.empty() ? -1.0 : impl_->lidar_loc_pose_queue_.back().timestamp_)
+              << " (队列大小: " << impl_->lidar_loc_pose_queue_.size() << ")"
+              << "\n  - LO有效标志: " << impl_->lidar_odom_valid_;
+
     /// 确定外推的最远时间，由DR，GPS，LO中取最大者（因为这几个都可能断流）
     double latest_time = impl_->result_.timestamp_;
     if (!dr_pose_queue.empty() && dr_pose_queue.back().timestamp_ > latest_time) {
@@ -405,6 +466,8 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
     if (!lo_pose_queue.empty() && lo_pose_queue.back().timestamp_ > latest_time) {
         latest_time = lo_pose_queue.back().timestamp_;
     }
+
+    LOG(INFO) << std::setprecision(6) << std::fixed << "[外推目标时间] latest_time: " << latest_time;
 
     // if (!impl_->gps_queue_.empty() && impl_->gps_queue_.back().timestamp_ > latest_time) {
     //     latest_time = impl_->gps_queue_.back().timestamp_;
@@ -469,11 +532,30 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
             dr_pose_inc_th = 2.0;
         }
 
+        LOG(INFO) << std::setprecision(6) << std::fixed << "[DR外推准备]"
+                  << "\n  - 外推时间差: " << dr_extrap_time << " s"
+                  << "\n  - 距离阈值: " << dr_pose_inc_th << " m"
+                  << "\n  - DR起始插值时间: " << output_result.timestamp_
+                  << "\n  - DR结束时间: " << dr_pose_queue.back().timestamp_;
+
         bool dr_interp_success = math::PoseInterp<NavState>(
             output_result.timestamp_, dr_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_; },
             [](const NavState& nav_state) { return nav_state.GetPose(); }, interp_pose, best_match);
+
+        LOG(INFO) << std::setprecision(6) << std::fixed << "[DR插值结果] 成功: " << dr_interp_success
+                  << "\n  - 插值位姿: t=[" << interp_pose.translation().transpose() << "]";
+
         if (dr_interp_success) {
             SE3 pose_incre = interp_pose.inverse() * dr_pose_queue.back().GetPose();
+
+            const double pose_incre_trans = pose_incre.translation().norm();
+            const double pose_incre_rot = (pose_incre.so3().log().norm() * 180.0 / M_PI);
+
+            LOG(INFO) << std::setprecision(6) << std::fixed << "[DR外推增量]"
+                      << "\n  - 平移增量: " << pose_incre_trans << " m, 方向: [" << pose_incre.translation().transpose()
+                      << "]"
+                      << "\n  - 旋转增量: " << pose_incre_rot << " deg"
+                      << "\n  - 阈值检查: " << (pose_incre_trans <= dr_pose_inc_th ? "通过" : "超出(但检查被注释)");
 
             /// 限制此处的pose incre大小
             // if (pose_incre.translation().norm() > dr_pose_inc_th) {
@@ -482,14 +564,35 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
             //     return true;
             // }
 
+            const SE3 pose_before_dr = output_result.pose_;
+            const double time_before_dr = output_result.timestamp_;
             output_result.pose_ = output_result.pose_ * pose_incre;
             const double time_incre = dr_pose_queue.back().timestamp_ - output_result.timestamp_;
             output_result.timestamp_ = dr_pose_queue.back().timestamp_;
+
+            LOG(INFO) << std::setprecision(6) << std::fixed << "[DR外推完成]"
+                      << "\n  - 外推前位姿: t=[" << pose_before_dr.translation().transpose() << "]"
+                      << "\n  - 外推后位姿: t=[" << output_result.pose_.translation().transpose() << "]"
+                      << "\n  - 外推前时间: " << time_before_dr << "\n  - 外推后时间: " << output_result.timestamp_
+                      << "\n  - 时间增量: " << time_incre << " s";
+        } else {
+            LOG(WARNING) << "[DR外推] 插值失败！";
         }
+    } else {
+        LOG(INFO) << "[DR外推] 不满足条件: DR队列为空 或 DR最新时间 <= 当前结果时间";
     }
 
     if (output_result.timestamp_ < (latest_time - 0.05)) {
         /// 如果中间失效导致最新定位无法更新，那么用激光定位将其外推至最新位置
+        const SE3 pose_before_fallback = output_result.pose_;
+        const double time_before_fallback = output_result.timestamp_;
+
+        LOG(INFO) << std::setprecision(6) << std::fixed << "[降级外推-使用LidarLoc]"
+                  << "\n  - 触发原因: 当前时间 " << output_result.timestamp_ << " < 目标时间 " << latest_time
+                  << " - 0.05"
+                  << "\n  - 外推前位姿: t=[" << pose_before_fallback.translation().transpose() << "]"
+                  << "\n  - 外推前时间: " << time_before_fallback;
+
         SE3 interp_pose_final;
         TimedPose best_match_final;
         if (math::PoseInterp<TimedPose>(
@@ -497,8 +600,23 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
                 [](const TimedPose& pose) { return pose.pose_; }, interp_pose_final, best_match_final, 5.0)) {
             output_result.pose_ = interp_pose_final;
             output_result.timestamp_ = latest_time;
+
+            LOG(INFO) << std::setprecision(6) << std::fixed << "[降级外推完成]"
+                      << "\n  - 外推后位姿: t=[" << output_result.pose_.translation().transpose() << "]"
+                      << "\n  - 外推后时间: " << output_result.timestamp_;
+        } else {
+            LOG(WARNING) << "[降级外推] LidarLoc插值失败！";
         }
     }
+
+    // ========== 外推最终结果 ==========
+    LOG(INFO) << std::setprecision(6) << std::fixed << "========== [外推结束] =========="
+              << "\n[外推前] 时间: " << time_before_extrap << ", 位姿: t=["
+              << pose_before_extrap.translation().transpose() << "]"
+              << "\n[外推后] 时间: " << output_result.timestamp_ << ", 位姿: t=["
+              << output_result.pose_.translation().transpose() << "]"
+              << "\n[时间差] " << (output_result.timestamp_ - time_before_extrap) << " s"
+              << "\n[平移差] " << (output_result.pose_.translation() - pose_before_extrap.translation()).norm() << " m";
 
     return true;
 }
