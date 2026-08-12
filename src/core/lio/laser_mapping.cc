@@ -582,6 +582,26 @@ bool LaserMapping::SyncPackages() {
     /*** push imu_ data, and pop from imu_ buffer ***/
     double imu_time = imu_buffer_.front()->timestamp;
     measures_.imu_.clear();
+
+    // 检查 IMU 是否覆盖完整激光周期 [lidar_begin_time_, lidar_end_time_]
+    if (imu_time > lidar_end_time_) {
+        // IMU 全部晚于激光结束时间，无法提供任何 IMU 数据
+        LOG(WARNING) << std::setprecision(12) << "IMU data too late for lidar: imu_front=" << imu_time
+                     << ", lidar_end=" << lidar_end_time_ << ", diff=" << (imu_time - lidar_end_time_) * 1000.0 << "ms"
+                     << ", skipping this lidar frame";
+        lidar_buffer_.pop_front();
+        time_buffer_.pop_front();
+        lidar_pushed_ = false;
+        return false;
+    }
+
+    if ((imu_time - measures_.lidar_begin_time_) * 1000 > 20) {
+        // IMU 不覆盖激光开始时间，部分区间缺失 IMU (超过20ms)
+        LOG(WARNING) << std::setprecision(12) << "IMU does not cover full lidar period: imu_front=" << imu_time
+                     << ", lidar_begin=" << measures_.lidar_begin_time_ << ", lidar_end=" << lidar_end_time_
+                     << ", missing " << (imu_time - measures_.lidar_begin_time_) * 1000.0 << "ms at start";
+    }
+
     while ((!imu_buffer_.empty()) && (imu_time < lidar_end_time_)) {
         imu_time = imu_buffer_.front()->timestamp;
         if (imu_time > lidar_end_time_) {
