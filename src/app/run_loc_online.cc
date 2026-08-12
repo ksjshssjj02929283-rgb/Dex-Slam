@@ -21,6 +21,8 @@
 #include "std_msgs/msg/int16.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
+#include <yaml-cpp/yaml.h>
+
 DEFINE_string(config, "./config/default.yaml", "配置文件");
 DEFINE_string(map_folder, "", "地图根目录（空 = 默认 ~/.dexe/data/maps）");
 DEFINE_string(map_name, "", "地图名称");
@@ -36,41 +38,40 @@ class LocalizationManagerNode : public rclcpp::Node {
         localization_status_pub_ = create_publisher<std_msgs::msg::Int16>("localization_status", 10);
 
         set_map_name_srv_ = create_service<nav_interfaces::srv::SetMapName>(
-            "~/set_map_name", std::bind(&LocalizationManagerNode::HandleSetMapName, this, std::placeholders::_1,
-                                         std::placeholders::_2));
+            "~/set_map_name",
+            std::bind(&LocalizationManagerNode::HandleSetMapName, this, std::placeholders::_1, std::placeholders::_2));
 
         set_init_pose_srv_ = create_service<nav_interfaces::srv::SetPose>(
-            "~/set_init_pose", std::bind(&LocalizationManagerNode::HandleSetInitPose, this, std::placeholders::_1,
-                                          std::placeholders::_2));
+            "~/set_init_pose",
+            std::bind(&LocalizationManagerNode::HandleSetInitPose, this, std::placeholders::_1, std::placeholders::_2));
 
         start_localization_srv_ = create_service<std_srvs::srv::Trigger>(
             "~/start_localization", std::bind(&LocalizationManagerNode::HandleStartLocalization, this,
-                                               std::placeholders::_1, std::placeholders::_2));
+                                              std::placeholders::_1, std::placeholders::_2));
 
         stop_localization_srv_ = create_service<std_srvs::srv::Trigger>(
-            "~/stop_localization",
-            std::bind(&LocalizationManagerNode::HandleStopLocalization, this, std::placeholders::_1,
-                      std::placeholders::_2));
+            "~/stop_localization", std::bind(&LocalizationManagerNode::HandleStopLocalization, this,
+                                             std::placeholders::_1, std::placeholders::_2));
 
         reset_localization_srv_ = create_service<std_srvs::srv::Trigger>(
             "~/reset_localization", std::bind(&LocalizationManagerNode::HandleResetLocalization, this,
-                                               std::placeholders::_1, std::placeholders::_2));
+                                              std::placeholders::_1, std::placeholders::_2));
 
         set_map_from_manager_srv_ = create_service<std_srvs::srv::Trigger>(
             "~/set_map_from_manager", std::bind(&LocalizationManagerNode::HandleSetMapFromManager, this,
-                                                 std::placeholders::_1, std::placeholders::_2));
+                                                std::placeholders::_1, std::placeholders::_2));
 
         get_localization_status_srv_ = create_service<nav_interfaces::srv::GetStatus>(
             "~/get_localization_status", std::bind(&LocalizationManagerNode::HandleGetLocalizationStatus, this,
-                                                    std::placeholders::_1, std::placeholders::_2));
+                                                   std::placeholders::_1, std::placeholders::_2));
 
         get_map_folder_srv_ = create_service<nav_interfaces::srv::GetString>(
             "~/get_map_folder", std::bind(&LocalizationManagerNode::HandleGetMapFolder, this, std::placeholders::_1,
-                                           std::placeholders::_2));
+                                          std::placeholders::_2));
 
         get_map_name_srv_ = create_service<nav_interfaces::srv::GetString>(
-            "~/get_map_name", std::bind(&LocalizationManagerNode::HandleGetMapName, this, std::placeholders::_1,
-                                         std::placeholders::_2));
+            "~/get_map_name",
+            std::bind(&LocalizationManagerNode::HandleGetMapName, this, std::placeholders::_1, std::placeholders::_2));
 
         status_timer_ = create_wall_timer(200ms, std::bind(&LocalizationManagerNode::PublishStatus, this));
 
@@ -147,7 +148,8 @@ class LocalizationManagerNode : public rclcpp::Node {
         state_ = LocalizationState::STARTING;
 
         if (!ValidateMapResources()) {
-            RCLCPP_ERROR(get_logger(), "Invalid map resources: %s/%s", FLAGS_map_folder.c_str(), FLAGS_map_name.c_str());
+            RCLCPP_ERROR(get_logger(), "Invalid map resources: %s/%s", FLAGS_map_folder.c_str(),
+                         FLAGS_map_name.c_str());
             state_ = LocalizationState::ERROR;
             return false;
         }
@@ -155,6 +157,13 @@ class LocalizationManagerNode : public rclcpp::Node {
         const std::string map_path = ResolveMapDir(FLAGS_map_folder, FLAGS_map_name) + "/";
 
         LocSystem::Options opt;
+        auto yaml = YAML::LoadFile(FLAGS_config);
+        if (yaml["system"] && yaml["system"]["pub_tf"]) {
+            opt.pub_tf_ = yaml["system"]["pub_tf"].as<bool>();
+        }
+        if (yaml["system"] && yaml["system"]["with_rviz"]) {
+            opt.with_rviz_ = yaml["system"]["with_rviz"].as<bool>();
+        }
         loc_system_ = std::make_unique<LocSystem>(opt);
         if (!loc_system_->Init(FLAGS_config, map_path)) {
             loc_system_.reset();

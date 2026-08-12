@@ -19,6 +19,8 @@
 #include "wrapper/bag_io.h"
 #include "wrapper/ros_utils.h"
 
+#include <yaml-cpp/yaml.h>
+
 DEFINE_string(input_bag, "", "输入 ROS2 bag 文件路径");
 DEFINE_string(config, "./config/default.yaml", "配置文件路径");
 DEFINE_string(map_folder, "", "地图根目录（空 = 默认 ~/.dexe/data/maps）");
@@ -54,6 +56,13 @@ int main(int argc, char** argv) {
 
     LocSystem::Options options;
     options.online_mode_ = false;
+    auto yaml_cfg = YAML::LoadFile(FLAGS_config);
+    if (yaml_cfg["system"] && yaml_cfg["system"]["pub_tf"]) {
+        options.pub_tf_ = yaml_cfg["system"]["pub_tf"].as<bool>();
+    }
+    if (yaml_cfg["system"] && yaml_cfg["system"]["with_rviz"]) {
+        options.with_rviz_ = yaml_cfg["system"]["with_rviz"].as<bool>();
+    }
     LocSystem loc_system(options);
 
     if (!loc_system.Init(FLAGS_config, map_dir)) {
