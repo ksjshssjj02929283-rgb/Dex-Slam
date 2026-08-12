@@ -235,10 +235,7 @@ bool LaserMapping::Run() {
     if (flg_first_scan_) {
         LOG(INFO) << "first scan pts: " << scan_undistort_->size();
 
-        {
-            UL lock(mtx_buffer_);
-            state_point_ = kf_.GetX();
-        }
+        state_point_ = kf_.GetX();
 
         // 构造首帧世界坐标变换
         Eigen::Matrix3d R_wl = (state_point_.rot_ * state_point_.offset_R_lidar_).matrix();
@@ -288,10 +285,7 @@ bool LaserMapping::Run() {
         }
 
         first_lidar_time_ = measures_.lidar_end_time_;
-        {
-            UL lock(mtx_buffer_);
-            state_point_.timestamp_ = lidar_end_time_;
-        }
+        state_point_.timestamp_ = lidar_end_time_;
         flg_first_scan_ = false;
         return true;
     }
@@ -357,46 +351,42 @@ bool LaserMapping::Run() {
             auto old_state = kf_.GetX();
 
             kf_.Update(ESKF::ObsType::LIDAR, 1e-3);
+            state_point_ = kf_.GetX();
 
-            {
-                UL lock(mtx_buffer_);
-                state_point_ = kf_.GetX();
+            if (keep_first_imu_estimation_ && all_keyframes_.size() < 5 &&
+                (old_state.rot_.inverse() * state_point_.rot_).log().norm() > 0.3 * M_PI / 180) {
+                kf_.ChangeX(old_state);
+                state_point_ = old_state;
 
-                if (keep_first_imu_estimation_ && all_keyframes_.size() < 5 &&
-                    (old_state.rot_.inverse() * state_point_.rot_).log().norm() > 0.3 * M_PI / 180) {
-                    kf_.ChangeX(old_state);
-                    state_point_ = old_state;
-
-                    // 状态回退：pv_list_ 中的世界坐标是基于被拒绝的姿态计算的，
-                    // 需要用正确的预测状态（old_state）重建 pv_list_ 以正确更新地图
-                    if (use_voxel_map_) {
-                        Eigen::Matrix3d R_wl_ok = (old_state.rot_ * old_state.offset_R_lidar_).matrix();
-                        Eigen::Vector3d t_wl_ok = old_state.rot_ * old_state.offset_t_lidar_ + old_state.pos_;
-                        Eigen::Matrix3d cov_rot_ok = Eigen::Matrix3d::Identity() * 1e-4;
-                        Eigen::Matrix3d cov_trans_ok = Eigen::Matrix3d::Identity() * 1e-4;
-                        int cnt = scan_down_body_->size();
-                        pv_list_.resize(cnt);
-                        for (int ii = 0; ii < cnt; ++ii) {
-                            const Eigen::Vector3d &pb = body_points_list_[ii];
-                            Eigen::Vector3d pw = R_wl_ok * pb + t_wl_ok;
-                            pv_list_[ii].point_body = pb;
-                            pv_list_[ii].point_world = pw;
-                            pv_list_[ii].point = pw;
-                            // 使用预计算的 body_cov
-                            pv_list_[ii].cov = VoxelMapType::PropagateCovToWorld(body_cov_list_[ii], pb, R_wl_ok,
-                                                                                 cov_rot_ok, cov_trans_ok);
-                        }
+                // 状态回退：pv_list_ 中的世界坐标是基于被拒绝的姿态计算的，
+                // 需要用正确的预测状态（old_state）重建 pv_list_ 以正确更新地图
+                if (use_voxel_map_) {
+                    Eigen::Matrix3d R_wl_ok = (old_state.rot_ * old_state.offset_R_lidar_).matrix();
+                    Eigen::Vector3d t_wl_ok = old_state.rot_ * old_state.offset_t_lidar_ + old_state.pos_;
+                    Eigen::Matrix3d cov_rot_ok = Eigen::Matrix3d::Identity() * 1e-4;
+                    Eigen::Matrix3d cov_trans_ok = Eigen::Matrix3d::Identity() * 1e-4;
+                    int cnt = scan_down_body_->size();
+                    pv_list_.resize(cnt);
+                    for (int ii = 0; ii < cnt; ++ii) {
+                        const Eigen::Vector3d &pb = body_points_list_[ii];
+                        Eigen::Vector3d pw = R_wl_ok * pb + t_wl_ok;
+                        pv_list_[ii].point_body = pb;
+                        pv_list_[ii].point_world = pw;
+                        pv_list_[ii].point = pw;
+                        // 使用预计算的 body_cov
+                        pv_list_[ii].cov = VoxelMapType::PropagateCovToWorld(body_cov_list_[ii], pb, R_wl_ok,
+                                                                             cov_rot_ok, cov_trans_ok);
                     }
-
-                    LOG(INFO) << "set state as prediction";
                 }
 
-                // LOG(INFO) << "old yaw: " << old_state.rot_.angleZ() << ", new: " << state_point_.rot_.angleZ();
-
-                state_point_.timestamp_ = measures_.lidar_end_time_;
-                euler_cur_ = state_point_.rot_;
-                pos_lidar_ = state_point_.pos_ + state_point_.rot_ * state_point_.offset_t_lidar_;
+                LOG(INFO) << "set state as prediction";
             }
+
+            // LOG(INFO) << "old yaw: " << old_state.rot_.angleZ() << ", new: " << state_point_.rot_.angleZ();
+
+            state_point_.timestamp_ = measures_.lidar_end_time_;
+            euler_cur_ = state_point_.rot_;
+            pos_lidar_ = state_point_.pos_ + state_point_.rot_ * state_point_.offset_t_lidar_;
         },
         "IEKF Solve and Update");
 
@@ -407,23 +397,15 @@ bool LaserMapping::Run() {
     //           << " Map voxel num: " << voxel_map_->NumVoxels() << " effect num : " << effect_feat_num_;
 
     /// keyframes
-    {
-        UL lock(mtx_buffer_);
-        bool need_make_kf = false;
-        if (last_kf_ == nullptr) {
-            need_make_kf = true;
-        } else {
-            SE3 last_pose = last_kf_->GetLIOPose();
-            SE3 cur_pose = state_point_.GetPose();
-            if ((last_pose.translation() - cur_pose.translation()).norm() > options_.kf_dis_th_ ||
-                (last_pose.so3().inverse() * cur_pose.so3()).log().norm() > options_.kf_angle_th_) {
-                need_make_kf = true;
-            } else if (!options_.is_in_slam_mode_ &&
-                       (state_point_.timestamp_ - last_kf_->GetState().timestamp_) > 2.0) {
-                need_make_kf = true;
-            }
-        }
-        if (need_make_kf) {
+    if (last_kf_ == nullptr) {
+        MakeKF();
+    } else {
+        SE3 last_pose = last_kf_->GetLIOPose();
+        SE3 cur_pose = state_point_.GetPose();
+        if ((last_pose.translation() - cur_pose.translation()).norm() > options_.kf_dis_th_ ||
+            (last_pose.so3().inverse() * cur_pose.so3()).log().norm() > options_.kf_angle_th_) {
+            MakeKF();
+        } else if (!options_.is_in_slam_mode_ && (state_point_.timestamp_ - last_kf_->GetState().timestamp_) > 2.0) {
             MakeKF();
         }
     }
@@ -475,6 +457,7 @@ void LaserMapping::MakeKF() {
     if (options_.is_in_slam_mode_) {
         all_keyframes_.emplace_back(kf);
     }
+
     last_kf_ = kf;
 }
 
