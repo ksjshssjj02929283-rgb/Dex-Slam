@@ -3,7 +3,7 @@
 namespace lightning {
 
 namespace {
-Mat3d ProjectToSO3(const Mat3d& R) {
+Mat3d ProjectToSO3(const Mat3d &R) {
     Eigen::JacobiSVD<Mat3d> svd(R, Eigen::ComputeFullU | Eigen::ComputeFullV);
     Mat3d U = svd.matrixU();
     Mat3d V = svd.matrixV();
@@ -70,16 +70,16 @@ IMUPtr ImuProcess::TransformImuToLidar(const IMUPtr &imu) const {
 Mat3d ImuProcess::AlignGravity(const Vec3d &gravity_vector, Vec3d &aligned_gravity) {
     // 归一化重力向量
     Vec3d n0 = gravity_vector / gravity_vector.norm();
-    
+
     // 目标重力方向：固定为 z-up 世界坐标系（重力指向 -z），
     // 与传感器的微小前后倾斜无关，避免 z 分量符号随机翻转世界系。
     Vec3d n1(0, 0, -1);
-    
+
     // 计算旋转轴和角度
     Vec3d rotvec = n0.cross(n1);
     double rnorm = rotvec.norm();
     double cos_a = n0.dot(n1);
-    
+
     Mat3d rot = Mat3d::Identity();
     if (rnorm > 1e-6) {  // 避免除零
         rotvec = rotvec / rnorm;
@@ -88,19 +88,19 @@ Mat3d ImuProcess::AlignGravity(const Vec3d &gravity_vector, Vec3d &aligned_gravi
         double angle = std::atan2(rnorm, cos_a);
         Eigen::AngleAxisd angaxis(angle, rotvec);
         rot = ProjectToSO3(angaxis.matrix());
-        
+
         std::cout << "Gravity alignment: rotation angle = " << angle * 180.0 / M_PI
                   << " deg, axis = " << rotvec.transpose() << std::endl;
     } else {
         std::cout << "Gravity already aligned, no rotation needed" << std::endl;
     }
-    
+
     // 计算对齐后的重力向量
     aligned_gravity = rot * gravity_vector;
-    
+
     std::cout << "Gravity before alignment: " << gravity_vector.transpose() << std::endl;
     std::cout << "Gravity after alignment:  " << aligned_gravity.transpose() << std::endl;
-    
+
     return rot;
 }
 
@@ -136,50 +136,48 @@ void ImuProcess::IMUInit(const MeasureGroup &meas, ESKF &kf_state, int &N) {
 
         N++;
     }
-    
+
     // 静止判断：检查加速度和角速度方差
-    const double acc_cov_threshold = 0.05;   // 加速度方差阈值
+    const double acc_cov_threshold = 0.05;  // 加速度方差阈值
     const double gyr_cov_threshold = 0.05;  // 角速度方差阈值
-    
+
     double acc_cov_norm = cov_acc_.norm();
     double gyr_cov_norm = cov_gyr_.norm();
-    
-    std::cout << "IMU static check: acc_cov = " << acc_cov_norm 
-              << ", gyr_cov = " << gyr_cov_norm << std::endl;
-    
+
+    std::cout << "IMU static check: acc_cov = " << acc_cov_norm << ", gyr_cov = " << gyr_cov_norm << std::endl;
+
     if (acc_cov_norm > acc_cov_threshold || gyr_cov_norm > gyr_cov_threshold) {
-        std::cout << "IMU not static! acc_cov = " << acc_cov_norm 
-                  << " (threshold: " << acc_cov_threshold << "), gyr_cov = " << gyr_cov_norm
-                  << " (threshold: " << gyr_cov_threshold << ")" << std::endl;
+        std::cout << "IMU not static! acc_cov = " << acc_cov_norm << " (threshold: " << acc_cov_threshold
+                  << "), gyr_cov = " << gyr_cov_norm << " (threshold: " << gyr_cov_threshold << ")" << std::endl;
         // 重置初始化状态，等待下一帧
         b_first_frame_ = true;
         N = 1;
         return;
     }
-    
+
     std::cout << "IMU static check passed!" << std::endl;
 
     auto init_state = kf_state.GetX();
     init_state.timestamp_ = meas.imu_.back()->timestamp;
     std::cout << "IMU Init mean_acc_: " << mean_acc_.transpose() << ", mean_gyr_: " << mean_gyr_.transpose()
               << ", N: " << N - 1 << std::endl;
-    
+
     // 计算初始重力向量（加速度计测量的是-g）
     Vec3d gravity_init = -mean_acc_ / mean_acc_.norm() * G_m_s2;
     std::cout << "Initial gravity estimate: " << gravity_init.transpose() << std::endl;
-    
+
     // 使用重力对齐方法获取旋转矩阵
     Vec3d aligned_gravity;
     Mat3d R_align = AlignGravity(gravity_init, aligned_gravity);
-    
+
     // 设置对齐后的重力向量和初始旋转
     init_state.grav_ = S2(aligned_gravity);
     init_state.rot_ = SO3(ProjectToSO3(R_align));
     init_state.bg_ = mean_gyr_;
-    
+
     init_state.offset_t_lidar_ = t_refined_imu_in_lidar_;
     init_state.offset_R_lidar_ = SO3();
-    
+
     kf_state.ChangeX(init_state);
     std::cout << "init_state.grav_: " << init_state.grav_.vec_.transpose() << std::endl;
     std::cout << "init_state.rot_: \n" << init_state.rot_.matrix() << std::endl;
@@ -218,6 +216,14 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr
     Vec3d acc = Vec3d::Zero();
     Vec3d gyro = Vec3d::Zero();
 
+    // 使用局部变量构建 Q 矩阵，避免与 ProcessIMU 线程竞争 Q_ 成员
+    Eigen::Matrix<double, 12, 12> Q_local;
+    Q_local.setZero();
+    Q_local.block<3, 3>(0, 0).diagonal() = cov_gyr_;
+    Q_local.block<3, 3>(3, 3).diagonal() = cov_acc_;
+    Q_local.block<3, 3>(6, 6).diagonal() = cov_bias_gyr_;
+    Q_local.block<3, 3>(9, 9).diagonal() = cov_bias_acc_;
+
     for (auto it_imu = v_imu.begin(); it_imu < (v_imu.end() - 1); it_imu++) {
         auto &&head = *(it_imu);
         auto &&tail = *(it_imu + 1);
@@ -246,12 +252,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr
             break;
         }
 
-        Q_.block<3, 3>(0, 0).diagonal() = cov_gyr_;
-        Q_.block<3, 3>(3, 3).diagonal() = cov_acc_;
-        Q_.block<3, 3>(6, 6).diagonal() = cov_bias_gyr_;
-        Q_.block<3, 3>(9, 9).diagonal() = cov_bias_acc_;
-
-        kf_state.Predict(dt, Q_, gyro, acc);
+        kf_state.Predict(dt, Q_local, gyro, acc);
 
         /* save the poses at each IMU measurements */
         imu_state = kf_state.GetX();
@@ -269,7 +270,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr
     /*** calculated the pos and attitude prediction at the frame-end ***/
     double note = pcl_end_time > imu_end_time ? 1.0 : -1.0;
     dt = note * (pcl_end_time - imu_end_time);
-    kf_state.Predict(dt, Q_, gyro, acc);
+    kf_state.Predict(dt, Q_local, gyro, acc);
 
     imu_state = kf_state.GetX();
     last_imu_ = meas.imu_.back();
