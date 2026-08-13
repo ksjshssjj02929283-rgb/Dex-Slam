@@ -102,6 +102,7 @@ class PoseSmoother {
     }
 
     SE3 GetPose() const { return output_pose_; }
+    double GetSmoothFactor() const { return smooth_factor_; }
 
     void Reset() {
         UL lock(data_mutex_);

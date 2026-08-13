@@ -1,4 +1,5 @@
 #include "pgo_impl.h"
+#include "core/localization/pose_graph/pgo_debug_logger.h"
 #include "core/opti_algo/algo_select.h"
 #include "core/robust_kernel/robust_kernel_all.h"
 
@@ -99,6 +100,12 @@ void PGOImpl::AddPGOFrame(std::shared_ptr<PGOFrame> pgo_frame) {
         return;
     }
 
+    // 记录内插后的位姿（给到优化器的值）
+    // 注意：传递内插状态标志，失败时记录为空值而非0值，避免误导分析
+    PGODebugLogger::Instance().LogInterpolatedPoses(pgo_frame->timestamp_, pgo_frame->dr_pose_, pgo_frame->dr_set_,
+                                                    pgo_frame->lidar_odom_pose_, pgo_frame->lidar_odom_set_,
+                                                    pgo_frame->lidar_loc_pose_, pgo_frame->lidar_loc_set_);
+
     is_in_map_ = pgo_frame->lidar_loc_set_ && pgo_frame->lidar_loc_valid_;
     if (!is_in_map_) {
         //
@@ -117,6 +124,11 @@ void PGOImpl::AddPGOFrame(std::shared_ptr<PGOFrame> pgo_frame) {
 
     /// 触发一次优化
     RunOptimization();
+
+    // 记录优化后的位姿
+    if (current_frame_ && current_frame_->opti_times_ > 0) {
+        PGODebugLogger::Instance().LogOptimizedPose(current_frame_->timestamp_, current_frame_->opti_pose_);
+    }
 
     // // 根据优化更新一些状态量
     // UpdatePoseGraphState();

@@ -15,3 +15,10 @@ build_logs/
 build_*/
 install_*/
 log_*/
+
+# 定位调试与分析过程文件（保留在本机，不进入源码管理）
+debug/
+*.bak_*
+scripts/backend_path_*.txt
+scripts/*_analysis*.pdf
+scripts/*.csv

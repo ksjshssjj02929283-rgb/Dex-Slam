@@ -2,6 +2,7 @@
 #include "pgo_impl.h"
 
 #include <boost/format.hpp>
+#include <filesystem>
 
 #include <glog/logging.h>
 
@@ -10,6 +11,16 @@ namespace lightning::loc {
 PGO::PGO() : impl_(new PGOImpl), pose_extrapolator_(new PoseExtrapolator) {
     smoother_ = std::make_shared<PoseSmoother>(pgo::pgo_smooth_factor);
     LOG(INFO) << "smoother factor: " << pgo::pgo_smooth_factor;
+
+    // 初始化调试日志
+    std::string log_dir = "/tmp/pgo_debug";
+    if (std::getenv("PGO_DEBUG_LOG_DIR")) {
+        log_dir = std::getenv("PGO_DEBUG_LOG_DIR");
+    }
+    debug_log_enabled_ = PGODebugLogger::Instance().Init(log_dir);
+    if (debug_log_enabled_) {
+        LOG(INFO) << "PGO debug logging enabled, output to: " << log_dir;
+    }
 }
 
 PGO::~PGO() = default;
@@ -48,6 +59,11 @@ void PGO::PubResult() {
         auto result = impl_->result_;
         ExtrapolateLocResult(result);
         double dt = result.timestamp_ - impl_->result_.timestamp_;
+
+        // 记录外推后的位姿
+        if (debug_log_enabled_) {
+            PGODebugLogger::Instance().LogExtrapolatedPose(result.timestamp_, result.pose_, dt);
+        }
 
         bool extrap_success = true;
 
@@ -106,6 +122,11 @@ void PGO::PubResult() {
         smoother_->PushPose(result.pose_);
         result.pose_ = smoother_->GetPose();
 
+        // 记录平滑后的最终输出位姿
+        if (debug_log_enabled_) {
+            PGODebugLogger::Instance().LogSmoothedOutput(result.timestamp_, result.pose_, smoother_->GetSmoothFactor());
+        }
+
         // 输出force 2d
         // common::PoseRPY RPYXYZ = common::math::SE3ToRollPitchYaw(smoother_->GetPose());
         // RPYXYZ.roll = 0;
@@ -162,6 +183,12 @@ bool PGO::ProcessDR(const NavState& dr_result) {
     while (impl_->dr_pose_queue_.size() >= pgo::PGO_MAX_SIZE_OF_RELATIVE_POSE_QUEUE) {
         impl_->dr_pose_queue_.pop_front();
     }
+
+    // 记录DR输入位姿
+    if (debug_log_enabled_) {
+        PGODebugLogger::Instance().LogDRInput(dr_result.timestamp_, dr_result.GetPose());
+    }
+
     if (!impl_->dr_pose_queue_.empty() && !is_parking_) {
         PubResult();
     } else if (is_parking_ && high_freq_output_func_) {
@@ -193,6 +220,11 @@ bool PGO::ProcessLidarOdom(const NavState& lio_result) {
 
     while (impl_->lidar_odom_pose_queue_.size() >= pgo::PGO_MAX_SIZE_OF_RELATIVE_POSE_QUEUE) {
         impl_->lidar_odom_pose_queue_.pop_front();
+    }
+
+    // 记录LO输入位姿
+    if (debug_log_enabled_) {
+        PGODebugLogger::Instance().LogLOInput(lio_result.timestamp_, lio_result.GetPose());
     }
 
     if (!lio_result.lidar_odom_reliable_) {
@@ -289,6 +321,12 @@ bool PGO::ProcessLidarLoc(const LocalizationResult& loc_result) {
 
     LOG(INFO) << std::setprecision(14) << std::fixed << "PGO received LidarLoc ["
               << new_frame->lidar_loc_pose_.translation().transpose() << "], t=" << new_frame->timestamp_;
+
+    // 记录LidarLoc输入位姿
+    if (debug_log_enabled_) {
+        PGODebugLogger::Instance().LogLidarLocInput(loc_result.timestamp_, loc_result.pose_, loc_result.confidence_);
+    }
+
     return ProcessPGOFrame(new_frame);
 }
 

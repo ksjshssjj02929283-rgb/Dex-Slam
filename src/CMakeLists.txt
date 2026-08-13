@@ -170,6 +170,7 @@ add_library(lightning.core.localization STATIC
     core/localization/lidar_loc/pclomp/voxel_grid_covariance_omp.cpp
     core/localization/pose_graph/pgo.cc
     core/localization/pose_graph/pgo_impl.cc
+    core/localization/pose_graph/pgo_debug_logger.cc
     core/localization/pose_graph/pose_extrapolator.cc
     core/localization/localization.cpp
     core/localization/relocalizer/bbs_relocalizer.cc

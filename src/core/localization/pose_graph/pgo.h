@@ -4,6 +4,7 @@
 #include "common/nav_state.h"
 #include "core/localization/localization_result.h"
 
+#include "pgo_debug_logger.h"
 #include "pgo_impl.h"
 #include "pose_extrapolator.h"
 #include "smoother.h"
@@ -101,6 +102,8 @@ class PGO {
     int localization_unusual_count_ = 0;     // 定位异常次数
     double last_lidar_loc_time_ = 0.;        // 上次激光定位时间戳
     bool is_parking_ = false;
+
+    bool debug_log_enabled_ = false;  // 是否启用调试日志
 };
 
 }  // namespace lightning::loc
