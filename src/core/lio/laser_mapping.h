@@ -87,7 +87,7 @@ class LaserMapping {
     /// 获取IMU状态
     NavState GetIMUState() {
         std::unique_lock<std::mutex> lock(mtx_buffer_);
-        if (p_imu_->IsIMUInited()) {
+        if (p_imu_->IsIMUInited() && kf_imu_ready_) {
             return kf_imu_.GetX();
         } else {
             NavState s;
@@ -226,6 +226,7 @@ class LaserMapping {
 
     ESKF kf_;      // 点云时刻的IMU状态
     ESKF kf_imu_;  // imu 最新时刻的eskf状态
+    bool kf_imu_ready_ = false;  // kf_imu_ 是否已经由有效激光状态完成初始化
 
     NavState state_point_;  // ekf current state
 

@@ -183,11 +183,13 @@ LaserMapping::LaserMapping(Options options) : options_(options) {
 void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
     publish_count_++;
 
+    // p_imu_、kf_imu_、imu_buffer_ 和 IMU 时间戳共同组成实时 DR 状态，
+    // 必须与雷达线程中的同步、重置和 IMU 重放使用同一把锁。
+    UL lock(mtx_buffer_);
     auto imu_refined = p_imu_->TransformImuToLidar(imu);
 
     double timestamp = imu_refined->timestamp;
 
-    UL lock(mtx_buffer_);
     if (timestamp < last_timestamp_imu_) {
         LOG(WARNING) << "imu loop back, clear buffer";
         imu_buffer_.clear();
@@ -197,7 +199,7 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
         imu_refined->linear_acceleration *= G_m_s2;
     }
 
-    if (p_imu_->IsIMUInited()) {
+    if (p_imu_->IsIMUInited() && kf_imu_ready_) {
         /// 更新最新imu状态
         kf_imu_.Predict(timestamp - last_timestamp_imu_, p_imu_->Q_, imu_refined->angular_velocity,
                         imu_refined->linear_acceleration);
@@ -216,12 +218,21 @@ void LaserMapping::ProcessIMU(const lightning::IMUPtr &imu) {
 }
 
 bool LaserMapping::Run() {
-    if (!SyncPackages()) {
-        return false;
+    // 与 IMU 生产线程原子地取走本帧所需数据。锁只保护队列操作，
+    // 不覆盖后续耗时的点云匹配，避免长期阻塞 IMU 回调。
+    {
+        UL lock(mtx_buffer_);
+        if (!SyncPackages()) {
+            return false;
+        }
     }
 
     /// IMU process, kf prediction, undistortion
-    p_imu_->Process(measures_, kf_, scan_undistort_);
+    // ImuProcess 的初始化状态和过程噪声也会被实时 IMU 线程读取。
+    {
+        UL lock(mtx_buffer_);
+        p_imu_->Process(measures_, kf_, scan_undistort_);
+    }
 
     if (scan_undistort_->empty() || (scan_undistort_ == nullptr)) {
         LOG(WARNING) << "No point, skip this scan!";
@@ -414,14 +425,27 @@ bool LaserMapping::Run() {
     }
 
     /// 更新kf_for_imu
-    kf_imu_ = kf_;
-    if (!measures_.imu_.empty()) {
-        double t = measures_.imu_.back()->timestamp;
+    // 将实时 DR 原子地锚定到本次激光更新结果，再重放所有晚于激光时刻的 IMU。
+    // 重放起点必须是 kf_ 自己的时间戳；使用 measures_.imu_.back() 会把
+    // “最后一条已消费 IMU -> 激光结束时刻”这段时间重复积分。
+    {
+        UL lock(mtx_buffer_);
+        kf_imu_ = kf_;
+        double t = kf_imu_.GetX().timestamp_;
         for (auto &imu : imu_buffer_) {
             double dt = imu->timestamp - t;
+            if (dt <= 0.0) {
+                LOG(WARNING) << "skip stale imu while replaying DR, imu=" << std::setprecision(14)
+                             << imu->timestamp << ", state=" << t << ", dt=" << dt;
+                continue;
+            }
+            if (dt > 0.1) {
+                LOG(WARNING) << "large imu gap while replaying DR: " << dt;
+            }
             kf_imu_.Predict(dt, p_imu_->Q_, imu->angular_velocity, imu->linear_acceleration);
             t = imu->timestamp;
         }
+        kf_imu_ready_ = true;
     }
 
     if (ui_) {
