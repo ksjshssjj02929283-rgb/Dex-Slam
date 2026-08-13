@@ -200,8 +200,6 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr
     /*** add the imu_ of the last frame-tail to the of current frame-head ***/
     auto v_imu = meas.imu_;
     v_imu.push_front(last_imu_);
-    const double &imu_end_time = v_imu.back()->timestamp;
-
     const double &pcl_beg_time = meas.lidar_begin_time_;
     const double &pcl_end_time = meas.lidar_end_time_;
 
@@ -240,10 +238,17 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr
         acc = acc_avr;
         gyro = angvel_avr;
 
+        if (dt <= 0.0) {
+            LOG(WARNING) << "skip non-positive imu dt in lidar propagation: dt=" << dt
+                         << ", head=" << head->timestamp << ", tail=" << tail->timestamp
+                         << ", last_lidar_end=" << last_lidar_end_time_;
+            continue;
+        }
         if (dt > 0.1) {
-            LOG(ERROR) << "get abnormal dt: " << dt;
-            kf_state.SetTime((*it_imu)->timestamp);
-            break;
+            // 中间 IMU 缺失时仍要完成传播。只修改时间并退出会破坏下面
+            // “KF 已传播到 imu_end_time”的前提，使主 KF 落后于雷达结束时刻。
+            LOG(WARNING) << "get abnormal dt, continue predicting: " << dt << ", head=" << head->timestamp
+                         << ", tail=" << tail->timestamp << ", last_lidar_end=" << last_lidar_end_time_;
         }
 
         Q_.block<3, 3>(0, 0).diagonal() = cov_gyr_;
@@ -267,9 +272,21 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, ESKF &kf_state, CloudPtr
     }
 
     /*** calculated the pos and attitude prediction at the frame-end ***/
-    double note = pcl_end_time > imu_end_time ? 1.0 : -1.0;
-    dt = note * (pcl_end_time - imu_end_time);
-    kf_state.Predict(dt, Q_, gyro, acc);
+    // 从 KF 的真实状态时间补到雷达结束时刻，不能假定上面的循环一定已经
+    // 到达 imu_end_time。这样异常路径也不会把时间误差带到下一帧和 DR。
+    dt = pcl_end_time - kf_state.GetX().timestamp_;
+    if (dt > 0.0) {
+        kf_state.Predict(dt, Q_, gyro, acc);
+    } else if (dt < -1e-6) {
+        LOG(ERROR) << "KF time is ahead of lidar end after IMU propagation: kf=" << kf_state.GetX().timestamp_
+                   << ", lidar_end=" << pcl_end_time << ", dt=" << dt;
+    }
+
+    const double lidar_end_time_error = kf_state.GetX().timestamp_ - pcl_end_time;
+    if (std::abs(lidar_end_time_error) > 1e-6) {
+        LOG(ERROR) << "KF did not reach lidar end time: kf=" << kf_state.GetX().timestamp_
+                   << ", lidar_end=" << pcl_end_time << ", error=" << lidar_end_time_error;
+    }
 
     imu_state = kf_state.GetX();
     last_imu_ = meas.imu_.back();
