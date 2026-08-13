@@ -67,8 +67,6 @@ include_directories(
         ${CMAKE_CURRENT_BINARY_DIR}/thirdparty/livox_ros_driver/rosidl_generator_cpp
         # nav_interfaces 的消息头文件在其子目录的构建目录中生成
         ${CMAKE_CURRENT_BINARY_DIR}/thirdparty/nav_interfaces/rosidl_generator_cpp
-        # nav_interfaces 的消息头文件在其子目录的构建目录中生成
-        ${CMAKE_CURRENT_BINARY_DIR}/thirdparty/nav_interfaces/rosidl_generator_cpp
 )
 
 install(DIRECTORY config
