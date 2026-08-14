@@ -285,8 +285,8 @@ void LocSystem::TryPublishMapToOdomTF(const SE3 &T_map_base, double timestamp) {
     }
 
     SE3 T_odom_base;
-    tf2::TimePoint tf_time(std::chrono::nanoseconds(static_cast<int64_t>(timestamp * 1e9)));
-    if (!GetPoseInFrame(odom_frame_, base_link_frame_, tf_time, tf2::durationFromSec(0.), T_odom_base)) {
+    // 使用 tf2::TimePointZero 获取最新可用的 TF，避免时间戳不同步导致的 extrapolation 错误
+    if (!GetPoseInFrame(odom_frame_, base_link_frame_, tf2::TimePointZero, tf2::durationFromSec(0.1), T_odom_base)) {
         LOG_EVERY_N(ERROR, 100) << "Failed to lookup " << base_link_frame_ << "'s pose in " << odom_frame_
                                 << " frame, cannot publish " << map_frame_ << "-" << odom_frame_ << " TF";
         return;
