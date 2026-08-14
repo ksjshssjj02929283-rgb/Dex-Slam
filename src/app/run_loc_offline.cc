@@ -57,9 +57,6 @@ int main(int argc, char** argv) {
     LocSystem::Options options;
     options.online_mode_ = false;
     auto yaml_cfg = YAML::LoadFile(FLAGS_config);
-    if (yaml_cfg["system"] && yaml_cfg["system"]["pub_tf"]) {
-        options.pub_tf_ = yaml_cfg["system"]["pub_tf"].as<bool>();
-    }
     if (yaml_cfg["system"] && yaml_cfg["system"]["with_rviz"]) {
         options.with_rviz_ = yaml_cfg["system"]["with_rviz"].as<bool>();
     }

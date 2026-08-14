@@ -158,9 +158,6 @@ class LocalizationManagerNode : public rclcpp::Node {
 
         LocSystem::Options opt;
         auto yaml = YAML::LoadFile(FLAGS_config);
-        if (yaml["system"] && yaml["system"]["pub_tf"]) {
-            opt.pub_tf_ = yaml["system"]["pub_tf"].as<bool>();
-        }
         if (yaml["system"] && yaml["system"]["with_rviz"]) {
             opt.with_rviz_ = yaml["system"]["with_rviz"].as<bool>();
         }

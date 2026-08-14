@@ -92,9 +92,9 @@ bool Localization::Init(const std::string& yaml_path, const std::string& global_
         //         }
 
         loc_result_ = res;
-
-        if (tf_callback_ && loc_result_.valid_) {
-            tf_callback_(loc_result_.ToGeoMsg());
+        // 根据外参/TF 处理位姿，变换到机器人坐标系
+        if (loc_result_callback_ && loc_result_.valid_) {
+            loc_result_ = loc_result_callback_(loc_result_);
         }
 
         if (ui_) {
@@ -192,7 +192,6 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
     lidar_loc_->ProcessLO(lo_state);
     pgo_->ProcessLidarOdom(lo_state);
 
-
     // LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
     //           << lo_state.GetPose().translation().transpose();
 
@@ -232,8 +231,8 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
     lidar_loc_->ProcessCloud(scan_undist);
 
     auto res = lidar_loc_->GetLocalizationResult();
-    LOG(INFO) << "Loc pose: " << std::setprecision(12) << res.timestamp_ << " "
-              << res.pose_.translation().transpose() << ", status: " << static_cast<int>(res.status_);
+    LOG(INFO) << "Loc pose: " << std::setprecision(12) << res.timestamp_ << " " << res.pose_.translation().transpose()
+              << ", status: " << static_cast<int>(res.status_);
     pgo_->ProcessLidarLoc(res);
 
     if (ui_) {
@@ -347,9 +346,9 @@ void Localization::SetExternalPose(const Eigen::Quaterniond& q, const Eigen::Vec
     }
 }
 
-void Localization::SetTFCallback(Localization::TFCallback&& callback) { tf_callback_ = callback; }
+void Localization::SetLocResultCallback(Localization::LocResultCallback&& callback) { loc_result_callback_ = callback; }
 
-void Localization::SetRVizPublisher(std::shared_ptr<RVizPublisher> rviz_pub) { 
+void Localization::SetRVizPublisher(std::shared_ptr<RVizPublisher> rviz_pub) {
     rviz_pub_ = rviz_pub;
     if (lidar_loc_) {
         lidar_loc_->SetRVizPublisher(rviz_pub);

@@ -2,6 +2,7 @@
 
 import os
 import sys
+import math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ament_index_python.packages import get_package_share_directory
@@ -21,10 +22,42 @@ def launch_setup(context, *args, **kwargs):
     rviz_config = LaunchConfiguration('rviz_config').perform(context)
     config_file = resolve_config_file(pkg_dir, lidar_type)
 
-    enable_map_odom_tf = LaunchConfiguration('enable_map_odom_tf').perform(context)
-    odom_topic = LaunchConfiguration('odom_topic').perform(context)
-
     nodes = [
+        Node(
+                    package='tf2_ros',
+                    executable='static_transform_publisher',
+                    name='base_to_lidar_tf',
+                    output='screen',
+                    arguments=[
+                        '--x', '0.1',
+                        '--y', '0',
+                        '--z', '1.38',
+                        '--yaw', '0',
+                        '--pitch', str(math.pi / 4),
+                        '--roll', '0',
+                        '--frame-id', 'base_link',
+                        '--child-frame-id', 'lidar',
+                    ],
+                    # arguments=[
+                    #     '--x', '0',
+                    #     '--y', '0',
+                    #     '--z', '0',
+                    #     '--yaw', '0',
+                    #     '--pitch', '0',
+                    #     '--roll', '0',
+                    #     '--frame-id', 'base_link',
+                    #     '--child-frame-id', 'lidar',
+                    # ],
+                ),
+                
+        Node(
+                    package='rviz2',
+                    executable='rviz2',
+                    name='rviz',
+                    output='screen',
+                    arguments=['-d', rviz_config],
+                ),
+
         Node(
             package='lightning',
             executable='run_loc_online',
@@ -36,32 +69,23 @@ def launch_setup(context, *args, **kwargs):
                 '--map_name', map_name,
             ],
         ),
-
         Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz',
-            output='screen',
-            arguments=['-d', rviz_config],
-        ),
+            package='pointcloud_to_laserscan', executable='pointcloud_to_laserscan_node',
+            name='pointcloud_to_laserscan', output='screen',
+            remappings=[('cloud_in', '/lightning/cloud/current_scan'), ('scan', '/scan')],
+            parameters=[{
+                'target_frame': 'base_footprint',
+                'transform_tolerance': 0.5,
+                'min_height': -0.3, 'max_height': 1.5,
+                'angle_min': -3.14159, 'angle_max': 3.14159,
+                'angle_increment': 0.0087,
+                'range_min': 0.5, 'range_max': 70.0,
+                'scan_time': 0.1, 'use_inf': True, 'inf_epsilon': 1.0,
+            }]),
+
     ]
 
-    if enable_map_odom_tf.lower() == 'true':
-        nodes.append(
-            Node(
-                package='lightning',
-                executable='map_odom_tf_broadcaster',
-                name='map_odom_tf_broadcaster',
-                output='screen',
-                parameters=[{
-                    'odom_topic': odom_topic,
-                    'pose_topic': '/lightning/pose/current',
-                    'odom_frame': 'odom',
-                    'base_link_frame': 'base_link',
-                    'map_frame': 'map',
-                }],
-            )
-        )
+
 
     return nodes
 
@@ -89,15 +113,6 @@ def generate_launch_description():
             default_value=os.path.join(pkg_dir, 'rviz', 'lightning.rviz'),
             description='RViz configuration file path',
         ),
-        DeclareLaunchArgument(
-            'enable_map_odom_tf',
-            default_value='true',
-            description='Enable map->odom TF broadcasting',
-        ),
-        DeclareLaunchArgument(
-            'odom_topic',
-            default_value='/feedback/odom',
-            description='Wheel odometry topic name',
-        ),
+   
         OpaqueFunction(function=launch_setup),
     ])

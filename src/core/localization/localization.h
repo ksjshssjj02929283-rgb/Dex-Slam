@@ -80,13 +80,13 @@ class Localization {
     void LidarOdomProcCloud(CloudPtr);
     void LidarLocProcCloud(CloudPtr);
 
-    using TFCallback = std::function<void(const geometry_msgs::msg::TransformStamped& odom)>;
     using LocStateCallback = std::function<void(const std_msgs::msg::Int32& state)>;
     using PointcloudBodyCallback = std::function<void(const sensor_msgs::msg::PointCloud2& pointcloud)>;
     using PointcloudWorldCallback = std::function<void(const sensor_msgs::msg::PointCloud2& pointcloud)>;
+    using LocResultCallback = std::function<LocalizationResult(const LocalizationResult& res)>;
 
-    void SetTFCallback(TFCallback&& callback);
-    
+    void SetLocResultCallback(LocResultCallback&& callback);
+
     void SetRVizPublisher(std::shared_ptr<RVizPublisher> rviz_pub);
 
     /// 获取当前定位状态（位姿 + 时间戳）
@@ -112,7 +112,7 @@ class Localization {
 
     // ui
     std::shared_ptr<ui::PangolinWindow> ui_ = nullptr;
-    
+
     // rviz
     std::shared_ptr<RVizPublisher> rviz_pub_ = nullptr;
 
@@ -130,7 +130,7 @@ class Localization {
     LocalizationResult loc_result_;
 
     /// 框架相关
-    TFCallback tf_callback_;
+    LocResultCallback loc_result_callback_;
     LocStateCallback loc_state_callback_;
     PointcloudBodyCallback pointcloud_body_callback_;
     PointcloudWorldCallback pointcloud_world_callback_;

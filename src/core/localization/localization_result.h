@@ -52,8 +52,10 @@ struct LocalizationResult {
     double dr_delta_t_ = 0;          // 相对于上一帧DR消息的时延
     double is_parking_ = false;
 
-    geometry_msgs::msg::TransformStamped ToGeoMsg() const;  // 转到geometry msg
-    NavState ToNavState() const;                            // 转到navstate
+    geometry_msgs::msg::TransformStamped ToGeoMsg(
+        const std::string& map_frame = "map",
+        const std::string& child_frame = "base_link") const;  // 转到geometry msg
+    NavState ToNavState() const;                              // 转到navstate
 };
 
 }  // namespace lightning::loc

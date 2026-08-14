@@ -1,22 +1,22 @@
 #pragma once
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <nav_msgs/msg/path.hpp>
-#include <nav_msgs/msg/occupancy_grid.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "common/eigen_types.h"
 #include "common/keyframe.h"
-#include "common/point_def.h"
 #include "common/nav_state.h"
+#include "common/point_def.h"
 #include "voxel_map/voxel_types.hpp"
 
 namespace lightning {
 
 class RVizPublisher {
-public:
+   public:
     struct Options {
         bool pub_current_scan = true;
         bool pub_local_map = true;
@@ -25,14 +25,18 @@ public:
         bool pub_trajectory = true;
         bool pub_keyframes = true;
         bool pub_loop_edges = true;
-        bool pub_voxel_map = true;     // VoxelMap 平面可视化
-        bool pub_gridmap = true;       // 2D 栅格地图（g2p5 输出）
+        bool pub_voxel_map = true;  // VoxelMap 平面可视化
+        bool pub_gridmap = true;    // 2D 栅格地图（g2p5 输出）
 
         int local_map_downsample = 5;
         int global_map_downsample = 10;
         int dynamic_map_downsample = 5;
         double scan_rate = 10.0;
         double map_rate = 1.0;
+
+        /// Frame ID 配置
+        std::string map_frame_ = "map";
+        std::string base_link_frame_ = "base_link";
     };
 
     RVizPublisher(rclcpp::Node::SharedPtr node, Options options);
@@ -40,19 +44,19 @@ public:
 
     void UpdateCurrentScan(CloudPtr cloud, const SE3& pose);
     void UpdateLocalMap(const std::map<int, CloudPtr>& cloud_map);
-    void UpdateGlobalMap(const std::map<int, CloudPtr>& cloud_map);  // 全局地图
+    void UpdateGlobalMap(const std::map<int, CloudPtr>& cloud_map);   // 全局地图
     void UpdateDynamicMap(const std::map<int, CloudPtr>& cloud_map);  // 动态地图
     void UpdateKeyframes(const std::vector<Keyframe::Ptr>& kfs);
     void UpdateSingleKeyframe(Keyframe::Ptr kf);  // 单个关键帧更新
     void UpdateLoopEdges(const std::vector<std::pair<int, int>>& edges);
-    void UpdateLoopDebugClouds(CloudPtr loop_submap, CloudPtr current_scan, CloudPtr aligned_scan,
-                               const SE3& loop_pose, const SE3& current_pose, const SE3& aligned_pose,
+    void UpdateLoopDebugClouds(CloudPtr loop_submap, CloudPtr current_scan, CloudPtr aligned_scan, const SE3& loop_pose,
+                               const SE3& current_pose, const SE3& aligned_pose,
                                double ndt_score);  // 回环调试点云（包含配准结果）
-    void UpdateBBSResult(CloudPtr src_cloud, const SE3& pose, double score_pct,
-                         double elapsed_ms, const std::string& trigger_msg);  // BBS 重定位源点云
+    void UpdateBBSResult(CloudPtr src_cloud, const SE3& pose, double score_pct, double elapsed_ms,
+                         const std::string& trigger_msg);  // BBS 重定位源点云
     void UpdateFrontendPath(const SE3& pose);
     void UpdateBackendPath(const SE3& pose);
-    void UpdateCurrentPose(const SE3& pose);  // 实时位姿
+    void UpdateCurrentPose(const SE3& pose);     // 实时位姿
     void UpdateNavState(const NavState& state);  // 完整状态（位姿+速度+偏置）
 
     /// 更新 VoxelMap 平面数据，下一定时器周期发布 MarkerArray
@@ -61,7 +65,7 @@ public:
     /// 更新 2D 栅格地图，下一定时器周期发布 OccupancyGrid
     void UpdateGridMap(nav_msgs::msg::OccupancyGrid grid);
 
-private:
+   private:
     void PublishTimerCallback();
     sensor_msgs::msg::PointCloud2 ToRosCloud(CloudPtr cloud, const std::string& frame_id);
 
@@ -78,11 +82,11 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr keyframes_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr loop_edges_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_submap_pub_;      // 回环submap
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_scan_pub_;        // 回环当前scan
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_aligned_pub_;     // 配准后的scan
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr bbs_cloud_pub_;        // BBS 源点云（变换到世界系）
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr voxel_map_pub_; // VoxelMap 平面
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_submap_pub_;       // 回环submap
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_scan_pub_;         // 回环当前scan
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loop_aligned_pub_;      // 配准后的scan
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr bbs_cloud_pub_;         // BBS 源点云（变换到世界系）
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr voxel_map_pub_;  // VoxelMap 平面
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_map_pub_;           // 2D 栅格地图
 
     rclcpp::TimerBase::SharedPtr timer_;
@@ -105,7 +109,7 @@ private:
     nav_msgs::msg::Path realtime_path_;  // 实时轨迹
     std::vector<Keyframe::Ptr> keyframes_;
     std::vector<std::pair<int, int>> loop_edges_;
-    
+
     // 回环调试数据
     CloudPtr loop_submap_;
     CloudPtr loop_scan_;
@@ -124,17 +128,17 @@ private:
     bool map_updated_ = false;
     bool global_map_updated_ = false;
     bool dynamic_map_updated_ = false;
-   bool pose_updated_ = false;
-   int realtime_path_cnt_ = 0;  // 实时轨迹降采样计数器
-   bool loop_debug_updated_ = false;  // 回环调试数据更新标志
+    bool pose_updated_ = false;
+    int realtime_path_cnt_ = 0;        // 实时轨迹降采样计数器
+    bool loop_debug_updated_ = false;  // 回环调试数据更新标志
     bool voxel_map_updated_ = false;   // VoxelMap 平面更新标志
     bool gridmap_updated_ = false;     // 2D 栅格地图更新标志
 
     std::mutex mtx_voxel_map_;                           // VoxelMap 平面数据锁
     std::vector<voxel_map::PlaneVis> voxel_map_planes_;  // 缓存的平面数据
 
-    std::mutex mtx_gridmap_;                             // 2D 栅格地图数据锁
-    nav_msgs::msg::OccupancyGrid grid_map_;              // 缓存的栅格地图
+    std::mutex mtx_gridmap_;                 // 2D 栅格地图数据锁
+    nav_msgs::msg::OccupancyGrid grid_map_;  // 缓存的栅格地图
 };
 
 }  // namespace lightning
