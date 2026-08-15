@@ -226,10 +226,11 @@ bool PGOImpl::AssignDRPoseIfNeeded(std::shared_ptr<PGOFrame> frame) {
 
 void PGOImpl::UpdateLidarOdomStatusInFrame(NavState& lio_result, std::shared_ptr<PGOFrame> frame) {
     // 把LidarOdom信息更新到PGOFrame
+    // lio中 没对confidence赋值，默认为0 ->权重为0,可能存在问题
     frame->lidar_odom_normalized_weight_ = lio_result.confidence_ * Vec6d::Ones();
     Eigen::Array3d trans_confidence = {1.0, 1.0, 1.0};
     Eigen::Array3d rot_confidence = {1.0, 1.0, 1.0};
-
+    // tran/rot confidence 被硬编码为1，永远不会退化
     if ((trans_confidence < kLidarOdomTransDegenThres).any()) {
         frame->lidar_odom_trans_degenerated = true;
     }
@@ -758,7 +759,7 @@ void PGOImpl::PGOFrameToResult(const PGOFramePtr& frame, LocalizationResult& res
     result.lidar_loc_valid_ = frame->lidar_loc_valid_;
     result.lidar_loc_inlier_ = frame->lidar_loc_inlier_;
     result.lidar_loc_delta_t_ = frame->lidar_loc_delta_t_;
-    result.confidence_ = frame->confidence_;
+    result.confidence_ = frame->confidence_;  // frame->confidence 没有被设置
     Vec3d loc_error = frame->lidar_loc_pose_.translation() - result.pose_.translation();
     Vec3d loc_err_body = result.pose_.so3().inverse() * loc_error;
     result.lidar_loc_error_vert_ = fabs(loc_err_body[0]);

@@ -422,65 +422,73 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
     bool lo_extrap_success = false;
     bool dr_extrap_success = false;
     bool dr_pose_inc_exceed_th = false;
+    bool lidarloc_extrap_success = false;
+
+    double lo_extrap_time = 0.0;
     double dr_extrap_time = 0.0;
-    double dr_pose_inc_norm = 0.0;
+    double lidarloc_extrap_time = 0.0;
+
+    SE3 lo_pose_incre;
+    SE3 dr_pose_incre;
+    SE3 lidarloc_pose_incre;
 
     // 优先使用LO外推到最新时刻
-    if (impl_->lidar_odom_valid_ && !lo_pose_queue.empty() &&
-        lo_pose_queue.back().timestamp_ > output_result.timestamp_) {
-        /// 检查LO队列时间一致性
-        double lo_time_span = lo_pose_queue.back().timestamp_ - lo_pose_queue.front().timestamp_;
-        if (lo_time_span <= 0) {
-            LOG(WARNING) << "LO队列时间异常: time_span=" << lo_time_span << ", 跳过LO外推";
-        } else {
-            bool lo_interp_success = roki::common::math::PoseInterp<NavState>(
-                output_result.timestamp_, lo_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_; },
-                [](const NavState& nav_state) { return nav_state.pose_; }, interp_pose, best_match);
-            if (lo_interp_success) {
-                SE3 pose_incre = interp_pose.inverse() * lo_pose_queue.back().pose_;
-                double lo_pose_inc_norm = pose_incre.translation().norm();
+    // if (impl_->lidar_odom_valid_ && !lo_pose_queue.empty() &&
+    //     lo_pose_queue.back().timestamp_ > output_result.timestamp_) {
+    //     /// 检查LO队列时间一致性
+    //     double lo_time_span = lo_pose_queue.back().timestamp_ - lo_pose_queue.front().timestamp_;
+    //     if (lo_time_span <= 0) {
+    //         LOG(WARNING) << "LO队列时间异常: time_span=" << lo_time_span << ", 跳过LO外推";
+    //     } else {
+    //         bool lo_interp_success = roki::common::math::PoseInterp<NavState>(
+    //             output_result.timestamp_, lo_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_;
+    //             },
+    //             [](const NavState& nav_state) { return nav_state.pose_; }, interp_pose, best_match);
+    //         if (lo_interp_success) {
+    //             lo_pose_incre = interp_pose.inverse() * lo_pose_queue.back().pose_;
+    //             double lo_pose_inc_norm = lo_pose_incre.translation().norm();
 
-                /// LO外推阈值检查（LO通常更精确，阈值更严格）
-                double lo_pose_inc_th = 3.0 * (lo_pose_queue.back().timestamp_ - output_result.timestamp_);
-                if (lo_pose_inc_th < 1.0) {
-                    lo_pose_inc_th = 1.0;
-                }
+    //             /// LO外推阈值检查（LO通常更精确，阈值更严格）
+    //             double lo_pose_inc_th = 3.0 * (lo_pose_queue.back().timestamp_ - output_result.timestamp_);
+    //             if (lo_pose_inc_th < 1.0) {
+    //                 lo_pose_inc_th = 1.0;
+    //             }
 
-                if (lo_pose_inc_norm > lo_pose_inc_th) {
-                    LOG(WARNING) << "LO外推增量过大: " << lo_pose_inc_norm << "m, 阈值: " << lo_pose_inc_th
-                                 << "m, 但仍使用LO外推";
-                }
+    //             if (lo_pose_inc_norm > lo_pose_inc_th) {
+    //                 LOG(WARNING) << "LO外推增量过大: " << lo_pose_inc_norm << "m, 阈值: " << lo_pose_inc_th
+    //                              << "m, 但仍使用LO外推";
+    //             }
 
-                output_result.pose_ = output_result.pose_ * pose_incre;
-                const double time_incre = lo_pose_queue.back().timestamp_ - output_result.timestamp_;
-                output_result.timestamp_ = lo_pose_queue.back().timestamp_;
-                lo_extrap_success = true;
+    //             output_result.pose_ = output_result.pose_ * lo_pose_incre;
+    //             lo_extrap_time = lo_pose_queue.back().timestamp_ - output_result.timestamp_;
+    //             output_result.timestamp_ = lo_pose_queue.back().timestamp_;
+    //             lo_extrap_success = true;
 
-                // 如果外推时间比较久(比如超过3s)，跟踪状态改为跟踪相对位姿
-                if (time_incre > 3.0) {
-                    output_result.status_ = common::GlobalPoseStatus::FOLLOWING_LiDAR_ODOM;
-                }
-            }
-        }
-    }
+    //             // 如果外推时间比较久(比如超过3s)，跟踪状态改为跟踪相对位姿
+    //             if (lo_extrap_time > 3.0) {
+    //                 output_result.status_ = common::GlobalPoseStatus::FOLLOWING_LiDAR_ODOM;
+    //             }
+    //         }
+    //     }
+    // }
 
-    /// 如果LO与DR冲突但LO有效，使用LO外推到DR时刻
-    if (impl_->lidar_odom_conflict_with_dr_ && impl_->lidar_odom_valid_) {
-        /// 用LO外推到DR时刻
-        SE3 interp_pose1, interp_pose2;
-        bool interp1 = common::math::PoseInterp<NavState>(
-            latest_time, lo_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_; },
-            [](const NavState& nav_state) { return nav_state.pose_; }, interp_pose1, best_match);
-        bool interp2 = common::math::PoseInterp<NavState>(
-            output_result.timestamp_, lo_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_; },
-            [](const NavState& nav_state) { return nav_state.pose_; }, interp_pose2, best_match);
-        if (interp1 && interp2) {
-            SE3 pose_incre = interp_pose2.inverse() * interp_pose1;
-            output_result.pose_ = output_result.pose_ * pose_incre;
-            output_result.timestamp_ = latest_time;
-            lo_extrap_success = true;
-        }
-    }
+    // /// 如果LO与DR冲突但LO有效，使用LO外推到DR时刻
+    // if (impl_->lidar_odom_conflict_with_dr_ && impl_->lidar_odom_valid_) {
+    //     /// 用LO外推到DR时刻
+    //     SE3 interp_pose1, interp_pose2;
+    //     bool interp1 = common::math::PoseInterp<NavState>(
+    //         latest_time, lo_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_; },
+    //         [](const NavState& nav_state) { return nav_state.pose_; }, interp_pose1, best_match);
+    //     bool interp2 = common::math::PoseInterp<NavState>(
+    //         output_result.timestamp_, lo_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_; },
+    //         [](const NavState& nav_state) { return nav_state.pose_; }, interp_pose2, best_match);
+    //     if (interp1 && interp2) {
+    //         SE3 pose_incre = interp_pose2.inverse() * interp_pose1;
+    //         output_result.pose_ = output_result.pose_ * pose_incre;
+    //         output_result.timestamp_ = latest_time;
+    //         lo_extrap_success = true;
+    //     }
+    // }
 
     // 其次用DR做外推（补充LO未覆盖的时间段）
     if (!dr_pose_queue.empty() && dr_pose_queue.back().timestamp_ > output_result.timestamp_) {
@@ -506,8 +514,8 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
                 output_result.timestamp_, dr_pose_queue, [](const NavState& nav_state) { return nav_state.timestamp_; },
                 [](const NavState& nav_state) { return nav_state.GetPose(); }, interp_pose, best_match);
             if (dr_interp_success) {
-                SE3 pose_incre = interp_pose.inverse() * dr_pose_queue.back().GetPose();
-                dr_pose_inc_norm = pose_incre.translation().norm();
+                dr_pose_incre = interp_pose.inverse() * dr_pose_queue.back().GetPose();
+                double dr_pose_inc_norm = dr_pose_incre.translation().norm();
 
                 /// 限制此处的pose incre大小，超过阈值报错但不跳过外推
                 if (dr_pose_inc_norm > dr_pose_inc_th) {
@@ -516,43 +524,49 @@ bool PGO::ExtrapolateLocResult(LocalizationResult& output_result) {
                     dr_pose_inc_exceed_th = true;
                 }
 
-                output_result.pose_ = output_result.pose_ * pose_incre;
-                const double time_incre = dr_pose_queue.back().timestamp_ - output_result.timestamp_;
+                output_result.pose_ = output_result.pose_ * dr_pose_incre;
                 output_result.timestamp_ = dr_pose_queue.back().timestamp_;
                 dr_extrap_success = true;
             }
         }
     }
 
-    /// 外推质量评估与状态设置
-    double total_extrap_time = output_result.timestamp_ - impl_->result_.timestamp_;
-    if (total_extrap_time > 0.5) {
-        /// 外推时间较长，降低置信度
-        if (dr_pose_inc_exceed_th) {
-            /// DR外推超过阈值，标记为异常定位
-            output_result.status_ = LocalizationStatus::FOLLOWING_DR;
-            LOG(WARNING) << "外推质量较差: 总外推时间=" << total_extrap_time << "s, DR增量超阈值=" << dr_pose_inc_norm
-                         << "m";
-        } else if (total_extrap_time > 2.0) {
-            /// 外推时间很长但未超阈值，标记为跟随DR
-            output_result.status_ = LocalizationStatus::FOLLOWING_DR;
-            LOG(INFO) << "外推时间较长: " << total_extrap_time << "s, LO外推=" << lo_extrap_success
-                      << ", DR外推=" << dr_extrap_success;
-        }
-    }
-
     if (output_result.timestamp_ < (latest_time - 0.05)) {
         /// 如果中间失效导致最新定位无法更新，那么用激光定位将其外推至最新位置
+        LOG(WARNING) << "经过LO或DR外推后，最终输出位姿时间戳仍然落后于最新时间戳，尝试使用激光定位队列进行插值外推";
         SE3 interp_pose_final;
         TimedPose best_match_final;
         if (math::PoseInterp<TimedPose>(
                 latest_time, impl_->lidar_loc_pose_queue_, [](const TimedPose& pose) { return pose.timestamp_; },
                 [](const TimedPose& pose) { return pose.pose_; }, interp_pose_final, best_match_final, 5.0)) {
+            lidarloc_extrap_success = true;
+            lidarloc_extrap_time = latest_time - output_result.timestamp_;
+            lidarloc_pose_incre = output_result.pose_.inverse() * interp_pose_final;
+
             output_result.pose_ = interp_pose_final;
             output_result.timestamp_ = latest_time;
         }
     }
 
+    // 记录外推总时间，最终输出的时间戳，位姿，以及外推的基准时间戳，位姿
+    LOG(INFO) << std::fixed << std::setprecision(12) << "PGO外推总时间: " << dr_extrap_time
+              << ", 最终输出时间戳: " << output_result.timestamp_
+              << ", 最终输出位姿: " << output_result.pose_.translation().transpose()
+              << ", 外推基准时间戳(上次LidarLoc): " << impl_->result_.timestamp_
+              << ", 外推基准位姿(上次LidarLoc): " << impl_->result_.pose_.translation().transpose();
+
+    // 记录外推位姿/时间戳增量的组成：基于LO，DR，LidarLoc的各部分，以及各部分外推是否成功，DR外推增量是否超过阈值
+    LOG(INFO) << std::fixed << std::setprecision(12) << "PGO外推组成: "
+              << "LO外推时间: " << lo_extrap_time << ", LO外推成功或是否需要: " << lo_extrap_success
+              << ", LO外推增量(pos, angle): " << lo_pose_incre.translation().transpose() << ", "
+              << lo_pose_incre.rotation().eulerAngles(0, 1, 2).transpose() << ", DR外推时间: " << dr_extrap_time
+              << ", DR外推成功或是否需要: " << dr_extrap_success << ", DR外推增量超过阈值: " << dr_pose_inc_exceed_th
+              << ", DR外推增量(pos, angle): " << dr_pose_incre.translation().transpose() << ", "
+              << dr_pose_incre.rotation().eulerAngles(0, 1, 2).transpose()
+              << ", LidarLoc外推时间: " << lidarloc_extrap_time
+              << ", LidarLoc外推成功或是否需要: " << lidarloc_extrap_success
+              << ", LidarLoc外推增量(pos, angle): " << lidarloc_pose_incre.translation().transpose() << ", "
+              << lidarloc_pose_incre.rotation().eulerAngles(0, 1, 2).transpose();
     return true;
 }
 
