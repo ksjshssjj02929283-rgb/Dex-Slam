@@ -261,11 +261,9 @@ void DataPreprocessor::CreateLaserPerception(const std::string& sensor_id) {
     return; // 已存在
   }
   
-  // 从配置选项创建LaserPerceptionOptions
-  laser_perception::proto::LaserPerceptionOptions laser_options;
-  laser_options.set_min_cluster_points(options_.laser_perception_options().min_cluster_points());
-  
-  laser_perceptions_[sensor_id] = std::make_unique<laser_perception::LaserPerception>(laser_options);
+  // 完整透传配置（部分拷贝会让未拷字段落在 proto 零默认，如 max_range=0 导致全点被过滤）
+  laser_perceptions_[sensor_id] = std::make_unique<laser_perception::LaserPerception>(
+      options_.laser_perception_options());
   LOG(INFO) << "DataPreprocessor: Created laser perception for sensor: " << sensor_id;
 }
 

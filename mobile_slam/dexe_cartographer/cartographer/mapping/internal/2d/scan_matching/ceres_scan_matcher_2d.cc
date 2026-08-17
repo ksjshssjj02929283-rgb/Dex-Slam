@@ -58,6 +58,16 @@ proto::CeresScanMatcherOptions2D CreateCeresScanMatcherOptions2D(
     parameter_dictionary->GetDouble("max_correspondence_distance"));
   options.set_local_weight_factor(
     parameter_dictionary->GetDouble("local_weight_factor"));
+  options.set_use_improved_line_cost(
+    parameter_dictionary->GetBool("use_improved_line_cost"));
+  options.set_line_distance_huber_scale(
+    parameter_dictionary->GetDouble("line_distance_huber_scale"));
+  options.set_line_angle_huber_scale(
+    parameter_dictionary->GetDouble("line_angle_huber_scale"));
+  options.set_line_length_reference(
+    parameter_dictionary->GetDouble("line_length_reference"));
+  options.set_line_overlap_gap_weight(
+    parameter_dictionary->GetDouble("line_overlap_gap_weight"));
   *options.mutable_ceres_solver_options() =
     common::CreateCeresSolverOptionsProto(
       parameter_dictionary->GetDictionary("ceres_solver_options").get());
@@ -69,10 +79,35 @@ CeresScanMatcher2D::CeresScanMatcher2D(
   : options_(options),
     ceres_solver_options_(
       common::CreateCeresSolverOptions(options.ceres_solver_options())) {
+  if (options_.use_improved_line_cost()) {
+    CHECK_GE(options_.line_distance_huber_scale(), 0.);
+    CHECK_GE(options_.line_angle_huber_scale(), 0.);
+    CHECK_GT(options_.line_length_reference(), 0.);
+    CHECK_GE(options_.line_overlap_gap_weight(), 0.);
+  }
   ceres_solver_options_.linear_solver_type = ceres::DENSE_QR;
 }
 
 CeresScanMatcher2D::~CeresScanMatcher2D() {}
+
+namespace {
+// 线残差统一入口：按 options 在改进版与原版 line cost 间切换
+ceres::CostFunction* CreateLineCost(
+    const proto::CeresScanMatcherOptions2D& options,
+    const double parallel_scaling_factor, const double angle_scaling_factor,
+    const sensor::LineData& line_data, const sensor::LineData& target_line) {
+  if (options.use_improved_line_cost()) {
+    return CreateImprovedLineDeltaCostFunction2D(
+      parallel_scaling_factor, angle_scaling_factor,
+      options.line_distance_huber_scale(), options.line_angle_huber_scale(),
+      options.line_length_reference(), options.line_overlap_gap_weight(),
+      line_data, target_line);
+  }
+  return CreateLineDeltaWithoutInitPoseCostFunction2D(
+    parallel_scaling_factor, angle_scaling_factor, line_data, target_line);
+}
+
+}  // namespace
 
 // for localization
 void CeresScanMatcher2D::Match(
@@ -184,7 +219,7 @@ void CeresScanMatcher2D::Match(
         if (static_cast<int>(iter.second.size()) == 1) {
           // 如果只匹配了一个线特征，则直接构建残差
           problem.AddResidualBlock(
-            CreateLineDeltaWithoutInitPoseCostFunction2D(
+            CreateLineCost(options_,
               local_line_parallel_weight * options_.local_weight_factor(),
               local_line_angle_weight * options_.local_weight_factor(),
               iter.second[0], target_line),
@@ -202,7 +237,7 @@ void CeresScanMatcher2D::Match(
             Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
             if (fabs(matching_dis[0] - min_dis) < 0.005) {
               problem.AddResidualBlock(
-                CreateLineDeltaWithoutInitPoseCostFunction2D(
+                CreateLineCost(options_,
                   local_line_parallel_weight * options_.local_weight_factor(),
                   local_line_angle_weight * options_.local_weight_factor(),
                   iter.second[i], target_line),
@@ -233,7 +268,7 @@ void CeresScanMatcher2D::Match(
       if (static_cast<int>(iter.second.size()) == 1) {
         // 如果只匹配了一个线特征，则直接构建残差
         problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
+          CreateLineCost(options_,
             global_line_parallel_weight, global_line_angle_weight,
             iter.second[0], target_line),
           nullptr, ceres_pose_estimate);
@@ -250,7 +285,7 @@ void CeresScanMatcher2D::Match(
           Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
           if (fabs(matching_dis[0] - min_dis) < 0.005) {
             problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
+              CreateLineCost(options_,
                 global_line_parallel_weight,
                 global_line_angle_weight,
                 iter.second[i], target_line),
@@ -608,7 +643,7 @@ void CeresScanMatcher2D::Match(
       if (static_cast<int>(iter.second.size()) == 1) {
         // 如果只匹配了一个线特征，则直接构建残差
         problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
+          CreateLineCost(options_,
             line_parallel_weight, line_angle_weight,
             iter.second[0], target_line),
           nullptr, ceres_pose_estimate);
@@ -625,7 +660,7 @@ void CeresScanMatcher2D::Match(
           Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
           if (fabs(matching_dis[0] - min_dis) < 0.005) {
             problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
+              CreateLineCost(options_,
                 line_parallel_weight, line_angle_weight,
                 iter.second[i], target_line),
               nullptr, ceres_pose_estimate);
@@ -796,7 +831,7 @@ void CeresScanMatcher2D::Match(
       if (static_cast<int>(iter.second.size()) == 1) {
         // 如果只匹配了一个线特征，则直接构建残差
         problem.AddResidualBlock(
-          CreateLineDeltaWithoutInitPoseCostFunction2D(
+          CreateLineCost(options_,
             line_parallel_weight, line_angle_weight,
             iter.second[0], target_line),
           nullptr, ceres_pose_estimate);
@@ -813,7 +848,7 @@ void CeresScanMatcher2D::Match(
           Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
           if (fabs(matching_dis[0] - min_dis) < 0.005) {
             problem.AddResidualBlock(
-              CreateLineDeltaWithoutInitPoseCostFunction2D(
+              CreateLineCost(options_,
                 line_parallel_weight, line_angle_weight,
                 iter.second[i], target_line),
               nullptr, ceres_pose_estimate);
@@ -1252,7 +1287,7 @@ void CeresScanMatcher2D::Match(
     if (static_cast<int>(iter.second.size()) == 1) {
       // 如果只匹配了一个线特征，则直接构建残差
       problem.AddResidualBlock(
-        CreateLineDeltaWithoutInitPoseCostFunction2D(
+        CreateLineCost(options_,
           line_parallel_weight, line_angle_weight,
           iter.second[0], target_line),
         nullptr, ceres_pose_estimate);
@@ -1269,7 +1304,7 @@ void CeresScanMatcher2D::Match(
         Eigen::Vector3d matching_dis = iter.second[i].GetMatchingDis();
         if (fabs(matching_dis[0] - min_dis) < 0.005) {
           problem.AddResidualBlock(
-            CreateLineDeltaWithoutInitPoseCostFunction2D(
+            CreateLineCost(options_,
               line_parallel_weight, line_angle_weight,
               iter.second[i], target_line),
             nullptr, ceres_pose_estimate);
