@@ -17,6 +17,7 @@
 #include <functional>
 
 #include "absl/container/flat_hash_set.h"
+#include "cartographer/io/internal/pbstream_check.h"
 #include "cartographer/io/internal/pbstream_info.h"
 #include "cartographer/io/internal/pbstream_migrate.h"
 #include "gflags/gflags.h"
@@ -30,6 +31,8 @@ int main(int argc, char** argv) {
       "Swiss Army knife for pbstreams.\n\n"
       "Currently supported subcommands are:\n"
       "\tinfo    - Prints summary of pbstream.\n"
+      "\tcheck   - Checks whether the pbstream meets localization "
+      "requirements.\n"
       "\tmigrate - Migrates pbstream to the new submap format.";
   google::ParseCommandLineFlags(&argc, &argv, true);
 
@@ -39,6 +42,8 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   } else if (std::string(argv[1]) == "info") {
     return ::cartographer::io::pbstream_info(argc, argv);
+  } else if (std::string(argv[1]) == "check") {
+    return ::cartographer::io::pbstream_check(argc, argv);
   } else if (std::string(argv[1]) == "migrate") {
     return ::cartographer::io::pbstream_migrate(argc, argv);
   } else {
