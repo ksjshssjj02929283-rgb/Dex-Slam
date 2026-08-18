@@ -3,14 +3,17 @@ cmake_minimum_required(VERSION 3.16)
 project(lightning)
 
 option(BUILD_CUDA "Build with CUDA GPU BBS3D support" OFF)
+option(ENABLE_NVTX_PROFILING "Enable NVIDIA Nsight Systems NVTX ranges" OFF)
 
 # Default to C++17
 if (NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 17)
 endif ()
 
-# set to release by default
-set(CMAKE_BUILD_TYPE Release)
+# Default to Release, while still allowing callers to request RelWithDebInfo.
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif ()
 
 # -------------------------------------------------------------
 # 导入第三方库，同时做一些全局编译选项配置
@@ -26,7 +29,28 @@ endif()
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fopenmp")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O2 -fopenmp -fPIC")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -ggdb -g -fopenmp -fPIC")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO
+    "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -fno-omit-frame-pointer -fopenmp -fPIC")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC -g")
+
+# NVTX v3 is header-only. Nsight Systems injects its collector only while a
+# profile is active, so these ranges are effectively no-ops during normal use.
+if (ENABLE_NVTX_PROFILING)
+    file(GLOB NVTX3_INCLUDE_HINTS
+        "/opt/nvidia/nsight-systems/*/target-linux-*/nvtx/include"
+        "/usr/local/cuda-*/include"
+    )
+    find_path(NVTX3_INCLUDE_DIR nvtx3/nvToolsExt.h
+        HINTS ${NVTX3_INCLUDE_HINTS} /usr/local/cuda/include
+    )
+    if (NVTX3_INCLUDE_DIR)
+        message(STATUS "NVTX profiling enabled: ${NVTX3_INCLUDE_DIR}")
+        add_compile_definitions(LIGHTNING_ENABLE_NVTX_PROFILING)
+        include_directories(${NVTX3_INCLUDE_DIR})
+    else ()
+        message(WARNING "NVTX3 headers not found; profiling ranges will be disabled")
+    endif ()
+endif ()
 
 
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -83,6 +107,7 @@ install(DIRECTORY launch
 
 install(PROGRAMS
         scripts/debug/monitor_lightning_resources.sh
+        scripts/profile_lightning_threads.sh
         scripts/debug/visualize_lightning_resources.py
         DESTINATION lib/${PROJECT_NAME}
 )

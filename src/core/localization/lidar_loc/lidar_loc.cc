@@ -15,6 +15,7 @@
 #include "io/file_io.h"
 #include "io/yaml_io.h"
 #include "ui/pangolin_window.h"
+#include "utils/profiling.h"
 #include "utils/timer.h"
 #include "wrapper/rviz_publisher.h"
 
@@ -181,7 +182,10 @@ bool LidarLoc::Init(const std::string& config_path) {
         }
     }
 
-    update_map_thread_ = std::thread([this]() { LidarLoc::UpdateMapThread(); });
+    update_map_thread_ = std::thread([this]() {
+        profiling::SetCurrentThreadName("map_update");
+        LidarLoc::UpdateMapThread();
+    });
 
     return true;
 }
@@ -517,6 +521,7 @@ bool LidarLoc::ShouldOnlyLogBBSBeforeInit() const {
 }
 
 void LidarLoc::Align(const CloudPtr& input) {
+    profiling::ScopedRange function_range("LidarLoc.Align");
     // 输入必须非空
     assert(input != nullptr);
 
@@ -942,6 +947,7 @@ bool LidarLoc::CheckLidarOdomValid(const SE3& current_pose_esti, double& delta_p
 }
 
 bool LidarLoc::Localize(SE3& pose, double& confidence, CloudPtr input, CloudPtr output, bool use_rough_res) {
+    profiling::ScopedRange function_range("LidarLoc.Localize");
     Eigen::Matrix4f trans;
     bool loc_success = false;
     Eigen::Matrix4f guess_pose = pose.matrix().cast<float>();
@@ -963,7 +969,10 @@ bool LidarLoc::Localize(SE3& pose, double& confidence, CloudPtr input, CloudPtr 
     }
 
     ndt->setInputSource(input);
-    ndt->align(*output, guess_pose);
+    {
+        profiling::ScopedRange range(use_rough_res ? "NDT.AlignRough" : "NDT.AlignFine");
+        ndt->align(*output, guess_pose);
+    }
     trans = ndt->getFinalTransformation();
     confidence = ndt->getTransformationProbability();
 

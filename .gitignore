@@ -22,3 +22,8 @@ debug/
 scripts/backend_path_*.txt
 scripts/*_analysis*.pdf
 scripts/*.csv
+
+# Nsight Systems reports
+lightning_profiles/
+*.nsys-rep
+*.qdrep

@@ -14,6 +14,8 @@
 
 #include <glog/logging.h>
 
+#include "utils/profiling.h"
+
 namespace lightning::sys {
 using UL = std::unique_lock<std::mutex>;
 
@@ -50,6 +52,7 @@ class AsyncMessageProcess {
     void CleanSkipCnt();
 
     void SetName(std::string name) { name_ = std::move(name); }
+    void SetThreadName(std::string thread_name) { thread_name_ = std::move(thread_name); }
     void SetSkipParam(bool enable_skip, int skip_num) { enable_skip_ = enable_skip, skip_num_ = skip_num; }
 
     AsyncMessageProcess(const AsyncMessageProcess&) = delete;
@@ -66,6 +69,7 @@ class AsyncMessageProcess {
     bool exit_flag_ = false;
     size_t max_size_ = 100;  // 40
     std::string name_;
+    std::string thread_name_;
 
     /// 跳帧
     bool enable_skip_ = false;
@@ -96,6 +100,10 @@ void AsyncMessageProcess<T>::Start() {
 
 template <typename T>
 void AsyncMessageProcess<T>::ProcLoop() {
+    if (!thread_name_.empty()) {
+        profiling::SetCurrentThreadName(thread_name_);
+    }
+
     while (!exit_flag_) {
         UL lock(mutex_);
         cv_msg_.wait(lock, [this]() { return update_flag_; });

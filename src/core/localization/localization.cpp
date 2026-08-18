@@ -6,6 +6,7 @@
 #include "core/localization/pose_graph/pgo.h"
 #include "io/yaml_io.h"
 #include "ui/pangolin_window.h"
+#include "utils/profiling.h"
 #include "wrapper/rviz_publisher.h"
 
 namespace lightning::loc {
@@ -71,6 +72,8 @@ bool Localization::Init(const std::string& yaml_path, const std::string& global_
 
     lidar_odom_proc_cloud_.SetName("激光里程计");
     lidar_loc_proc_cloud_.SetName("激光定位");
+    lidar_odom_proc_cloud_.SetThreadName("lidar_odom");
+    lidar_loc_proc_cloud_.SetThreadName("lidar_loc");
 
     // 允许跳帧
     lidar_loc_proc_cloud_.SetSkipParam(options_.enable_lidar_loc_skip_, options_.lidar_loc_skip_num_);
@@ -169,14 +172,21 @@ void Localization::ProcessLivoxLidarMsg(const livox_ros_driver2::msg::CustomMsg:
 }
 
 void Localization::LidarOdomProcCloud(CloudPtr cloud) {
+    profiling::ScopedRange function_range("Localization.LidarOdomProcCloud");
     if (lio_ == nullptr) {
         return;
     }
 
     /// NOTE: 在NCLT这种数据集中，lio内部是有缓存的，它拿到的点云不一定是最新时刻的点云
-    lio_->ProcessPointCloud2(cloud);
-    if (!lio_->Run()) {
-        return;
+    {
+        profiling::ScopedRange range("LIO.ProcessPointCloud");
+        lio_->ProcessPointCloud2(cloud);
+    }
+    {
+        profiling::ScopedRange range("LIO.Run");
+        if (!lio_->Run()) {
+            return;
+        }
     }
 
     if (!lio_->IsIMUInited()) {
@@ -189,8 +199,14 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
         LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
                   << lo_state.GetPose().translation().transpose();
     }
-    lidar_loc_->ProcessLO(lo_state);
-    pgo_->ProcessLidarOdom(lo_state);
+    {
+        profiling::ScopedRange range("LidarLoc.ProcessLO");
+        lidar_loc_->ProcessLO(lo_state);
+    }
+    {
+        profiling::ScopedRange range("PGO.ProcessLidarOdom");
+        pgo_->ProcessLidarOdom(lo_state);
+    }
 
 
     // LOG(INFO) << "LO pose: " << std::setprecision(12) << lo_state.timestamp_ << " "
@@ -229,12 +245,19 @@ void Localization::LidarOdomProcCloud(CloudPtr cloud) {
 }
 
 void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
-    lidar_loc_->ProcessCloud(scan_undist);
+    profiling::ScopedRange function_range("Localization.LidarLocProcCloud");
+    {
+        profiling::ScopedRange range("LidarLoc.ProcessCloud");
+        lidar_loc_->ProcessCloud(scan_undist);
+    }
 
     auto res = lidar_loc_->GetLocalizationResult();
     LOG(INFO) << "Loc pose: " << std::setprecision(12) << res.timestamp_ << " "
               << res.pose_.translation().transpose() << ", status: " << static_cast<int>(res.status_);
-    pgo_->ProcessLidarLoc(res);
+    {
+        profiling::ScopedRange range("PGO.ProcessLidarLoc");
+        pgo_->ProcessLidarLoc(res);
+    }
 
     if (ui_) {
         // Twi with Til, here pose means Twl, thus Til=I
@@ -258,6 +281,7 @@ void Localization::LidarLocProcCloud(CloudPtr scan_undist) {
 }
 
 void Localization::ProcessIMUMsg(IMUPtr imu) {
+    profiling::ScopedRange function_range("Localization.ProcessIMUMsg");
     if (lidar_loc_ == nullptr || lio_ == nullptr || pgo_ == nullptr) {
         return;
     }
@@ -269,10 +293,17 @@ void Localization::ProcessIMUMsg(IMUPtr imu) {
     last_imu_time_ = this_imu_time;
 
     /// 里程计处理IMU
-    lio_->ProcessIMU(imu);
+    {
+        profiling::ScopedRange range("LIO.ProcessIMU");
+        lio_->ProcessIMU(imu);
+    }
 
     /// 这里需要 IMU predict，否则没法process DR了
-    auto dr_state = lio_->GetIMUState();
+    NavState dr_state;
+    {
+        profiling::ScopedRange range("LIO.GetIMUState");
+        dr_state = lio_->GetIMUState();
+    }
 
     if (!dr_state.pose_is_ok_) {
         return;
@@ -293,8 +324,14 @@ void Localization::ProcessIMUMsg(IMUPtr imu) {
     //           << dr_state.GetPose().translation().transpose()
     //           << ", q=" << dr_state.GetPose().unit_quaternion().coeffs().transpose();
 
-    lidar_loc_->ProcessDR(dr_state);
-    pgo_->ProcessDR(dr_state);
+    {
+        profiling::ScopedRange range("LidarLoc.ProcessDR");
+        lidar_loc_->ProcessDR(dr_state);
+    }
+    {
+        profiling::ScopedRange range("PGO.ProcessDR");
+        pgo_->ProcessDR(dr_state);
+    }
 }
 
 // void Localization::ProcessOdomMsg(const nav_msgs::msg::Odometry::SharedPtr odom_msg) {
