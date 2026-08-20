@@ -28,6 +28,7 @@ RangeData TransformRangeData(const RangeData& range_data,
       transform * range_data.origin,
       TransformPointCloud(range_data.returns, transform),
       TransformPointCloud(range_data.misses, transform),
+      TransformPointCloud(range_data.highlight_returns, transform),
   };
 }
 
@@ -35,7 +36,8 @@ RangeData CropRangeData(const RangeData& range_data, const float min_z,
                         const float max_z) {
   return RangeData{range_data.origin,
                    CropPointCloud(range_data.returns, min_z, max_z),
-                   CropPointCloud(range_data.misses, min_z, max_z)};
+                   CropPointCloud(range_data.misses, min_z, max_z),
+                   CropPointCloud(range_data.highlight_returns, min_z, max_z)};
 }
 
 proto::RangeData ToProto(const RangeData& range_data) {

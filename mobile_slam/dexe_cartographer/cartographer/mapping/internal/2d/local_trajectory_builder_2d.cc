@@ -359,6 +359,11 @@ LocalTrajectoryBuilder2D::ProcessDataAndEstimatePose(
   sensor::RangeData range_data_in_local =
       TransformRangeData(merged_data.merged_range_data,
                          transform::Embed3D(pose_estimate_2d->cast<float>()));
+  // Keep the current-frame highlight points separate from the ordinary scan.
+  // The scan-matched pose has already been estimated here; unlike submap
+  // insertion this happens for every successful matching result.
+  range_data_in_local.highlight_returns = sensor::TransformPointCloud(
+      merged_data.merged_highlight_cloud, pose_estimate.cast<float>());
 
   // 将线数据转换到local坐标系
   std::map<int, std::vector<sensor::LineData>> lines_in_local;

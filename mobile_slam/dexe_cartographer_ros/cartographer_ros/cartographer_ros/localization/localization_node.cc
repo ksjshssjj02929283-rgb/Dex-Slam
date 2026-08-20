@@ -162,6 +162,10 @@ LocalizationNode::LocalizationNode(
       std::string("~/") + kMatchedFeatureTopic, kLatestOnlyPublisherQueueSize);
   scan_matched_point_cloud_publisher_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
       std::string("~/") + kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
+  scan_matched_highlight_point_cloud_publisher_ =
+      node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+          std::string("~/") + kScanMatchedHighlightPointCloudTopic,
+          kLatestOnlyPublisherQueueSize);
   localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
       "~/state", kLatestOnlyPublisherQueueSize);
   // Cross-node contract: localization_node pushes the accepted pose to the
@@ -422,6 +426,21 @@ void LocalizationNode::PublishLocalTrajectoryData()
           node_options_.map_frame,
           carto::sensor::TransformTimedPointCloud(
               point_cloud, carto::transform::Rigid3f::Identity())));
+    }
+    if (scan_matched_highlight_point_cloud_publisher_->get_subscription_count() > 0) {
+      carto::sensor::TimedPointCloud highlight_point_cloud;
+      const auto& highlight_returns =
+          trajectory_data.local_slam_data->range_data_in_local.highlight_returns;
+      highlight_point_cloud.reserve(highlight_returns.size());
+      for (const cartographer::sensor::RangefinderPoint& point : highlight_returns) {
+        highlight_point_cloud.push_back(
+            cartographer::sensor::ToTimedRangefinderPoint(point, 0.f /* time */));
+      }
+      scan_matched_highlight_point_cloud_publisher_->publish(ToPointCloud2Message(
+          carto::common::ToUniversal(trajectory_data.local_slam_data->time),
+          node_options_.map_frame,
+          carto::sensor::TransformTimedPointCloud(
+              highlight_point_cloud, carto::transform::Rigid3f::Identity())));
     }
 
     // Matched features (line segments)  

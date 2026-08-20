@@ -174,6 +174,10 @@ Node::Node(
   scan_matched_point_cloud_publisher_ =
       node_->create_publisher<sensor_msgs::msg::PointCloud2>(
         std::string("~/") + kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
+  scan_matched_highlight_point_cloud_publisher_ =
+      node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+          std::string("~/") + kScanMatchedHighlightPointCloudTopic,
+          kLatestOnlyPublisherQueueSize);
   local_map_cloud_publisher_ =
       node_->create_publisher<sensor_msgs::msg::PointCloud2>(
           std::string("~/") + kLocalPointCloudTopic, kLatestOnlyPublisherQueueSize);
@@ -511,6 +515,21 @@ void Node::PublishLocalTrajectoryData() {
             node_options_.map_frame,
             carto::sensor::TransformTimedPointCloud(
                 point_cloud, trajectory_data.local_to_map.cast<float>())));
+      }
+      if (scan_matched_highlight_point_cloud_publisher_->get_subscription_count() > 0) {
+        carto::sensor::TimedPointCloud highlight_point_cloud;
+        const auto& highlight_returns =
+            trajectory_data.local_slam_data->range_data_in_local.highlight_returns;
+        highlight_point_cloud.reserve(highlight_returns.size());
+        for (const cartographer::sensor::RangefinderPoint& point : highlight_returns) {
+          highlight_point_cloud.push_back(
+              cartographer::sensor::ToTimedRangefinderPoint(point, 0.f /* time */));
+        }
+        scan_matched_highlight_point_cloud_publisher_->publish(ToPointCloud2Message(
+            carto::common::ToUniversal(trajectory_data.local_slam_data->time),
+            node_options_.map_frame,
+            carto::sensor::TransformTimedPointCloud(
+                highlight_point_cloud, trajectory_data.local_to_map.cast<float>())));
       }
       if (local_map_cloud_publisher_->get_subscription_count() > 0) {
         carto::sensor::TimedPointCloud local_map_cloud;

@@ -89,8 +89,22 @@ std::vector<std::pair<int, std::vector<int>>> LaserPerception::laserCluster(
       }
       darkPointSet.push_back(i);
     } else {
+      // Keep the highlight-cluster split rule in the same metric unit as the
+      // dark-point rule.  The previous literal 900 is the intensity threshold
+      // by coincidence, but this expression is a point-to-point distance in
+      // meters.  It consequently prevented highlight clusters from splitting.
+      double highlight_range;
+      if (!highlightPointSet.empty()) {
+        const auto& previous_highlight_point =
+            msg[highlightPointSet.back()].second;
+        highlight_range = std::sqrt(
+            previous_highlight_point[0] * previous_highlight_point[0] +
+            previous_highlight_point[1] * previous_highlight_point[1]);
+      }
       if (highlightPointSet.size() > 0 &&
-        (msg[highlightPointSet.back()].second - msg[i].second).norm() >= 900)
+        (msg[highlightPointSet.back()].second - msg[i].second).norm() >=
+        cluster_distance_threshold_ +
+        highlight_range * std::sin(0.00224))
       {
         if (static_cast<int>(highlightPointSet.size()) > min_cluster_points_) {
           if (static_cast<int>(darkPointSet.size()) > min_cluster_points_) {

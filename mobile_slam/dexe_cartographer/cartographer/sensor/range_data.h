@@ -35,6 +35,10 @@ struct RangeData {
   Eigen::Vector3f origin;
   PointCloud returns;
   PointCloud misses;
+  // A runtime-only subset of 'returns' classified as high-intensity points.
+  // It is carried with a local SLAM result for visualization and is not part
+  // of the serialized RangeData proto.
+  PointCloud highlight_returns;
 };
 
 struct RangeDataWithPose {

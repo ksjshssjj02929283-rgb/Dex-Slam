@@ -767,6 +767,10 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   sensor::RangeData range_data_in_local =
       sensor::TransformRangeData(merged_data.merged_range_data,
                          transform::Embed3D(pose_estimate_2d->cast<float>()));
+  // Preserve the scan-matched highlight subset for the ROS visualization
+  // path. This is independent of whether this frame updates a local submap.
+  range_data_in_local.highlight_returns = sensor::TransformPointCloud(
+      merged_data.merged_highlight_cloud, pose_estimate.cast<float>());
 
   // 将线数据转换到local坐标系
   std::map<int, std::vector<sensor::LineData>> lines_in_local;

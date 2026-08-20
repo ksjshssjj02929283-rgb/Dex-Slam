@@ -54,6 +54,8 @@ constexpr char kLocalPointCloudTopic[] = "local_cloud_map";
 constexpr char kLocalFeatureMapTopic[] = "local_feature_map";
 constexpr char kMatchedFeatureTopic[] = "matched_feature";
 constexpr char kScanMatchedPointCloudTopic[] = "scan_matched_points2";
+constexpr char kScanMatchedHighlightPointCloudTopic[] =
+    "scan_matched_highlight_points2";
 constexpr char kLocalizationStateTopic[] = "localization_state";
 constexpr char kParticlePosesTopic[] = "particle_poses";
 

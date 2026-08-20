@@ -72,7 +72,9 @@ POSE_ESTIMATOR_2D = {
       min_cluster_points = 5,
       min_range = 0.1,
       max_range = 15.,
-      highlight_intensity_threshold = 900,
+      -- Keep localization consistent with the 2D mapping configuration.
+      -- LaserScan reflectivity in the recorded data is in [0, 255].
+      highlight_intensity_threshold = 120,
       cluster_distance_threshold = 0.05,
       line_detector = {
         least_thresh = 0.03,
