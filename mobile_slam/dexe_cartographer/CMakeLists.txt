@@ -76,18 +76,14 @@ endif()
 # Install catkin package.xml
 install(FILES package.xml DESTINATION share/cartographer)
 
-# 检测是否为 ARM 架构
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|armv8")
-  # ARM 环境：使用固定的安装路径
-  set(CARTOGRAPHER_CONFIGURATION_FILES_DIRECTORY "/home/dexforce/w1/install/cartographer/share/cartographer/configuration_files"
-    CACHE PATH ".lua configuration files directory" FORCE)
-  message(STATUS "检测到 ARM 架构，使用固定配置路径: ${CARTOGRAPHER_CONFIGURATION_FILES_DIRECTORY}")
-else()
-  # 非 ARM 环境：使用 CMAKE_INSTALL_PREFIX
-  set(CARTOGRAPHER_CONFIGURATION_FILES_DIRECTORY ${CMAKE_INSTALL_PREFIX}/share/cartographer/configuration_files
-    CACHE PATH ".lua configuration files directory")
-  message(STATUS "检测到非 ARM 架构，使用动态配置路径: ${CARTOGRAPHER_CONFIGURATION_FILES_DIRECTORY}")
-endif()
+# Always resolve the built-in Lua configuration directory from this package's
+# install prefix.  A fixed ARM path can mix a newly built binary with Lua files
+# from another workspace (for example, ~/w1), causing missing-key failures.
+set(CARTOGRAPHER_CONFIGURATION_FILES_DIRECTORY
+  "${CMAKE_INSTALL_PREFIX}/share/cartographer/configuration_files"
+  CACHE PATH ".lua configuration files directory" FORCE)
+message(STATUS
+  "使用当前安装前缀配置路径: ${CARTOGRAPHER_CONFIGURATION_FILES_DIRECTORY}")
 
 install(DIRECTORY configuration_files DESTINATION share/cartographer/)
 

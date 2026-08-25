@@ -39,8 +39,8 @@ TRAJECTORY_BUILDER_2D = {
       min_range = 0.1,
       max_range = 15.,
       -- The recorded front/rear LaserScan intensities are in [0, 255].
-      -- 120 keeps a sparse high-reflectivity subset for highlight matching.
-      highlight_intensity_threshold = 120,
+      -- 180 rejects the intensity tail while retaining high-reflectivity highlights.
+      highlight_intensity_threshold = 180,
       cluster_distance_threshold = 0.05,
       line_detector = {
         least_thresh = 0.03,
