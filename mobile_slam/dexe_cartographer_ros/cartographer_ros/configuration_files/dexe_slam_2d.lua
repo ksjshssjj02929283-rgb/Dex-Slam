@@ -51,6 +51,8 @@ options = {
   navigation_map_filter_mode = "normal",  -- 滤波强度: "normal", "high", "super"
   save_debug_map = false,  -- 是否保存调试图片（mask、连通域等中间结果）
   save_map_pcd = false,  -- 是否保存地图点云（.pcd）
+  -- [地图起点重置]
+  reset_map_origin_to_align_structure = false,  -- 保存地图前是否重置地图起点（旋转栅格对齐结构化环境；重置角度由地图线特征估计，待实现）
 
   publish_tracked_pose = true,
   save_tracked_pose = false,

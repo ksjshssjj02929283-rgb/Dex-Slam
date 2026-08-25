@@ -128,6 +128,12 @@ class MapBuilderInterface {
     return nullptr;
   }
 
+  // 重置地图原点：把位姿图中所有全局位姿（node / submap / landmark）变换到
+  // 新坐标系。'transform' 为 旧系 → 新系 的变换（即新原点位姿的逆）。
+  // 必须在最终优化之后、序列化/保存地图之前调用；约束为相对量，对全局刚体
+  // 变换不变，因此无需重新优化。默认空实现，非 2D 实现（mock/stub）无需处理。
+  virtual void ApplyOriginTransform(const transform::Rigid3d& /*transform*/) {}
+
   virtual mapping::PoseGraphInterface* pose_graph() = 0;
 
   virtual const std::vector<proto::TrajectoryBuilderOptionsWithSensorIds>&

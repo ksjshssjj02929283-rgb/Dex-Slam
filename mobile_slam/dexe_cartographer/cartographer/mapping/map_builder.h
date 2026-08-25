@@ -109,6 +109,11 @@ class MapBuilder : public MapBuilderInterface {
   // Generate global static submap from all trajectory nodes
   std::shared_ptr<Submap2D> GenerateGlobalStaticSubmap(double resolution);
 
+  // 重置地图原点：把位姿图全局位姿变换到新坐标系（'T_old_to_new' 为
+  // 旧系 → 新系），并使已缓存的 global_static_submap_ 失效（下次
+  // SerializeState/SerializeStateToFile 会基于变换后的节点位姿重建）。
+  void ApplyOriginTransform(const transform::Rigid3d& T_old_to_new) override;
+
   // 返回已缓存的全局静态 Submap（SerializeStateToFile 后可用），否则返回 nullptr
   std::shared_ptr<Submap2D> GetGlobalStaticSubmap() const override {
     return global_static_submap_;

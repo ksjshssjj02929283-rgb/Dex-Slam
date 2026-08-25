@@ -95,6 +95,12 @@ class Node
   void SaveOptimizedPoses(const int & trajectory_id);
 
   bool SaveMap(const std::string & map_filename, const double resolution);
+
+  // 重置地图原点：把位姿图所有全局位姿变换到新坐标系（'T_old_to_new' 为
+  // 旧系 → 新系）。必须在 RunFinalOptimization 之后、SerializeState/SaveMap
+  // 之前调用。
+  void ApplyMapOriginTransform(
+      const ::cartographer::transform::Rigid3d& T_old_to_new);
   // Starts the first trajectory with the default topics.
 //   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options, 
 //                                         bool flag_localization, 

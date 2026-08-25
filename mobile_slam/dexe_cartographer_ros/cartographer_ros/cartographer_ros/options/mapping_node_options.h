@@ -52,6 +52,10 @@ struct MappingNodeOptions {
   std::string navigation_map_filter_mode = "normal"; // "normal", "high", "super"
   bool save_debug_map = false; // Enable debug visualization output
   bool save_map_pcd = false;              // save map point cloud as *.pcd
+
+  // 保存地图前重置地图原点（整体旋转使栅格对齐结构化环境）。
+  // TODO(line-features): 重置角度后续由地图线特征在线估计得到，该配置仅作开关。
+  bool reset_map_origin_to_align_structure = false;
 };
 
 MappingNodeOptions CreateMappingNodeOptions(

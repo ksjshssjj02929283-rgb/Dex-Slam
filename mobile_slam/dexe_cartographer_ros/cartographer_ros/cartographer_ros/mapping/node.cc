@@ -1390,6 +1390,11 @@ bool Node::SaveMap(
   return map_builder_bridge_->SaveMap(map_filename, resolution);
 }
 
+void Node::ApplyMapOriginTransform(const Rigid3d& T_old_to_new) {
+  absl::MutexLock lock(&mutex_);
+  map_builder_bridge_->ApplyMapOriginTransform(T_old_to_new);
+}
+
 
 void Node::HandleOdometryMessage(const int trajectory_id,
                                  const std::string& sensor_id,

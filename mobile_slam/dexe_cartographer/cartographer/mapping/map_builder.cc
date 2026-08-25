@@ -296,6 +296,24 @@ bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
   return (writer.Close());
 }
 
+void MapBuilder::ApplyOriginTransform(const transform::Rigid3d& T_old_to_new) {
+  // 1. 变换位姿图中所有 node / submap / landmark 的全局位姿。
+  //    约束为相对量，对全局刚体变换不变，无需重新优化。
+  pose_graph_->ApplyTransformToAllPoses(T_old_to_new);
+
+  // 2. 已缓存的 global_static_submap_（若有）仍处于旧坐标系，直接失效：
+  //    - SerializeState/SerializeStateToFile 总会重新 GenerateGlobalStaticSubmap，
+  //      重建时使用的 node.global_pose 已是新系；
+  //    - 单独调用 SaveMap 时，上层会回退到基于位姿图节点重新生成最终子图，
+  //      同样基于新系位姿。
+  //    注意：不要在这里立即重建——后续序列化流程本来就要重建，避免重复开销。
+  if (global_static_submap_) {
+    LOG(INFO) << "ApplyOriginTransform: invalidating cached "
+                 "global_static_submap (stale in old frame)";
+    global_static_submap_.reset();
+  }
+}
+
 std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resolution) {
   LOG(INFO) << "Starting GenerateGlobalStaticSubmap with resolution: " << resolution;
   

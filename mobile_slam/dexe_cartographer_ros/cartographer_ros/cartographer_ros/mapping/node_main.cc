@@ -266,6 +266,9 @@ private:
       LOG(INFO) << "Trajectories already finished, skipping optimization.";
     }
 
+    // 保存前重置地图起点以对齐结构化环境（幂等：本次建图只应用一次，保存失败重试不会重复应用）
+    ResetMapOriginToAlignStructure();
+
     if (node_options_->save_tracked_pose) {
       mapping_node_->SaveOptimizedPoses(int(0));
     }
@@ -423,8 +426,48 @@ private:
     is_mapping_ = false;
     is_saving_ = false;
     trajectories_finished_ = false;  // 重置标志
-    
+    map_origin_reset_done_ = false;  // 重置标志
+
     LOG(INFO) << "Mapping node reset completed.";
+  }
+
+  // 保存地图前重置地图起点（整体旋转使栅格对齐结构化环境）：把位姿图所有
+  // 全局位姿变换到新坐标系，使后续 SerializeState/SaveMap 以新坐标系产出
+  // pbstream 与地图文件。
+  // 调用前提：FinishAllTrajectories + RunFinalOptimization 已完成、尚未
+  // SerializeState（pbstream 内的位姿图与 global_static_submap 都从位姿图
+  // 节点重建，自然落在新系）。
+  // 幂等：一次建图会话只应用一次，保存失败重试不会重复应用。
+  //
+  // TODO(line-features): 目前新原点位姿 (new_x, new_y, new_yaw) 为占位值
+  //   （恒等变换）；后续改为从地图线特征在线估计重置角度，使栅格对齐室内
+  //   结构方向（位置 x / y 为预留接口，纯角度重置时保持 0，即绕 map 原点
+  //   ——机器人建图起点——旋转）。估计所需的线特征可从位姿图节点数据
+  //   （node.data.constant_data->lines + global_pose）或全局静态子图的
+  //   line_map_2d_list 获取（经 MapBuilderBridge 访问）。
+  void ResetMapOriginToAlignStructure() {
+    if (!node_options_->reset_map_origin_to_align_structure) {
+      return;
+    }
+    if (map_origin_reset_done_) {
+      LOG(INFO) << "Map origin already reset in this mapping session, skipping.";
+      return;
+    }
+
+    // TODO(line-features): 改为由地图线特征估计；位置 (x, y) 为预留接口
+    const double new_x = 0.0;
+    const double new_y = 0.0;
+    const double new_yaw = 0.0;
+
+    // T_new_origin：新原点在旧地图坐标系下的位姿；施加其逆变换（旧系 → 新系）
+    const cartographer::transform::Rigid3d T_new_origin(
+        Eigen::Vector3d(new_x, new_y, 0.0),
+        Eigen::Quaterniond(Eigen::AngleAxisd(new_yaw, Eigen::Vector3d::UnitZ())));
+    LOG(INFO) << "Resetting map origin to align with structure: "
+              << "new origin in old map frame x=" << new_x
+              << ", y=" << new_y << ", yaw=" << new_yaw << " rad";
+    mapping_node_->ApplyMapOriginTransform(T_new_origin.inverse());
+    map_origin_reset_done_ = true;
   }
 
   void FinishMapping() {
@@ -432,6 +475,9 @@ private:
     // 结束优化与保存
     mapping_node_->FinishAllTrajectories();
     mapping_node_->RunFinalOptimization();
+
+    // 保存前重置地图起点以对齐结构化环境（幂等：本次建图只应用一次）
+    ResetMapOriginToAlignStructure();
 
     if (node_options_->save_tracked_pose) {
       mapping_node_->SaveOptimizedPoses(int(0));
@@ -498,6 +544,7 @@ private:
   bool is_mapping_{false};
   bool is_saving_{false};               // 正在保存/收尾建图（~/state 报 SAVING）
   bool trajectories_finished_{false};  // 标记轨迹是否已完成和优化
+  bool map_origin_reset_done_{false};  // 本次建图会话是否已应用过地图原点重置（防重试时重复施加）
 
   // Cartographer 持有
   std::unique_ptr<cartographer_ros::Node> mapping_node_;

@@ -86,6 +86,12 @@ MappingNodeOptions CreateMappingNodeOptions(
     options.save_map_pcd = lua_parameter_dictionary->GetBool("save_map_pcd");
   }
 
+  // 保存前重置地图原点以对齐结构化环境（重置角度后续由地图线特征估计，此处仅作开关）
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_to_align_structure")) {
+    options.reset_map_origin_to_align_structure =
+        lua_parameter_dictionary->GetBool("reset_map_origin_to_align_structure");
+  }
+
   return options;
 }
 
