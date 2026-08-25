@@ -1395,6 +1395,12 @@ void Node::ApplyMapOriginTransform(const Rigid3d& T_old_to_new) {
   map_builder_bridge_->ApplyMapOriginTransform(T_old_to_new);
 }
 
+absl::optional<double> Node::EstimateStructureAlignmentYaw(
+    const ::cartographer::mapping::StructureAlignmentOptions& options) {
+  absl::MutexLock lock(&mutex_);
+  return map_builder_bridge_->EstimateStructureAlignmentYaw(options);
+}
+
 
 void Node::HandleOdometryMessage(const int trajectory_id,
                                  const std::string& sensor_id,

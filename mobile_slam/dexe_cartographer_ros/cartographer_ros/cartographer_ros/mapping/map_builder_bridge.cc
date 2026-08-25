@@ -214,6 +214,11 @@ void MapBuilderBridge::ApplyMapOriginTransform(
   map_builder_->ApplyOriginTransform(T_old_to_new);
 }
 
+absl::optional<double> MapBuilderBridge::EstimateStructureAlignmentYaw(
+    const ::cartographer::mapping::StructureAlignmentOptions& options) {
+  return map_builder_->EstimateStructureAlignmentYaw(options);
+}
+
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
   using Clock = std::chrono::steady_clock;

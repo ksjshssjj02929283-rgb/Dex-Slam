@@ -86,10 +86,39 @@ MappingNodeOptions CreateMappingNodeOptions(
     options.save_map_pcd = lua_parameter_dictionary->GetBool("save_map_pcd");
   }
 
-  // 保存前重置地图原点以对齐结构化环境（重置角度后续由地图线特征估计，此处仅作开关）
+  // 保存前重置地图原点以对齐结构化环境（重置角度由全局线特征在线估计）
   if (lua_parameter_dictionary->HasKey("reset_map_origin_to_align_structure")) {
     options.reset_map_origin_to_align_structure =
         lua_parameter_dictionary->GetBool("reset_map_origin_to_align_structure");
+  }
+  // 对齐角度估计阈值（缺省值见 mapping_node_options.h）
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_min_line_length")) {
+    options.reset_map_origin_min_line_length =
+        lua_parameter_dictionary->GetDouble("reset_map_origin_min_line_length");
+  }
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_min_inliers")) {
+    options.reset_map_origin_min_inliers =
+        lua_parameter_dictionary->GetInt("reset_map_origin_min_inliers");
+  }
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_min_observations")) {
+    options.reset_map_origin_min_observations =
+        lua_parameter_dictionary->GetInt("reset_map_origin_min_observations");
+  }
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_max_candidate_lines")) {
+    options.reset_map_origin_max_candidate_lines =
+        lua_parameter_dictionary->GetInt("reset_map_origin_max_candidate_lines");
+  }
+  if (lua_parameter_dictionary->HasKey(
+          "reset_map_origin_orthogonality_tolerance_deg")) {
+    options.reset_map_origin_orthogonality_tolerance_deg =
+        lua_parameter_dictionary->GetDouble(
+            "reset_map_origin_orthogonality_tolerance_deg");
+  }
+  if (lua_parameter_dictionary->HasKey(
+          "reset_map_origin_min_secondary_support_ratio")) {
+    options.reset_map_origin_min_secondary_support_ratio =
+        lua_parameter_dictionary->GetDouble(
+            "reset_map_origin_min_secondary_support_ratio");
   }
 
   return options;

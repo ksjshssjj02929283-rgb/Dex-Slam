@@ -101,6 +101,12 @@ class Node
   // 之前调用。
   void ApplyMapOriginTransform(
       const ::cartographer::transform::Rigid3d& T_old_to_new);
+
+  // 从位姿图节点线特征估计对齐结构化环境的新原点朝向（|yaw| ≤ π/4）。
+  // 必须在 RunFinalOptimization 之后、ApplyMapOriginTransform 之前调用；
+  // 无可靠正交结构时返回 nullopt。
+  absl::optional<double> EstimateStructureAlignmentYaw(
+      const ::cartographer::mapping::StructureAlignmentOptions& options);
   // Starts the first trajectory with the default topics.
 //   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options, 
 //                                         bool flag_localization, 

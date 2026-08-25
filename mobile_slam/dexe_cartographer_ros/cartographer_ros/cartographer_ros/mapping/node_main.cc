@@ -437,14 +437,13 @@ private:
   // 调用前提：FinishAllTrajectories + RunFinalOptimization 已完成、尚未
   // SerializeState（pbstream 内的位姿图与 global_static_submap 都从位姿图
   // 节点重建，自然落在新系）。
-  // 幂等：一次建图会话只应用一次，保存失败重试不会重复应用。
+  // 幂等：一次建图会话只决策一次（包括"估计失败 → 不重置"的决策），
+  // 保存失败重试不会重复估计/应用。
   //
-  // TODO(line-features): 目前新原点位姿 (new_x, new_y, new_yaw) 为占位值
-  //   （恒等变换）；后续改为从地图线特征在线估计重置角度，使栅格对齐室内
-  //   结构方向（位置 x / y 为预留接口，纯角度重置时保持 0，即绕 map 原点
-  //   ——机器人建图起点——旋转）。估计所需的线特征可从位姿图节点数据
-  //   （node.data.constant_data->lines + global_pose）或全局静态子图的
-  //   line_map_2d_list 获取（经 MapBuilderBridge 访问）。
+  // 新原点朝向 new_yaw 由全局线特征在线估计（位姿图节点线特征聚合 →
+  // 结构化方向直方图 → 正交主方向，见 EstimateStructureAlignmentYaw），
+  // 位置 (x, y) 为预留接口，纯角度重置时保持 0，即绕 map 原点
+  // ——机器人建图起点——旋转。估计失败（无可靠正交结构）时跳过重置。
   void ResetMapOriginToAlignStructure() {
     if (!node_options_->reset_map_origin_to_align_structure) {
       return;
@@ -454,10 +453,29 @@ private:
       return;
     }
 
-    // TODO(line-features): 改为由地图线特征估计；位置 (x, y) 为预留接口
+    // 从全局线特征估计对齐角度
+    cartographer::mapping::StructureAlignmentOptions align_options;
+    align_options.min_line_length = node_options_->reset_map_origin_min_line_length;
+    align_options.min_inliers = node_options_->reset_map_origin_min_inliers;
+    align_options.min_observations = node_options_->reset_map_origin_min_observations;
+    align_options.max_candidate_lines = node_options_->reset_map_origin_max_candidate_lines;
+    align_options.orthogonality_tolerance_deg =
+        node_options_->reset_map_origin_orthogonality_tolerance_deg;
+    align_options.min_secondary_support_ratio =
+        node_options_->reset_map_origin_min_secondary_support_ratio;
+    const auto estimated_yaw =
+        mapping_node_->EstimateStructureAlignmentYaw(align_options);
+    if (!estimated_yaw.has_value()) {
+      LOG(WARNING) << "No reliable orthogonal structure found in map line "
+                      "features, skipping map origin reset (identity kept).";
+      map_origin_reset_done_ = true;  // 决策已完成（结果 = 恒等），不再重试
+      return;
+    }
+
+    // 位置 (x, y) 为预留接口，纯角度重置保持 0
     const double new_x = 0.0;
     const double new_y = 0.0;
-    const double new_yaw = 0.0;
+    const double new_yaw = estimated_yaw.value();
 
     // T_new_origin：新原点在旧地图坐标系下的位姿；施加其逆变换（旧系 → 新系）
     const cartographer::transform::Rigid3d T_new_origin(
@@ -465,7 +483,8 @@ private:
         Eigen::Quaterniond(Eigen::AngleAxisd(new_yaw, Eigen::Vector3d::UnitZ())));
     LOG(INFO) << "Resetting map origin to align with structure: "
               << "new origin in old map frame x=" << new_x
-              << ", y=" << new_y << ", yaw=" << new_yaw << " rad";
+              << ", y=" << new_y << ", yaw=" << new_yaw << " rad ("
+              << (new_yaw * 180.0 / M_PI) << " deg)";
     mapping_node_->ApplyMapOriginTransform(T_new_origin.inverse());
     map_origin_reset_done_ = true;
   }

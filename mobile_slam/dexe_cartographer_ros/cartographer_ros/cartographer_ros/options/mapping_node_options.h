@@ -54,8 +54,16 @@ struct MappingNodeOptions {
   bool save_map_pcd = false;              // save map point cloud as *.pcd
 
   // 保存地图前重置地图原点（整体旋转使栅格对齐结构化环境）。
-  // TODO(line-features): 重置角度后续由地图线特征在线估计得到，该配置仅作开关。
+  // 重置角度由全局线特征在线估计（见 cartographer/mapping/2d/structure_alignment.h）。
   bool reset_map_origin_to_align_structure = false;
+  // 对齐角度估计的阈值（填充 StructureAlignmentOptions）：
+  double reset_map_origin_min_line_length = 1.5;  // 结构线段最小长度（米）
+  int reset_map_origin_min_inliers = 8;           // 线段 RANSAC 内点数下限
+  int reset_map_origin_min_observations = 5;      // 线段观测次数下限
+  int reset_map_origin_max_candidate_lines = 20;  // 按长度取前 N 条候选
+  double reset_map_origin_orthogonality_tolerance_deg = 10.0;  // 正交容差（度）
+  // 次方向支撑量 / 主方向支撑量 的最小比值（低于则视为无正交结构，不重置）
+  double reset_map_origin_min_secondary_support_ratio = 0.3;
 };
 
 MappingNodeOptions CreateMappingNodeOptions(

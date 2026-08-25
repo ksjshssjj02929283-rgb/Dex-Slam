@@ -35,6 +35,7 @@
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "cartographer/sensor/internal/collator.h"
 #include "cartographer/sensor/internal/trajectory_collator.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -312,6 +313,87 @@ void MapBuilder::ApplyOriginTransform(const transform::Rigid3d& T_old_to_new) {
                  "global_static_submap (stale in old frame)";
     global_static_submap_.reset();
   }
+}
+
+absl::optional<double> MapBuilder::EstimateStructureAlignmentYaw(
+    const StructureAlignmentOptions& options) {
+  // 聚合位姿图所有节点的线特征到全局 LineMap2DList。
+  // 流程与 GenerateGlobalStaticSubmap 的线特征处理（步骤 7c）完全一致：
+  //   节点 local 系线段 --(TrackLineFromMap 关联)--> 全局化 --(PushBack/
+  //   UpdateLineMap 跟踪拟合)--> 最终 LineDataCulling 剔除低质量线段。
+  // 区别：不构建栅格/点云（角度估计只需要线段），因此成本低得多，
+  // 可以在 SerializeState 之前调用。
+  const MapById<NodeId, TrajectoryNode> nodes = pose_graph_->GetTrajectoryNodes();
+  if (nodes.empty()) {
+    LOG(WARNING) << "EstimateStructureAlignmentYaw: no trajectory nodes";
+    return absl::nullopt;
+  }
+
+  CHECK(!all_trajectory_builder_options_.empty())
+      << "No trajectory options available for structure alignment.";
+  const auto& first_trajectory_options = all_trajectory_builder_options_[0];
+  const auto& trajectory_builder_2d_options =
+      first_trajectory_options.trajectory_builder_options()
+          .trajectory_builder_2d_options();
+  const auto& submaps_options = trajectory_builder_2d_options.submaps_options();
+  const auto& line_matcher_options =
+      trajectory_builder_2d_options.line_matcher_options();
+
+  // latest_local_id 从 0 开始，与 Submap2D 的构造方式一致
+  LineMap2DList global_line_map(0, std::map<int, MapLine2D>{});
+  global_line_map.SetCullingParam(submaps_options.min_line_length(),
+                                  submaps_options.max_line_length(),
+                                  submaps_options.line_culling_obs());
+  scan_matching::LineMatcher2D line_matcher(line_matcher_options);
+
+  int nodes_with_lines = 0;
+  for (const auto& node : nodes) {
+    const auto& lines = node.data.constant_data->lines;
+    if (lines.empty()) {
+      continue;
+    }
+    ++nodes_with_lines;
+
+    const transform::Rigid2d global_pose_2d =
+        transform::Project2D(node.data.global_pose);
+    std::map<int, std::vector<sensor::LineData>> tracked_line_data;
+    line_matcher.TrackLineFromMap(global_pose_2d, lines, global_line_map,
+                                  tracked_line_data);
+
+    std::map<int, std::vector<sensor::LineData>> global_tracked_lines;
+    for (const auto& tracked_element : tracked_line_data) {
+      for (const auto& line : tracked_element.second) {
+        global_tracked_lines[tracked_element.first].push_back(
+            sensor::TransformLineData(global_pose_2d, line));
+      }
+    }
+    if (global_tracked_lines.empty()) {
+      continue;
+    }
+
+    // 等价于 Submap2D::InsertLineData（此处不做周期性 culling，
+    // 聚合完成后统一 culling 一次；lose_time 仅在线实时跟踪使用，无需维护）
+    for (const auto& tracked_element : global_tracked_lines) {
+      if (tracked_element.first < 0) {
+        global_line_map.PushBack(tracked_element.second);
+      } else {
+        global_line_map.UpdateLineMap(tracked_element.first,
+                                      tracked_element.second);
+      }
+    }
+  }
+
+  global_line_map.LineDataCulling();
+  LOG(INFO) << "EstimateStructureAlignmentYaw: " << nodes.size()
+            << " nodes (" << nodes_with_lines
+            << " with lines), global lines after culling: "
+            << global_line_map.size();
+
+  if (global_line_map.size() == 0) {
+    LOG(WARNING) << "EstimateStructureAlignmentYaw: global line map is empty";
+    return absl::nullopt;
+  }
+  return EstimateAlignmentYaw(global_line_map, options);
 }
 
 std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resolution) {
