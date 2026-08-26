@@ -456,8 +456,6 @@ private:
     // 从全局线特征估计对齐角度
     cartographer::mapping::StructureAlignmentOptions align_options;
     align_options.min_line_length = node_options_->reset_map_origin_min_line_length;
-    align_options.min_inliers = node_options_->reset_map_origin_min_inliers;
-    align_options.min_observations = node_options_->reset_map_origin_min_observations;
     align_options.max_candidate_lines = node_options_->reset_map_origin_max_candidate_lines;
     align_options.orthogonality_tolerance_deg =
         node_options_->reset_map_origin_orthogonality_tolerance_deg;

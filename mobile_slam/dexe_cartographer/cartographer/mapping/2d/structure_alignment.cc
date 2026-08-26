@@ -53,27 +53,19 @@ struct Candidate {
 absl::optional<double> EstimateAlignmentYaw(
     const LineMap2DList& line_map,
     const StructureAlignmentOptions& options) {
-  // ── 1. 候选筛选：长度 / RANSAC 内点 / 观测数 三道硬门槛 ──────────────
+  // ── 1. 候选筛选：结构长度门槛 ────────────────────────────────────────
+  // （观测次数 / RANSAC 内点等基础质量剔除已由上游 LineDataCulling 完成）
   std::vector<Candidate> candidates;
-  const auto& observations = line_map.GetObservations();
   for (const auto& kv : line_map.GetLineMapData2DList()) {
     const MapLine2D& map_line = kv.second;
     const sensor::LineData& line = map_line.line_data();
     if (line.length() < options.min_line_length) continue;
-    if (map_line.inliers() < options.min_inliers) continue;
-    const auto obs_it = observations.find(kv.first);
-    if (obs_it == observations.end() ||
-        obs_it->second < static_cast<size_t>(options.min_observations)) {
-      continue;
-    }
     candidates.push_back({line.length(), NormalizeDirection(line.angle())});
   }
   LOG(INFO) << "EstimateAlignmentYaw: " << candidates.size() << " of "
             << line_map.size()
-            << " global lines passed quality gates (min_length="
-            << options.min_line_length << " m, min_inliers="
-            << options.min_inliers << ", min_observations="
-            << options.min_observations << ")";
+            << " global lines passed structure length gate (min_length="
+            << options.min_line_length << " m)";
   // 正交结构至少需要两条方向不同的线段
   if (candidates.size() < 2) {
     LOG(INFO) << "EstimateAlignmentYaw: not enough candidates, giving up.";

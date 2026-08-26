@@ -96,14 +96,6 @@ MappingNodeOptions CreateMappingNodeOptions(
     options.reset_map_origin_min_line_length =
         lua_parameter_dictionary->GetDouble("reset_map_origin_min_line_length");
   }
-  if (lua_parameter_dictionary->HasKey("reset_map_origin_min_inliers")) {
-    options.reset_map_origin_min_inliers =
-        lua_parameter_dictionary->GetInt("reset_map_origin_min_inliers");
-  }
-  if (lua_parameter_dictionary->HasKey("reset_map_origin_min_observations")) {
-    options.reset_map_origin_min_observations =
-        lua_parameter_dictionary->GetInt("reset_map_origin_min_observations");
-  }
   if (lua_parameter_dictionary->HasKey("reset_map_origin_max_candidate_lines")) {
     options.reset_map_origin_max_candidate_lines =
         lua_parameter_dictionary->GetInt("reset_map_origin_max_candidate_lines");

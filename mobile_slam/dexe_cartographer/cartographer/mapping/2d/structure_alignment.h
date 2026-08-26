@@ -24,13 +24,11 @@ namespace mapping {
 // 保存地图前，从全局线特征地图估计「地图原点对齐结构化环境」的重置角度。
 // 参数含义见各字段注释；由上层（ROS 节点配置）填充。
 struct StructureAlignmentOptions {
-  // 结构线段最小长度（米）：短于此值的线段不参与角度估计（墙通常较长）
-  double min_line_length = 1.5;
-  // 线段 RANSAC 内点数下限（拟合质量的硬门槛）
-  int min_inliers = 8;
-  // 线段被观测次数下限（稳定性的硬门槛）
-  int min_observations = 5;
-  // 通过硬门槛的线段中，按长度降序取前 N 条作为候选
+  // 结构线段最小长度（米）：短于此值的线段不参与角度估计（墙通常较长）。
+  // 注意：进入估计前，线段已通过 LineDataCulling（长度范围 / 观测次数 /
+  // RANSAC 内点）完成基础质量剔除，此处仅做面向结构方向的进一步筛选。
+  double min_line_length = 0.3;
+  // 通过长度门槛的线段中，按长度降序取前 N 条作为候选
   // （防止某方向上大量中等长度线段在投票时压过真正的长墙）
   int max_candidate_lines = 20;
   // 角度直方图分箱宽度（度）
@@ -39,7 +37,7 @@ struct StructureAlignmentOptions {
   double orthogonality_tolerance_deg = 10.0;
   // 次方向支撑量 / 主方向支撑量 的最小比值；
   // 低于该比值认为不存在可靠的正交结构，放弃角度重置
-  double min_secondary_support_ratio = 0.3;
+  double min_secondary_support_ratio = 0.1;
 };
 
 // 从全局线特征地图 'line_map'（应为聚合 + culling 后的 LineMap2DList）估计
