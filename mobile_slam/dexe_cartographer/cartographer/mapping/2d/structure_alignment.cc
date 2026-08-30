@@ -66,7 +66,7 @@ double WrapToHalfPi(double x) {
 // 加权均值为中心重新定位，直到 min_half_window —— 渐缩式收窄能在存在不对称
 // 尾部（漂移墙、斜向家具线）时收敛到真实主峰而不是被尾部拖走；
 // 一步跳到窄窗则有丢失真实主峰的风险。
-// 空窗时保持当前中心。*support_out = 最终窗口内候选长度之和（融合作用权重）。
+// 空窗时保持当前中心。*support_out = 最终窗口内候选长度之和（支撑量）。
 double RefineDirection(const std::vector<Candidate>& candidates,
                        double seed_angle, double first_half_window,
                        double min_half_window, double* support_out) {
@@ -124,7 +124,10 @@ absl::optional<double> EstimateAlignmentYaw(
     candidates.resize(options.max_candidate_lines);
   }
 
-  // ── 3. 加权角度直方图（权重 = 线段长度），方向归一化到 [0, π) ──────
+  // ── 3. 加权角度直方图（权重 = 线段长度），仅用于粗找峰 ──────────────
+  //    方向值由第 4/5 段用线段自身角度精化给出，直方图不承担估值职责，
+  //    故无需平滑：即使密集簇被分箱边界拆散，峰值 bin 与真实模的偏差
+  //    也 ≤ 1 个 bin（1°），远小于首遍精化窗口 ±tol。
   const int num_bins = std::max(
       1, static_cast<int>(
              std::round(M_PI / (options.histogram_bin_deg * kDegToRad))));
@@ -135,45 +138,27 @@ absl::optional<double> EstimateAlignmentYaw(
     hist[bin] += c.length;
   }
 
-  // 循环平滑（核 [1 2 3 2 1]/9），避免能量被相邻分箱拆散
-  std::vector<double> smooth(num_bins, 0.0);
-  for (int i = 0; i < num_bins; ++i) {
-    smooth[i] = (hist[WrapIndex(i - 2, num_bins)] +
-                 2.0 * hist[WrapIndex(i - 1, num_bins)] + 3.0 * hist[i] +
-                 2.0 * hist[WrapIndex(i + 1, num_bins)] +
-                 hist[WrapIndex(i + 2, num_bins)]) /
-                9.0;
-  }
-
   const double bin_width = M_PI / num_bins;
   const double tol = options.orthogonality_tolerance_deg * kDegToRad;
   const int tol_bins = std::max(1, static_cast<int>(std::ceil(tol / bin_width)));
-  // 某峰 ±tol 窗口内的支撑量（平滑后权重之和）
-  auto window_support = [&smooth, num_bins, tol_bins](int center) {
-    double s = 0.0;
-    for (int d = -tol_bins; d <= tol_bins; ++d) {
-      s += smooth[WrapIndex(center + d, num_bins)];
-    }
-    return s;
-  };
 
   // ── 4. 主方向：直方图峰值 → 候选线段角度迭代精化 ────────────────────
-  //    精化用线段自身角度（无分箱量化），收窄窗口以剔除不对称尾部。
-  //    support1（平滑直方图窗口支撑量）仅用于下方的次方向支撑比门槛。
+  //    精化用线段自身角度（无分箱量化），收窄窗口以剔除不对称尾部；
+  //    w1 = 精化窗口内线段长度之和，即主方向支撑量（第 6 段融合与
+  //    次方向支撑比门槛共用）。
   const int peak1 = static_cast<int>(
-      std::max_element(smooth.begin(), smooth.end()) - smooth.begin());
-  if (smooth[peak1] <= 0.0) {
+      std::max_element(hist.begin(), hist.end()) - hist.begin());
+  if (hist[peak1] <= 0.0) {
     LOG(INFO) << "EstimateAlignmentYaw: empty histogram, giving up.";
     return absl::nullopt;
   }
-  const double support1 = window_support(peak1);
 
   double w1 = 0.0;
   const double theta1 = RefineDirection(candidates, (peak1 + 0.5) * bin_width,
                                         tol, kRefineHalfWindowRad, &w1);
 
   // ── 5. 次方向：屏蔽主方向窗口后的次峰，须接近主方向 +90° ────────────
-  std::vector<double> masked = smooth;
+  std::vector<double> masked = hist;
   for (int d = -tol_bins; d <= tol_bins; ++d) {
     masked[WrapIndex(peak1 + d, num_bins)] = 0.0;
   }
@@ -193,10 +178,10 @@ absl::optional<double> EstimateAlignmentYaw(
               << theta1 / kDegToRad << " deg). Giving up.";
     return absl::nullopt;
   }
-  const double support2 = window_support(peak2);
-  if (support2 < options.min_secondary_support_ratio * support1) {
+  // 支撑比门槛直接用精化窗口内累计长度 w2/w1
+  if (w2 < options.min_secondary_support_ratio * w1) {
     LOG(INFO) << "EstimateAlignmentYaw: secondary support too weak ("
-              << support2 << " vs primary " << support1 << ", required ratio "
+              << w2 << " vs primary " << w1 << ", required ratio "
               << options.min_secondary_support_ratio << "). Giving up.";
     return absl::nullopt;
   }
@@ -224,10 +209,9 @@ absl::optional<double> EstimateAlignmentYaw(
       std::sqrt((w1 * res1 * res1 + w2 * res2 * res2) / w_sum);
 
   LOG(INFO) << "EstimateAlignmentYaw: primary direction "
-            << theta1 / kDegToRad << " deg (hist support " << support1
-            << ", refine support " << w1 << "), secondary direction "
-            << theta2 / kDegToRad << " deg (hist support " << support2
-            << ", refine support " << w2 << "), orthogonality error "
+            << theta1 / kDegToRad << " deg (support " << w1
+            << "), secondary direction " << theta2 / kDegToRad
+            << " deg (support " << w2 << "), orthogonality error "
             << delta / kDegToRad << " deg, weighted RMS axis residual "
             << rms_residual / kDegToRad << " deg -> new_yaw " << new_yaw
             << " rad (" << new_yaw / kDegToRad << " deg)";
