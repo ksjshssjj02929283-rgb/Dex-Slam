@@ -16,7 +16,9 @@
 
 #include "cartographer/mapping/2d/line_map_2d.h"
 
+#include <cmath>
 #include <map>
+#include <random>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -35,7 +37,7 @@ MapLine2D MakeQualifiedLine(int local_id) {
 }
 
 // 模拟「从 pbstream 反序列化 / static→dynamic 深拷贝」的入口：
-// 只带线段数据，不带 observations_（该字段既不持久化也不随深拷贝传递）。
+// 只带线段数据，不带 observations_（该字段既不持久化也不随深拷贝传
 LineMap2DList MakePersistedList(int line_count) {
   std::map<int, MapLine2D> active_line_data;
   for (int i = 0; i < line_count; ++i) {
@@ -127,6 +129,98 @@ TEST(LineMap2DListTest, CullingStillRemovesPersistedLinesFailingOtherCriteria) {
 
   EXPECT_EQ(line_map.size(), 1u) << "长度/内点不合格的加载线段仍应被剔除";
   EXPECT_EQ(line_map.GetLineMapData2DList().count(0), 1u);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 直线拟合（LineFittingRANSAC / OrthogonalRegression）
+// ─────────────────────────────────────────────────────────────────────
+
+// 沿方向 'phi' 生成散布在 [−2.5, 2.5] 的点，叠加垂直于直线的高斯噪声
+void MakeNoisyLinePoints(double phi, double noise_sigma, int num_points,
+                         uint32_t seed, std::vector<double>* xs,
+                         std::vector<double>* ys) {
+  std::mt19937 rng(seed);
+  std::normal_distribution<double> noise(0.0, noise_sigma);
+  const Eigen::Vector2d dir(std::cos(phi), std::sin(phi));
+  const Eigen::Vector2d normal(-std::sin(phi), std::cos(phi));
+  for (int i = 0; i < num_points; ++i) {
+    const double t = -2.5 + 5.0 * i / (num_points - 1);
+    const Eigen::Vector2d p = t * dir + noise(rng) * normal;
+    xs->push_back(p.x());
+    ys->push_back(p.y());
+  }
+}
+
+// 近竖直直线：正交回归应无偏（OLS 会把斜率衰减向 0，此类场景误差 1°+）。
+// 直接测 OrthogonalRegression：给定输入完全确定。
+TEST(OrthogonalRegressionTest, NearVerticalIsUnbiased) {
+  std::vector<double> xs, ys;
+  MakeNoisyLinePoints(89.9 * M_PI / 180.0, /*noise_sigma=*/0.01,
+                      /*num_points=*/60, /*seed=*/7, &xs, &ys);
+  double a, b;
+  OrthogonalRegression(xs, ys, a, b);
+  EXPECT_NEAR(std::atan(a) * 180.0 / M_PI, 89.9, 0.05);
+}
+
+// 浅角度与 45° 直线同样保持高精度
+TEST(OrthogonalRegressionTest, AccurateAtShallowAnd45Degrees) {
+  for (const double phi_deg : {0.5, 45.0}) {
+    std::vector<double> xs, ys;
+    MakeNoisyLinePoints(phi_deg * M_PI / 180.0, /*noise_sigma=*/0.01,
+                        /*num_points=*/60, /*seed=*/13, &xs, &ys);
+    double a, b;
+    OrthogonalRegression(xs, ys, a, b);
+    EXPECT_NEAR(std::atan(a) * 180.0 / M_PI, phi_deg, 0.05)
+        << "phi = " << phi_deg;
+  }
+}
+
+// 完全竖直（无噪声，Sxy 恒为 0）应走垂直约定：|a| > 1e6 且 −b/a 还原 x̄，
+// 与 ProjectPointToLine 垂直分支（x = −b/k）自洽。
+// 注意：带噪声时 Sxy 随机波动，斜率是很大但有限的值（无偏，见上一用例），
+// 不会进入该分支——这是预期行为。
+TEST(OrthogonalRegressionTest, ExactlyVerticalUsesVerticalConvention) {
+  std::vector<double> xs, ys;
+  for (int i = 0; i < 60; ++i) {
+    xs.push_back(2.0);
+    ys.push_back(5.0 * i / 59.0);
+  }
+  double a, b;
+  OrthogonalRegression(xs, ys, a, b);
+  EXPECT_GT(std::abs(a), 1e6);
+  EXPECT_NEAR(-b / a, 2.0, 1e-3);
+}
+
+// RANSAC 全流程（假设采样 + 内点筛选 + 正交精化）在近竖直场景下仍无偏。
+// 噪声取 σ=0.002m：即使随机抽到相邻点对使假设线偏斜数度，
+// 0.1m 内点带仍覆盖足够长的点列，精化结果稳定在 0.1° 内。
+TEST(LineFittingRANSACTest, NearVerticalPipelineIsUnbiased) {
+  std::vector<double> xs, ys;
+  MakeNoisyLinePoints(89.9 * M_PI / 180.0, /*noise_sigma=*/0.002,
+                      /*num_points=*/60, /*seed=*/7, &xs, &ys);
+  double k, b, r;
+  LineFittingRANSAC(xs, ys, &k, &b, &r);
+  EXPECT_NEAR(std::atan(k) * 180.0 / M_PI, 89.9, 0.1);
+}
+
+// 全流程：MapLine2D 多次 UpdateLineData 后，近竖直墙的角度应保持 ≈ π/2
+// （此前 OLS 精化会把近竖直墙角度拉向水平方向）。
+// 100 次观测使沿墙散布足够长，TLS 角度波动（∝ σ·L/√N / L²）远小于 0.1°。
+TEST(MapLine2DTest, UpdateLineDataNearVerticalWallKeepsAngle) {
+  std::mt19937 rng(11);
+  std::normal_distribution<double> noise(0.0, 0.01);
+  // 种子线段：竖直墙 x = 1.0 上的一小段
+  MapLine2D line(0, sensor::LineData(Eigen::Vector2d(1.0, 0.0),
+                                     Eigen::Vector2d(1.0, 0.5)));
+  // 100 次观测：沿墙不同位置的 0.5m 线段，端点带垂直噪声
+  for (int i = 0; i < 100; ++i) {
+    const double y0 = 0.1 * i;
+    line.UpdateLineData(
+        sensor::LineData(Eigen::Vector2d(1.0 + noise(rng), y0),
+                         Eigen::Vector2d(1.0 + noise(rng), y0 + 0.5)));
+  }
+  EXPECT_NEAR(std::abs(line.line_data().angle()), M_PI_2,
+              0.1 * M_PI / 180.0);
 }
 
 }  // namespace
