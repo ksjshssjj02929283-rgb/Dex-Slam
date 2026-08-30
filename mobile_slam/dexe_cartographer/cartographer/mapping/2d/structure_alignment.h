@@ -23,6 +23,8 @@ namespace mapping {
 
 // 保存地图前，从全局线特征地图估计「地图原点对齐结构化环境」的重置角度。
 // 参数含义见各字段注释；由上层（ROS 节点配置）填充。
+// 注意：histogram_bin_deg 有意不暴露到上层配置 —— 直方图只用于找峰/支撑量，
+// 方向精化直接使用线段自身角度，分箱宽度不再是精度瓶颈。
 struct StructureAlignmentOptions {
   // 结构线段最小长度（米）：短于此值的线段不参与角度估计（墙通常较长）。
   // 注意：进入估计前，线段已通过 LineDataCulling（长度范围 / 观测次数 /
@@ -44,9 +46,11 @@ struct StructureAlignmentOptions {
 // 对齐结构化环境的新原点朝向。
 //
 // 成功时返回 new_yaw：新原点在旧地图坐标系下的朝向（弧度），满足
-//   new_yaw ≡ θ_dominant (mod π/2) 且 |new_yaw| ≤ π/4
-// （θ_dominant 为主结构方向；对主方向旋转对齐后，与之正交的次方向
-//  自然对齐到另一坐标轴）。找不到可靠的正交结构方向时返回 nullopt。
+//   new_yaw ≡ r (mod π/2) 且 |new_yaw| ≤ π/4。
+// r 是主/次两个正交结构方向的支撑加权最小二乘折中：两方向先各自用候选
+// 线段角度迭代精化（收窄窗口剔除不对称尾部），再按各自支撑量加权融合，
+// 使两族墙平分非严格正交带来的残余角（见 .cc 第 6 段）。
+// 找不到可靠的正交结构方向时返回 nullopt。
 absl::optional<double> EstimateAlignmentYaw(
     const LineMap2DList& line_map, const StructureAlignmentOptions& options);
 
