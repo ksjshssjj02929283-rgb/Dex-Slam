@@ -12,9 +12,21 @@
  *     [--transform_mode auto|manual]
  *
  * 变换获取方式（--transform_mode）：
- *   auto（默认）：复用与 merge 相同的全局重定位（在 tgt 的 global_static_submap
- *     上对 src 节点做 FCSM + Ceres），自动求出
- * T_src_in_tgt。要求两图有重叠区域。 manual：由人工给定 src 原点在 tgt
+ *   auto（默认）：三阶段匹配管线自动求
+ * T_src_in_tgt，要求两图有重叠区域：
+ *     1) 从 src 轨迹筛选关键帧（间距 --keyframe_distance /
+ * --keyframe_angle，至少 11 帧，不足自动收紧阈值兜底）；
+ *     2) BatchFCSM（加速分支定界）对最远点采样的 --initial_frames 帧做全局
+ *        匹配 + Ceres 精化，鲁棒聚合（中位数 + 一致性剔除）得初始 delta_T；
+ *     3) 按时间序每轮加 --frame_batch 帧，用当前 delta_T 预测位姿做局部
+ *        匹配 + Ceres 精化，重新聚合，直到 delta_T 变化小于
+ *        --converge_xy / --converge_yaw（或达到帧数/迭代/时间预算上限）。
+ *     outlier 四层拒绝：匹配分数门（--min_score / --local_min_score）；
+ *     Ceres 收敛性 + 位姿打分宽松下限（--refine_min_score，绝对分数尺度随
+ *     地图对变化，仅作健全性门）；L3 聚合一致性剔除 + 相对分数剔除
+ *     （--score_relative_margin，防别名帧，尺度自适应）；
+ *     内点数护栏（--min_success_frames）。失败时打印观测分数分布与调参建议。
+ *   manual：由人工给定 src 原点在 tgt
  * 坐标系中的位姿 （--src_in_tgt_x / _y / _yaw）。默认 0/0/0 即单位阵，
  *     适配"两图从同一物理起点建图且已做结构化对齐"的场景。
  *
@@ -63,9 +75,35 @@ DEFINE_string(
 DEFINE_double(src_in_tgt_x, 0.0, "[manual] src 原点在 tgt 坐标系中的 X（米）");
 DEFINE_double(src_in_tgt_y, 0.0, "[manual] src 原点在 tgt 坐标系中的 Y（米）");
 DEFINE_double(src_in_tgt_yaw, 0.0, "[manual] src 相对 tgt 的旋转角（弧度）");
-DEFINE_double(min_score, 0.45, "[auto] scan match 最低接受分数（0~1）");
-DEFINE_int32(min_votes, 10,
-             "[auto] 连续 scan match 成功帧数达到 N 后触发 Ceres 精配准取均值");
+DEFINE_double(min_score, 0.45, "[auto] 全局 BBS 匹配最低接受分数（0~1）");
+DEFINE_int32(initial_frames, 10, "[auto] 全局初对齐使用的帧数");
+DEFINE_int32(min_success_frames, 5,
+             "[auto] 成功匹配帧数低于该值则判定失败");
+DEFINE_int32(frame_batch, 5, "[auto] 增量迭代每轮加入的帧数");
+DEFINE_int32(max_frames, 100, "[auto] 全程参与匹配的最大帧数");
+DEFINE_int32(max_iterations, 20, "[auto] 增量迭代最大轮数");
+DEFINE_double(converge_xy, 0.01,
+              "[auto] delta_T 收敛阈值：平移变化（米）");
+DEFINE_double(converge_yaw, 0.005,
+              "[auto] delta_T 收敛阈值：旋转变化（弧度）");
+DEFINE_double(local_min_score, 0.30,
+              "[auto] 局部匹配最低接受分数（0~1；跨会话分数普遍偏低）");
+DEFINE_double(refine_min_score, 0.35,
+              "[auto] L2 宽松健全性下限（平均占据概率；绝对尺度随地图对变化，"
+              "离群主要交给 L3 一致性/相对分数剔除）");
+DEFINE_double(score_relative_margin, 0.25,
+              "[auto] L3 相对分数剔除裕量：refine_score 低于（T-内点最高分-该值）"
+              "的帧被剔除；<=0 关闭");
+DEFINE_double(outlier_translation, 0.5,
+              "[auto] 单帧变换偏离中位数上限（米），超出即剔除（outlier L3）");
+DEFINE_double(outlier_yaw, 0.1,
+              "[auto] 单帧变换偏航偏离中位数上限（弧度），超出即剔除（outlier L3）");
+DEFINE_double(keyframe_distance, 2.0, "[auto] 关键帧筛选间距：平移（米）");
+DEFINE_double(keyframe_angle, 0.35, "[auto] 关键帧筛选间距：旋转（弧度）");
+DEFINE_double(match_budget_seconds, 25.0,
+              "[auto] 匹配阶段墙钟预算（秒），保证整体 30s 内完成");
+DEFINE_bool(bbs_angular_branching, true,
+            "[auto] BatchFCSM 角度金字塔分支（关闭则回退保守的 V1 行为）");
 DEFINE_double(resolution, 0.0,
               "输出地图分辨率（米/格）。<=0 表示自动：继承 src 地图的分辨率");
 DEFINE_double(
@@ -175,15 +213,38 @@ void Run(const std::string& dir_tgt, const std::string& dir_src,
     map_ops::MapData tgt_data = map_ops::LoadMap(pbstream_tgt,
                                                  /*build_slices=*/false);
 
-    const auto src_clouds = map_ops::ExtractNodeClouds(src_data);
+    map_ops::KeyframeSelectionOptions sel_options;
+    sel_options.max_distance_meters = FLAGS_keyframe_distance;
+    sel_options.max_angle_radians = FLAGS_keyframe_angle;
+    const auto keyframes = map_ops::SelectKeyframes(src_data, sel_options);
+    const auto src_clouds = map_ops::ExtractNodeClouds(src_data, keyframes);
     CHECK(!src_clouds.empty()) << "source map has no node point clouds";
 
-    auto [ok, T] = map_ops::FindTransformBinA(tgt_data, src_clouds,
-                                              FLAGS_min_score, FLAGS_min_votes);
-    CHECK(ok) << "Failed to locate source map in target map. "
-                 "Try lowering --min_score, ensuring the maps overlap, or "
-                 "use --transform_mode=manual with a known transform.";
-    T_src_in_tgt = T;
+    map_ops::FindTransformOptions align_options;
+    align_options.min_score = FLAGS_min_score;
+    align_options.initial_frames = FLAGS_initial_frames;
+    align_options.min_success_frames = FLAGS_min_success_frames;
+    align_options.frames_per_step = FLAGS_frame_batch;
+    align_options.max_iterations = FLAGS_max_iterations;
+    align_options.max_frames = FLAGS_max_frames;
+    align_options.local_min_score = FLAGS_local_min_score;
+    align_options.converge_translation = FLAGS_converge_xy;
+    align_options.converge_yaw = FLAGS_converge_yaw;
+    align_options.refine_min_score = FLAGS_refine_min_score;
+    align_options.outlier_translation = FLAGS_outlier_translation;
+    align_options.outlier_yaw = FLAGS_outlier_yaw;
+    align_options.score_relative_margin = FLAGS_score_relative_margin;
+    align_options.budget_seconds = FLAGS_match_budget_seconds;
+    align_options.bbs_angular_branching = FLAGS_bbs_angular_branching;
+
+    const auto result =
+        map_ops::FindTransformBinA(tgt_data, src_clouds, align_options);
+    CHECK(result.success)
+        << "Failed to locate source map in target map ("
+        << result.stop_reason << "). Try lowering --min_score / "
+           "--refine_min_score, ensuring the maps overlap, or use "
+           "--transform_mode=manual with a known transform.";
+    T_src_in_tgt = result.T_src_in_tgt;
   } else {  // manual
     const Eigen::Quaterniond rotation(
         Eigen::AngleAxisd(FLAGS_src_in_tgt_yaw, Eigen::Vector3d::UnitZ()));

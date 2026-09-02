@@ -21,6 +21,7 @@
 #ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_TOOLS_MAP_OPS_MAP_OPS_H_
 #define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_TOOLS_MAP_OPS_MAP_OPS_H_
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <utility>
@@ -71,29 +72,101 @@ struct MapData {
 struct NodeCloudEntry {
   int trajectory_id;
   int node_index;
+  int64_t timestamp = 0;                             // common::ToUniversal 刻度
   ::cartographer::transform::Rigid3d global_pose_b;  // 在源地图坐标系下
   ::cartographer::sensor::PointCloud point_cloud;    // gravity-aligned 点云
   std::vector<::cartographer::sensor::LineData> line_data_list;
 };
 
 // ──────────────────────────────────────────────────
-// 加载 / 提取 / 匹配
+// 加载 / 提取 / 筛选 / 匹配
 // ──────────────────────────────────────────────────
 
 // 加载一张地图的 pbstream。
 // build_slices=false 时跳过 submap 切片构建（不做渲染拼接时更省 CPU/内存）。
 MapData LoadMap(const std::string& pbstream_file, bool build_slices = true);
 
-// 从地图节点中提取用于匹配的点云 / 线特征。
+// 从地图节点中提取用于匹配的点云 / 线特征（全部节点，按记录序）。
 std::vector<NodeCloudEntry> ExtractNodeClouds(const MapData& data);
 
-// 在目标地图 `data_a` 上对源地图节点 `node_clouds_b` 做全局重定位，
-// 成功时返回 {true, T_src_in_tgt}（源地图原点 → 目标地图坐标系）。
-// 与 merge_maps_main.cc 的 FindTransformBinA 相同。
-std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
+// 按给定 (trajectory_id, node_index) 集合提取，结果按节点时间戳稳定排序。
+std::vector<NodeCloudEntry> ExtractNodeClouds(
+    const MapData& data,
+    const std::vector<std::pair<int, int>>& selected);
+
+// 关键帧筛选参数（对轨迹按距离/角度抽稀，只用 pose_graph 的位姿与时间戳，
+// 不解压点云）。
+struct KeyframeSelectionOptions {
+  double max_distance_meters = 2.0;
+  double max_angle_radians = 0.35;
+  int min_frames = 11;    // 文档要求 >10 帧；不足时自动收紧阈值兜底
+  int max_selected = 200; // 候选池上限，超出按时间等间隔抽稀
+};
+
+// 从源地图轨迹中筛选用于匹配的关键帧，返回 (trajectory_id, node_index)，
+// 按节点时间戳稳定排序。实现：每条轨迹各用一个纯距离/角度 MotionFilter
+// （max_time_seconds=1e9）；只保留带点云的节点；不足 min_frames 时阈值减半
+// 重试（下限 0.25m），仍不足则取全部带点云节点。
+std::vector<std::pair<int, int>> SelectKeyframes(
+    const MapData& data, const KeyframeSelectionOptions& opts);
+
+// 变换求解参数（三阶段管线：全局 BBS 初对齐 → 增量加帧迭代 → 收敛）。
+struct FindTransformOptions {
+  // Stage B：全局初对齐
+  double min_score = 0.45;    // 全局 BBS 接受分数
+  int initial_frames = 10;    // 初始对齐帧数 K
+  int min_success_frames = 5; // 成功帧数低于此值 → 失败
+  // Stage C：增量迭代
+  int frames_per_step = 5;
+  int max_iterations = 20;
+  int max_frames = 100;         // 全程匹配帧数上限
+  double local_min_score = 0.30;  // 局部匹配接受门（预测窗口已强约束；跨会话分数普遍偏低）
+  double local_linear_window = 3.0;   // m
+  double local_angular_window = 0.3;  // rad
+  // 收敛判定（文档：位移/旋转 <1e-3 或合理值；0.05m 分辨率下默认放宽）
+  double converge_translation = 0.01;  // m
+  double converge_yaw = 0.005;         // rad
+  // outlier 拒绝（L2/L3 阈值）。注意 refine_score（平均占据概率）的绝对尺度
+  // 随地图对变化（自匹配 0.5–0.84，跨会话正确帧可低至 0.36–0.52），故 L2 只做
+  // 宽松健全性下限，离群拒绝主要交给尺度不变的 L3 一致性与相对分数剔除。
+  double refine_min_score = 0.35;    // L2 宽松健全性下限
+  double outlier_translation = 0.5;  // m，单帧 T 偏离中位数上限
+  double outlier_yaw = 0.1;          // rad
+  // L3 相对分数剔除：refine_score 低于（T-内点最高分 − 该裕量）的帧视为
+  // 别名/漂移帧剔除；<=0 关闭。跨会话整体偏低时（分数跨度小）不误伤。
+  double score_relative_margin = 0.25;
+  // 预算与 BBS 引擎
+  double budget_seconds = 25.0;
+  int bbs_num_threads = 4;
+  double bbs_timeout_ms = 2000.0;
+  bool bbs_angular_branching = true;
+};
+
+struct FindTransformResult {
+  bool success = false;
+  ::cartographer::transform::Rigid3d T_src_in_tgt =
+      ::cartographer::transform::Rigid3d::Identity();
+  int global_matched = 0;   // Stage B 成功帧数
+  int local_matched = 0;    // Stage C 成功帧数
+  int inliers = 0;          // 参与最终聚合的内点数
+  int rejected_l1 = 0;      // 匹配分数门拒绝
+  int rejected_l2 = 0;      // Ceres 未收敛 / 精化打分不足
+  int rejected_l3 = 0;      // 聚合一致性剔除
+  int iterations = 0;
+  double elapsed_seconds = 0.0;
+  bool converged = false;
+  std::string stop_reason;  // converged / max_frames / max_iterations / budget
+};
+
+// 在目标地图 `data_a` 上对源地图关键帧 `frames_b`（按时间戳排序）求
+// T_src_in_tgt。三阶段：BatchFCSM 全局初对齐（最远点采样 K 帧）→
+// 局部 FCSM + Ceres 增量加帧 → delta_T 收敛即停。
+// 四层 outlier 拒绝：L1 匹配分数门；L2 Ceres 收敛性 + 位姿打分（宽松下限）；
+// L3 中位数 + 一致性剔除 + 相对分数剔除；L4 内点数护栏。
+FindTransformResult FindTransformBinA(
     const MapData& data_a,
-    const std::vector<NodeCloudEntry>& node_clouds_b,
-    double min_score, int consecutive_needed);
+    const std::vector<NodeCloudEntry>& frames_b,
+    const FindTransformOptions& opts);
 
 // ──────────────────────────────────────────────────
 // 刚体变换辅助（作用于 proto 数据）
