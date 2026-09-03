@@ -30,12 +30,17 @@
 
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
+#include "cartographer/mapping/2d/line_map_2d.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 
 DEFINE_string(json, "", "Write machine readable check result to this path.");
 DEFINE_int32(min_cloud_points, 1,
              "Minimum point count in the global static submap cloud.");
+DEFINE_double(align_tolerance_deg, 1.0,
+              "ALIGN-01: residual rotation not exceeding this value (deg) "
+              "counts as aligned to the structural environment.");
 
 using cartographer::mapping::proto::SerializedData;
 
@@ -96,12 +101,42 @@ CullingCriteria ResolveCriteria(
                          kDefaultLineCullingObs};
 }
 
+AlignmentStats EvaluateStructureAlignment(
+    const mapping::proto::LineMap2DList& proto) {
+  // proto → 运行时 LineMap2DList 的轻量重建（submap_2d.cc FromProto 的子集）：
+  // 只重建主线段数据、不重放 line_data_list 观测历史 —— 检查的正是保存时的
+  // 角度，重放反而会触发重拟合。
+  std::map<int, mapping::MapLine2D> line_map_data;
+  for (const auto& map_line_proto : proto.line_map_data()) {
+    const auto& line_data_proto = map_line_proto.line_data();
+    const sensor::LineData line_data(
+        Eigen::Vector2d(line_data_proto.begin_x(), line_data_proto.begin_y()),
+        Eigen::Vector2d(line_data_proto.end_x(), line_data_proto.end_y()),
+        line_data_proto.weight());
+    mapping::MapLine2D map_line(mapping::MapLine2D::static_line,
+                                map_line_proto.global_id(), line_data);
+    map_line.SetLocalId(map_line_proto.local_id());
+    map_line.SetInliers(map_line_proto.inliers());
+    line_map_data.insert({map_line_proto.local_id(), std::move(map_line)});
+  }
+  const mapping::LineMap2DList line_map(proto.latest_local_id(),
+                                        std::move(line_map_data));
+
+  // 默认阈值即可：保存来的线地图已做过 culling，此处仅做结构方向估计。
+  const mapping::StructureAlignmentOptions options;
+  const auto yaw = mapping::EstimateAlignmentYaw(line_map, options);
+  if (!yaw.has_value()) return AlignmentStats{};
+  return AlignmentStats{true, std::abs(*yaw) * 180.0 / M_PI};
+}
+
 }  // namespace pbstream_check_internal
 
 namespace {
 
+using pbstream_check_internal::AlignmentStats;
 using pbstream_check_internal::CollectLineStats;
 using pbstream_check_internal::CullingCriteria;
+using pbstream_check_internal::EvaluateStructureAlignment;
 using pbstream_check_internal::kDefaultMaxLineLength;
 using pbstream_check_internal::kDefaultMinLineLength;
 using pbstream_check_internal::kMinLineInliers;
@@ -164,6 +199,7 @@ struct GlobalSubmapStats {
   bool has_pyramid = false;
   int pyramid_levels = 0;
   LineStats lines;
+  AlignmentStats alignment;
 };
 
 void WriteJson(const std::string& path, const std::string& pbstream_filename,
@@ -213,7 +249,11 @@ void WriteJson(const std::string& path, const std::string& pbstream_filename,
   out << "    \"lines\": {\"field_present\": " << gs.has_line_field
       << ", \"count\": " << gs.lines.count
       << ", \"survive_pbstream_criteria\": " << gs.lines.survive_pbstream
-      << ", \"survive_dynamic_defaults\": " << gs.lines.survive_defaults << "}\n";
+      << ", \"survive_dynamic_defaults\": " << gs.lines.survive_defaults << "},\n";
+  out << std::boolalpha
+      << "    \"alignment\": {\"evaluated\": " << gs.alignment.evaluated
+      << ", \"residual_yaw_deg\": " << gs.alignment.residual_yaw_deg
+      << ", \"tolerance_deg\": " << FLAGS_align_tolerance_deg << "}\n";
   out << "  },\n";
   out << "  \"checks\": [\n";
   for (size_t i = 0; i < checks.size(); ++i) {
@@ -312,6 +352,7 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
       if (s2d.has_line_map_2d_list()) {
         gs.has_line_field = true;
         CollectLineStats(s2d.line_map_2d_list(), criteria, &gs.lines);
+        gs.alignment = EvaluateStructureAlignment(s2d.line_map_2d_list());
       }
     }
   }
@@ -421,6 +462,31 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
       }
     }
 
+    // 结构化对齐（从线特征角度判断；未对齐只 WARN：不影响定位可用性，
+    // 只影响栅格/结构化适配）
+    if (!gs.has_line_field || gs.lines.count == 0) {
+      add(Level::kWarn, "ALIGN-01",
+          "no line features; structural alignment not evaluable");
+    } else if (!gs.alignment.evaluated) {
+      add(Level::kWarn, "ALIGN-01",
+          "lines present but no reliable orthogonal structure; structural "
+          "alignment not evaluable");
+    } else if (gs.alignment.residual_yaw_deg <= FLAGS_align_tolerance_deg) {
+      std::ostringstream os;
+      os << "map aligned to structure (residual rotation " << std::fixed
+         << std::setprecision(2) << gs.alignment.residual_yaw_deg
+         << " deg <= " << FLAGS_align_tolerance_deg << " deg)";
+      add(Level::kPass, "ALIGN-01", os.str());
+    } else {
+      std::ostringstream os;
+      os << "map NOT aligned to structure: residual rotation " << std::fixed
+         << std::setprecision(2) << gs.alignment.residual_yaw_deg
+         << " deg > " << FLAGS_align_tolerance_deg << " deg";
+      add(Level::kWarn, "ALIGN-01", os.str(),
+          "re-save with reset_map_origin_to_align_structure = true to align "
+          "the map to the structural environment");
+    }
+
     // 全局定位金字塔缓存
     if (gs.has_pyramid) {
       add(Level::kPass, "PYRAMID-01",
@@ -503,7 +569,8 @@ int pbstream_check(int argc, char* argv[]) {
   ss << "\n\n"
      << "Checks whether a pbstream satisfies the localization requirements.\n\n"
      << "Usage: " << argv[0] << " " << argv[1]
-     << " <pbstream_filename> [--json=<path>] [--min_cloud_points=N]\n\n"
+     << " <pbstream_filename> [--json=<path>] [--min_cloud_points=N]\n"
+     << "       [--align_tolerance_deg=D]\n\n"
      << "Exit code: 0 = ok (warnings allowed), 1 = requirements not met,\n"
      << "           2 = file missing / empty / unreadable\n";
   google::SetUsageMessage(ss.str());
