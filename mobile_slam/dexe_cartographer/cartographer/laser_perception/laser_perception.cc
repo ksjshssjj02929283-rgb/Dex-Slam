@@ -19,6 +19,8 @@
 #include <utility>
 #include <vector>
 
+#include "glog/logging.h"
+
 namespace cartographer
 {
 namespace laser_perception

@@ -420,12 +420,21 @@ void LineMap2DList::LineDataCulling()
     const double length = it.second.line_data().length();
     const int inliers = it.second.inliers();
     
-    // 检查观测次数
+    // 检查观测次数。
+    // 注意区分两种「obs 为 0」的语义：
+    //   ① 有记录且计数不足 —— 本次运行新增/更新的线段观测不够，应剔除；
+    //   ② 完全没有记录     —— 线段来自 pbstream 反序列化或 static→dynamic 深拷贝，
+    //                          observations_ 不随线段一起持久化/拷贝，因此天然为空。
+    //                          这类线段已在建图期通过 culling 门槛，不应在此重复以
+    //                          观测次数为由剔除，否则加载后首次 Finish() 会把整张
+    //                          线特征地图删空，进而导致保存时 Submap2D::ToProto()
+    //                          因 line_map_2d_list_ 为空而跳过整段，线特征永久丢失。
     auto obs_it = observations_.find(local_id);
-    const size_t obs_count = (obs_it != observations_.end()) ? obs_it->second : 0;
-    
-    // 删除条件：观测次数不足、长度超出范围、内点数量过少
-    if (obs_count < static_cast<size_t>(culling_obs_) ||
+    const bool has_obs_record = (obs_it != observations_.end());
+    const size_t obs_count = has_obs_record ? obs_it->second : 0;
+
+    // 删除条件：观测次数不足（仅对有观测记录者）、长度超出范围、内点数量过少
+    if ((has_obs_record && obs_count < static_cast<size_t>(culling_obs_)) ||
         length < min_line_length_ ||
         length > max_line_length_ ||
         inliers < 3) {  // 添加内点数量检查

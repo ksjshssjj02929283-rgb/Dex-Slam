@@ -41,6 +41,11 @@ POSE_INITIALIZER_2D = {
     point_weight = 40.,
     max_correspondence_distance = 0.2,
     local_weight_factor = 0.5;  -- 0 ~ 1
+    use_improved_line_cost = true,
+    line_distance_huber_scale = 0.1,
+    line_angle_huber_scale = math.rad(5.),
+    line_length_reference = 1.0,
+    line_overlap_gap_weight = 0.5,
     ceres_solver_options = {
       use_nonmonotonic_steps = false,
       max_num_iterations = 20,
@@ -55,4 +60,3 @@ POSE_INITIALIZER_2D = {
     max_match_distance = 12.0,
   },
 }
-

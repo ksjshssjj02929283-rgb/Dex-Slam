@@ -155,21 +155,28 @@ class PoseEstimator2D {
   sensor::RangeData FilterRangeData(
 	  const sensor::RangeData& range_data) const;
 
+  // 线特征存在两套互不相通的 id 编号，插入时必须各用各的：
+  //   tracked_lane_data        —— active_submaps_ 的局部编号，写回 active_submaps_
+  //   global_tracked_lane_data —— 全局地图编号（继承自 pbstream），写回全局动态图
+  // 把局部编号写进全局图会让观测被合并进 id 相同但物理上无关的线段。
   std::unique_ptr<InsertionResult> InsertIntoSubmap(
     const common::Time time,
     const preprocess::MergedData& merged_data,
     const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
+    const std::map<int, std::vector<sensor::LineData>>& global_tracked_lane_data,
     const transform::Rigid3d& pose_estimate,
     const Eigen::Quaterniond& gravity_alignment);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
   // observed pose, or nullptr on failure.
+  // 两个跟踪结果都要输出：局部编号供 active_submaps_ 使用，全局编号供全局动态图使用。
   std::unique_ptr<transform::Rigid2d> ScanMatch(
     const common::Time time, const transform::Rigid2d& pose_prediction,
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
-    std::map<int, std::vector<sensor::LineData>> & track_lane_data);
+    std::map<int, std::vector<sensor::LineData>> & track_lane_data,
+    std::map<int, std::vector<sensor::LineData>> & global_tracked_lane_data);
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();

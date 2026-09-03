@@ -29,6 +29,16 @@ message CeresScanMatcherOptions2D {
   double max_correspondence_distance = 7;
   double local_weight_factor = 6;
 
+  // 线特征匹配改进版开关（法向距离 + 无重叠间隙 + 无向角度）
+  bool use_improved_line_cost = 8;
+  // 分项 Huber 阈值，保持明确物理单位；<= 0 表示不鲁棒化该分量。
+  double line_distance_huber_scale = 10;  // meter
+  double line_angle_huber_scale = 11;     // radian
+  // 线长置信度 = clamp(sqrt(min(data,target)/reference), 0.5, 2.0)。
+  double line_length_reference = 12;      // meter
+  // 完全不重叠时的切向间隙权重；部分重叠不施加端点约束。
+  double line_overlap_gap_weight = 13;
+
   // Configure the Ceres solver. See the Ceres documentation for more
   // information: https://code.google.com/p/ceres-solver/
   common.proto.CeresSolverOptions ceres_solver_options = 9;

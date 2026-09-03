@@ -225,7 +225,8 @@ PoseEstimator2D::FilterRangeData(
  * @param filtered_gravity_aligned_point_cloud 重力对齐的激光点云
  * @param highlight_point_cloud 高亮点云
  * @param line_data 线数据
- * @param tracked_lane_data 跟踪的车道线数据
+ * @param tracked_lane_data 按 active_submaps_ 局部 id 跟踪的线数据（输出）
+ * @param global_tracked_lane_data 按全局地图 id 跟踪的线数据（输出）
  * @param cov 协方差矩阵
  * @return std::unique_ptr<transform::Rigid2d> 位姿估计结果
  */
@@ -234,7 +235,8 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
     const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
     const sensor::PointCloud& highlight_point_cloud,
     const std::vector<sensor::LineData> & line_data,
-    std::map<int, std::vector<sensor::LineData>> & tracked_lane_data)
+    std::map<int, std::vector<sensor::LineData>> & tracked_lane_data,
+    std::map<int, std::vector<sensor::LineData>> & global_tracked_lane_data)
 {
   // 1. 如果active_submaps_中没有submap，则直接返回pose_prediction
   //    一般情况下，第一帧激光数据进来时，active_submaps_中没有submap
@@ -291,19 +293,19 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
   transform::Rigid2d initial_ceres_pose = optimized_pose_prediction;
 
   // LOG(INFO) << "csm: " << initial_ceres_pose;
-  std::map<int, std::vector<sensor::LineData>> global_tracked_lane_data;
+  // 两次跟踪产出两套 id：前者是 active_submaps_ 的局部编号，后者是全局地图编号。
+  // 二者不可互换——匹配和写回都必须各用各的那一套。
   if (active_submaps_.submaps().size() != 0) {
     line_matcher_->TrackLineFromMap(initial_ceres_pose,
                                     line_data,
                                     *active_submaps_.line_map_2d_list(),
                                     tracked_lane_data);
-    // TODO: 这里使用的线特征是否需要会使用local dynamic map中的线特征
     line_matcher_->TrackLineFromMap(initial_ceres_pose,
                                     line_data,
                                     // *global_static_submap_->line_map_2d_list(),
                                     *local_map_updater_->GetGlobalSubmap()->line_map_2d_list(),
                                     global_tracked_lane_data);
-                                    
+
   }
 
   // 4. 使用ceres进行位姿估计，得到pose_observation
@@ -615,12 +617,14 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
 
   // ScanMatch计算当前帧位姿：对齐重力坐标系在local坐标系中的位姿
   std::map<int, std::vector<sensor::LineData>> tracked_lane_data;
+  std::map<int, std::vector<sensor::LineData>> global_tracked_lane_data;
   std::unique_ptr<transform::Rigid2d> pose_estimate_2d =
       ScanMatch(time, pose_prediction,
                 filtered_gravity_aligned_point_cloud,
                 merged_data.merged_highlight_cloud,
                 merged_data.merged_line_data,
-                tracked_lane_data);
+                tracked_lane_data,
+                global_tracked_lane_data);
   
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
@@ -783,6 +787,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
         time,
         merged_data,
         tracked_lane_data,
+        global_tracked_lane_data,
         pose_estimate,gravity_alignment.rotation());
   }
 
@@ -845,7 +850,8 @@ sensor::FeatureData PoseEstimator2D::GetFeatureData(
  * 
  * @param time 时间
  * @param merged_data 融合后的传感器数据
- * @param tracked_lane_data 跟踪的车道线数据
+ * @param tracked_lane_data 按 active_submaps_ 局部 id 跟踪的线数据
+ * @param global_tracked_lane_data 按全局地图 id 跟踪的线数据
  * @param pose_estimate 估计的位姿
  * @param gravity_alignment 重力对齐的旋转
  * @return std::unique_ptr<PoseEstimator2D::InsertionResult> 插入的结果
@@ -855,6 +861,7 @@ PoseEstimator2D::InsertIntoSubmap(
     const common::Time time,
     const preprocess::MergedData& merged_data,
     const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
+    const std::map<int, std::vector<sensor::LineData>>& global_tracked_lane_data,
     const transform::Rigid3d& pose_estimate,
     const Eigen::Quaterniond& gravity_alignment)
 {
@@ -877,13 +884,23 @@ PoseEstimator2D::InsertIntoSubmap(
                         merged_data.merged_highlight_cloud,
                         pose_estimate.cast<float>());
 
-  // 将线数据转换到local坐标系
-  std::map<int, std::vector<sensor::LineData>> tracked_lines_in_local;
-  for (const auto& data_vec: tracked_lane_data) {
-    for (const auto& line: data_vec.second) {
-      tracked_lines_in_local[data_vec.first].push_back(sensor::TransformLineData(pose_estimate_2d, line));
-    }
-  }
+  // 将线数据转换到local坐标系。两套 id 各转一份：
+  // 局部编号那份写回 active_submaps_，全局编号那份写回全局动态图。
+  auto to_local_frame =
+      [&pose_estimate_2d](const std::map<int, std::vector<sensor::LineData>>& src) {
+        std::map<int, std::vector<sensor::LineData>> dst;
+        for (const auto& data_vec : src) {
+          for (const auto& line : data_vec.second) {
+            dst[data_vec.first].push_back(
+                sensor::TransformLineData(pose_estimate_2d, line));
+          }
+        }
+        return dst;
+      };
+  const std::map<int, std::vector<sensor::LineData>> tracked_lines_in_local =
+      to_local_frame(tracked_lane_data);
+  const std::map<int, std::vector<sensor::LineData>> global_tracked_lines_in_local =
+      to_local_frame(global_tracked_lane_data);
 
   // 3. 收集所有需要插入的range data到vector中
   std::vector<sensor::RangeData> all_range_data_to_insert;
@@ -906,11 +923,12 @@ PoseEstimator2D::InsertIntoSubmap(
                                   merged_data.merged_reflector_data);
 
   // 4. 将数据插入到global_dynamic_submap_，实现全局地图的增量更新
+  //    必须用全局编号那一套，局部编号会把观测并进 id 相同但物理上无关的线段。
   if (local_map_updater_) {
     local_map_updater_->UpdateDynamicMap(all_range_data_to_insert,
                                           cloud_in_local,
                                           highlight_cloud_in_local,
-                                          tracked_lines_in_local);
+                                          global_tracked_lines_in_local);
   }
 
   // 5. 返回插入结果

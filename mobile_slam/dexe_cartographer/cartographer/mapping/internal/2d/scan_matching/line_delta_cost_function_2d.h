@@ -34,15 +34,16 @@ struct Line
   }
 };
 
-ceres::CostFunction * CreateLineDeltaCostFunction2D(
-  const double parallel_scaling_factor, const double angle_scaling_factor,
-  const sensor::LineData & line_data, const sensor::LineData & target_line);
-ceres::CostFunction * CreateLineDeltaWithAngleCostFunction2D(
-  const double parallel_scaling_factor, const double angle_scaling_factor,
-  const sensor::LineData & line_data, const sensor::LineData & target_line,
-  const transform::Rigid2d & initial_pose);
 ceres::CostFunction * CreateLineDeltaWithoutInitPoseCostFunction2D(
   const double parallel_scaling_factor, const double angle_scaling_factor,
+  const sensor::LineData & line_data, const sensor::LineData & target_line);
+
+// 改进版线特征代价 v2：
+// 有符号法向距离 + 仅无重叠时的切向间隙 + 无向角度误差。
+ceres::CostFunction * CreateImprovedLineDeltaCostFunction2D(
+  const double parallel_scaling_factor, const double angle_scaling_factor,
+  const double distance_huber_scale, const double angle_huber_scale,
+  const double line_length_reference, const double overlap_gap_weight,
   const sensor::LineData & line_data, const sensor::LineData & target_line);
 }  // namespace scan_matching
 }  // namespace mapping
