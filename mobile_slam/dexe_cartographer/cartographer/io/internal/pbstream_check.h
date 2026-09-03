@@ -81,6 +81,19 @@ CullingCriteria ResolveCriteria(
         mapping::proto::TrajectoryBuilderOptionsWithSensorIds>& all_options,
     bool* from_pbstream);
 
+struct AlignmentStats {
+  bool evaluated = false;        // 是否估计出可靠的正交结构方向
+  double residual_yaw_deg = 0.0; // 对齐结构化环境所需的残余旋转角（|new_yaw|，
+                                 // 已折叠到 [0, 45°]）；evaluated=false 时无意义
+};
+
+// 从保存的全局线地图 proto 判断地图是否对齐结构化环境：
+// 把 proto 线段轻量重建为 LineMap2DList（不重放观测历史，保持保存时角度
+// 原样），复用 mapping::EstimateAlignmentYaw 估计残余旋转角。
+// 无可靠正交结构（估计返回 nullopt）时 evaluated=false。
+AlignmentStats EvaluateStructureAlignment(
+    const mapping::proto::LineMap2DList& proto);
+
 }  // namespace pbstream_check_internal
 }  // namespace io
 }  // namespace cartographer
