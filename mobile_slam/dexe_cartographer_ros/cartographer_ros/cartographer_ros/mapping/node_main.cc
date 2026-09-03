@@ -453,6 +453,11 @@ private:
       return;
     }
 
+    // 计时：本函数的总耗时即开启对齐功能后保存阶段新增的开销
+    using Clock = std::chrono::steady_clock;
+    using Ms = std::chrono::duration<double, std::milli>;
+    const auto t_reset_start = Clock::now();
+
     // 从全局线特征估计对齐角度
     cartographer::mapping::StructureAlignmentOptions align_options;
     align_options.min_line_length = node_options_->reset_map_origin_min_line_length;
@@ -461,12 +466,17 @@ private:
         node_options_->reset_map_origin_orthogonality_tolerance_deg;
     align_options.min_secondary_support_ratio =
         node_options_->reset_map_origin_min_secondary_support_ratio;
+    const auto t_estimate_start = Clock::now();
     const auto estimated_yaw =
         mapping_node_->EstimateStructureAlignmentYaw(align_options);
+    LOG(INFO) << "[Timing] EstimateStructureAlignmentYaw: "
+              << Ms(Clock::now() - t_estimate_start).count() << " ms";
     if (!estimated_yaw.has_value()) {
       LOG(WARNING) << "No reliable orthogonal structure found in map line "
                       "features, skipping map origin reset (identity kept).";
       map_origin_reset_done_ = true;  // 决策已完成（结果 = 恒等），不再重试
+      LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
+                << Ms(Clock::now() - t_reset_start).count() << " ms";
       return;
     }
 
@@ -483,8 +493,13 @@ private:
               << "new origin in old map frame x=" << new_x
               << ", y=" << new_y << ", yaw=" << new_yaw << " rad ("
               << (new_yaw * 180.0 / M_PI) << " deg)";
+    const auto t_apply_start = Clock::now();
     mapping_node_->ApplyMapOriginTransform(T_new_origin.inverse());
+    LOG(INFO) << "[Timing] ApplyMapOriginTransform: "
+              << Ms(Clock::now() - t_apply_start).count() << " ms";
     map_origin_reset_done_ = true;
+    LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
+              << Ms(Clock::now() - t_reset_start).count() << " ms";
   }
 
   void FinishMapping() {
