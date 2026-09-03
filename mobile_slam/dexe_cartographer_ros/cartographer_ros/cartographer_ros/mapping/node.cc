@@ -17,10 +17,12 @@
 #include "cartographer_ros/mapping/node.h"
 
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <vector>
 
 #include "Eigen/Core"
+#include "Eigen/Geometry"
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 #include "cartographer/common/configuration_file_resolver.h"
@@ -1399,6 +1401,56 @@ absl::optional<double> Node::EstimateStructureAlignmentYaw(
     const ::cartographer::mapping::StructureAlignmentOptions& options) {
   absl::MutexLock lock(&mutex_);
   return map_builder_bridge_->EstimateStructureAlignmentYaw(options);
+}
+
+void Node::ResetMapOriginToAlignStructure() {
+  if (!node_options_.reset_map_origin_to_align_structure) {
+    return;
+  }
+  absl::MutexLock lock(&mutex_);
+  if (map_origin_reset_done_) {
+    LOG(INFO) << "Map origin already reset in this mapping session, skipping.";
+    return;
+  }
+
+  // 计时：本函数的总耗时即开启对齐功能后保存阶段新增的开销
+  using Clock = std::chrono::steady_clock;
+  using Ms = std::chrono::duration<double, std::milli>;
+  const auto t_reset_start = Clock::now();
+
+  // 从全局线特征估计对齐角度
+  const auto t_estimate_start = Clock::now();
+  const auto estimated_yaw = map_builder_bridge_->EstimateStructureAlignmentYaw(
+      CreateStructureAlignmentOptions(node_options_));
+  LOG(INFO) << "[Timing] EstimateStructureAlignmentYaw: "
+            << Ms(Clock::now() - t_estimate_start).count() << " ms";
+  if (!estimated_yaw.has_value()) {
+    LOG(WARNING) << "No reliable orthogonal structure found in map line "
+                    "features, skipping map origin reset (identity kept).";
+    map_origin_reset_done_ = true;  // 决策已完成（结果 = 恒等），不再重试
+    LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
+              << Ms(Clock::now() - t_reset_start).count() << " ms";
+    return;
+  }
+
+  // 位置 (x, y) 为预留接口，纯角度重置保持 0，即绕 map 原点
+  // ——机器人建图起点——旋转
+  const double new_yaw = estimated_yaw.value();
+  // T_new_origin：新原点在旧地图坐标系下的位姿；施加其逆变换（旧系 → 新系）
+  const ::cartographer::transform::Rigid3d T_new_origin(
+      Eigen::Vector3d(0.0, 0.0, 0.0),
+      Eigen::Quaterniond(
+          Eigen::AngleAxisd(new_yaw, Eigen::Vector3d::UnitZ())));
+  LOG(INFO) << "Resetting map origin to align with structure: "
+            << "new origin in old map frame x=0, y=0, yaw=" << new_yaw
+            << " rad (" << (new_yaw * 180.0 / M_PI) << " deg)";
+  const auto t_apply_start = Clock::now();
+  map_builder_bridge_->ApplyMapOriginTransform(T_new_origin.inverse());
+  LOG(INFO) << "[Timing] ApplyMapOriginTransform: "
+            << Ms(Clock::now() - t_apply_start).count() << " ms";
+  map_origin_reset_done_ = true;
+  LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
+            << Ms(Clock::now() - t_reset_start).count() << " ms";
 }
 
 

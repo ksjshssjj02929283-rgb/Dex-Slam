@@ -131,4 +131,16 @@ std::tuple<MappingNodeOptions, TrajectoryOptions> LoadMappingOptions(
              CreateTrajectoryOptions(&lua_parameter_dictionary));
 }
 
+::cartographer::mapping::StructureAlignmentOptions
+CreateStructureAlignmentOptions(const MappingNodeOptions& options) {
+  ::cartographer::mapping::StructureAlignmentOptions align_options;
+  align_options.min_line_length = options.reset_map_origin_min_line_length;
+  align_options.max_candidate_lines = options.reset_map_origin_max_candidate_lines;
+  align_options.orthogonality_tolerance_deg =
+      options.reset_map_origin_orthogonality_tolerance_deg;
+  align_options.min_secondary_support_ratio =
+      options.reset_map_origin_min_secondary_support_ratio;
+  return align_options;
+}
+
 }  // namespace cartographer_ros

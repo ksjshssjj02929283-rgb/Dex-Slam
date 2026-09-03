@@ -426,80 +426,17 @@ private:
     is_mapping_ = false;
     is_saving_ = false;
     trajectories_finished_ = false;  // 重置标志
-    map_origin_reset_done_ = false;  // 重置标志
+    // 地图原点重置的幂等标志在 Node 内部，mapping_node_ 重建时自然复位
 
     LOG(INFO) << "Mapping node reset completed.";
   }
 
-  // 保存地图前重置地图起点（整体旋转使栅格对齐结构化环境）：把位姿图所有
-  // 全局位姿变换到新坐标系，使后续 SerializeState/SaveMap 以新坐标系产出
-  // pbstream 与地图文件。
-  // 调用前提：FinishAllTrajectories + RunFinalOptimization 已完成、尚未
-  // SerializeState（pbstream 内的位姿图与 global_static_submap 都从位姿图
-  // 节点重建，自然落在新系）。
-  // 幂等：一次建图会话只决策一次（包括"估计失败 → 不重置"的决策），
-  // 保存失败重试不会重复估计/应用。
-  //
-  // 新原点朝向 new_yaw 由全局线特征在线估计（位姿图节点线特征聚合 →
-  // 结构化方向直方图 → 正交主方向，见 EstimateStructureAlignmentYaw），
-  // 位置 (x, y) 为预留接口，纯角度重置时保持 0，即绕 map 原点
-  // ——机器人建图起点——旋转。估计失败（无可靠正交结构）时跳过重置。
+  // 保存地图前重置地图起点（整体旋转使栅格对齐结构化环境）。
+  // 估计与施加的具体逻辑下沉到 cartographer_ros::Node（在线/离线建图
+  // 节点共用，幂等性由其保证）；调用前提：FinishAllTrajectories +
+  // RunFinalOptimization 已完成、尚未 SerializeState/SaveOptimizedPoses。
   void ResetMapOriginToAlignStructure() {
-    if (!node_options_->reset_map_origin_to_align_structure) {
-      return;
-    }
-    if (map_origin_reset_done_) {
-      LOG(INFO) << "Map origin already reset in this mapping session, skipping.";
-      return;
-    }
-
-    // 计时：本函数的总耗时即开启对齐功能后保存阶段新增的开销
-    using Clock = std::chrono::steady_clock;
-    using Ms = std::chrono::duration<double, std::milli>;
-    const auto t_reset_start = Clock::now();
-
-    // 从全局线特征估计对齐角度
-    cartographer::mapping::StructureAlignmentOptions align_options;
-    align_options.min_line_length = node_options_->reset_map_origin_min_line_length;
-    align_options.max_candidate_lines = node_options_->reset_map_origin_max_candidate_lines;
-    align_options.orthogonality_tolerance_deg =
-        node_options_->reset_map_origin_orthogonality_tolerance_deg;
-    align_options.min_secondary_support_ratio =
-        node_options_->reset_map_origin_min_secondary_support_ratio;
-    const auto t_estimate_start = Clock::now();
-    const auto estimated_yaw =
-        mapping_node_->EstimateStructureAlignmentYaw(align_options);
-    LOG(INFO) << "[Timing] EstimateStructureAlignmentYaw: "
-              << Ms(Clock::now() - t_estimate_start).count() << " ms";
-    if (!estimated_yaw.has_value()) {
-      LOG(WARNING) << "No reliable orthogonal structure found in map line "
-                      "features, skipping map origin reset (identity kept).";
-      map_origin_reset_done_ = true;  // 决策已完成（结果 = 恒等），不再重试
-      LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
-                << Ms(Clock::now() - t_reset_start).count() << " ms";
-      return;
-    }
-
-    // 位置 (x, y) 为预留接口，纯角度重置保持 0
-    const double new_x = 0.0;
-    const double new_y = 0.0;
-    const double new_yaw = estimated_yaw.value();
-
-    // T_new_origin：新原点在旧地图坐标系下的位姿；施加其逆变换（旧系 → 新系）
-    const cartographer::transform::Rigid3d T_new_origin(
-        Eigen::Vector3d(new_x, new_y, 0.0),
-        Eigen::Quaterniond(Eigen::AngleAxisd(new_yaw, Eigen::Vector3d::UnitZ())));
-    LOG(INFO) << "Resetting map origin to align with structure: "
-              << "new origin in old map frame x=" << new_x
-              << ", y=" << new_y << ", yaw=" << new_yaw << " rad ("
-              << (new_yaw * 180.0 / M_PI) << " deg)";
-    const auto t_apply_start = Clock::now();
-    mapping_node_->ApplyMapOriginTransform(T_new_origin.inverse());
-    LOG(INFO) << "[Timing] ApplyMapOriginTransform: "
-              << Ms(Clock::now() - t_apply_start).count() << " ms";
-    map_origin_reset_done_ = true;
-    LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
-              << Ms(Clock::now() - t_reset_start).count() << " ms";
+    mapping_node_->ResetMapOriginToAlignStructure();
   }
 
   void FinishMapping() {
@@ -576,7 +513,6 @@ private:
   bool is_mapping_{false};
   bool is_saving_{false};               // 正在保存/收尾建图（~/state 报 SAVING）
   bool trajectories_finished_{false};  // 标记轨迹是否已完成和优化
-  bool map_origin_reset_done_{false};  // 本次建图会话是否已应用过地图原点重置（防重试时重复施加）
 
   // Cartographer 持有
   std::unique_ptr<cartographer_ros::Node> mapping_node_;

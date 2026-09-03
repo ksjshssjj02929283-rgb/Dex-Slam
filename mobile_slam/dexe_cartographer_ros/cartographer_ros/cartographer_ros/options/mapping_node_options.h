@@ -22,6 +22,7 @@
 
 #include "cartographer/common/lua_parameter_dictionary.h"
 #include "cartographer/common/port.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "cartographer/mapping/proto/map_builder_options.pb.h"
 #include "cartographer_ros/options/trajectory_options.h"
 
@@ -66,6 +67,10 @@ struct MappingNodeOptions {
   // 次方向支撑量 / 主方向支撑量 的最小比值（低于则视为无正交结构，不重置）
   double reset_map_origin_min_secondary_support_ratio = 0.1;
 };
+
+// 由 MappingNodeOptions 填充对齐角度估计阈值（在线/离线建图节点共用）。
+::cartographer::mapping::StructureAlignmentOptions
+CreateStructureAlignmentOptions(const MappingNodeOptions& options);
 
 MappingNodeOptions CreateMappingNodeOptions(
     ::cartographer::common::LuaParameterDictionary* lua_parameter_dictionary);

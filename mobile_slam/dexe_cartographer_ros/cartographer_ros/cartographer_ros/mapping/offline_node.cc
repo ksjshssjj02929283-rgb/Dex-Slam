@@ -466,6 +466,11 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
       });
   node.RunFinalOptimization();
 
+  // 保存前重置地图起点以对齐结构化环境（与在线建图节点共用 Node 内逻辑，
+  // 幂等）。须在 SaveOptimizedPoses / SerializeState 之前，使保存的轨迹与
+  // 地图落在新坐标系；开关由 lua reset_map_origin_to_align_structure 控制。
+  node.ResetMapOriginToAlignStructure();
+
   const std::chrono::time_point<std::chrono::steady_clock> end_time =
       std::chrono::steady_clock::now();
   const double wall_clock_seconds =
