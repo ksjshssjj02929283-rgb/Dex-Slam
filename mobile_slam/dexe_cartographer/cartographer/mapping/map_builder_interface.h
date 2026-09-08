@@ -18,6 +18,7 @@
 #define CARTOGRAPHER_MAPPING_MAP_BUILDER_INTERFACE_H_
 
 #include <set>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -127,6 +128,9 @@ class MapBuilderInterface {
   virtual std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const {
     return nullptr;
   }
+
+  // 保存进度回调：GenerateGlobalStaticSubmap 逐 node 处理时上报 (done, total)。默认无回调。
+  virtual void SetProgressCallback(std::function<void(size_t, size_t)> /*callback*/) {}
 
   virtual mapping::PoseGraphInterface* pose_graph() = 0;
 

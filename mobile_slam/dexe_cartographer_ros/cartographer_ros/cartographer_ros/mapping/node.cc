@@ -1390,6 +1390,12 @@ bool Node::SaveMap(
   return map_builder_bridge_->SaveMap(map_filename, resolution);
 }
 
+void Node::SetSaveProgressCallback(std::function<void(size_t, size_t)> callback)
+{
+  absl::MutexLock lock(&mutex_);
+  map_builder_bridge_->SetSaveProgressCallback(std::move(callback));
+}
+
 
 void Node::HandleOdometryMessage(const int trajectory_id,
                                  const std::string& sensor_id,

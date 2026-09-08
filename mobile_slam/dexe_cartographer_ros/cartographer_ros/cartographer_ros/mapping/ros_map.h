@@ -17,6 +17,7 @@
 #ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_ROS_MAP_H
 #define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_ROS_MAP_H
 
+#include <cstdint>
 #include <string>
 
 #include "Eigen/Core"
@@ -34,11 +35,21 @@ void WritePgm(const ::cartographer::io::Image& image, const double resolution,
               ::cartographer::io::FileWriter* file_writer,
               double occ_thresh, double free_thresh);
 
+// 栅格地图面积统计：total 取输出图像外框，effective 取最终保存图的自由像素；仅写入 yaml。
+struct GridMapStats {
+  double resolution = 0.0;
+  uint32_t total_cells = 0;   // 输出图像 width × height（含画布 padding，与 map.png 一致）
+  uint32_t free_cells = 0;    // 最终保存图（噪点滤除后）中按 free_thresh 判为自由的像素数
+  double TotalAreaM2() const { return total_cells * resolution * resolution; }
+  double EffectiveAreaM2() const { return free_cells * resolution * resolution; }
+};
+
 // Write the corresponding yaml into 'file_writer'.
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
-               double occ_thresh, double free_thresh);
+               double occ_thresh, double free_thresh,
+               const GridMapStats* stats = nullptr);
 
 void WritePng(const ::cartographer::io::Image& image,
               const std::string file_name,
@@ -53,7 +64,8 @@ void WriteNavigationMap(const cv::Mat& input_mat,
                        const std::string output_file_name,
                        const std::string& filter_mode,
                        bool save_debug_map,
-                       const std::string& map_dir);
+                       const std::string& map_dir,
+                       cv::Mat* filtered_out = nullptr);  // 非空时回传滤波后的最终图（与写出的 png 一致）
 
 // Convenience overload that reads the input PNG from disk (legacy).
 void WriteNavigationMap(const std::string pgm_file_name,

@@ -18,6 +18,7 @@
 #define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_NODE_H
 
 #include <map>
+#include <functional>
 #include <memory>
 #include <set>
 #include <unordered_map>
@@ -95,6 +96,8 @@ class Node
   void SaveOptimizedPoses(const int & trajectory_id);
 
   bool SaveMap(const std::string & map_filename, const double resolution);
+  // 保存进度回调（逐 node 上报 done/total），透传到 MapBuilder
+  void SetSaveProgressCallback(std::function<void(size_t, size_t)> callback);
   // Starts the first trajectory with the default topics.
 //   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options, 
 //                                         bool flag_localization, 
