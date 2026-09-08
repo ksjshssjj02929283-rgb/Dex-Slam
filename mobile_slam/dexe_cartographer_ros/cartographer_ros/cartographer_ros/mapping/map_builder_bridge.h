@@ -25,6 +25,7 @@
 #include "absl/synchronization/mutex.h"
 #include "cartographer/mapping/id.h"
 #include "cartographer/mapping/map_builder_interface.h"
+#include <functional>
 #include "cartographer/mapping/pose_graph_interface.h"
 #include "cartographer/mapping/proto/trajectory_builder_options.pb.h"
 #include "cartographer/mapping/trajectory_builder_interface.h"
@@ -99,6 +100,10 @@ class MapBuilderBridge {
   bool SaveGridMap(const std::string& map_filename, const double resolution);
   bool SaveGridMapFromRange(const std::string& map_filename,
                            std::shared_ptr<cartographer::mapping::Submap2D> submap);
+  // 保存进度回调（逐 node），透传给 MapBuilder
+  void SetSaveProgressCallback(std::function<void(size_t, size_t)> callback) {
+    map_builder_->SetProgressCallback(std::move(callback));
+  }
   bool SaveCloudMap(const std::string& map_filename,
                    std::shared_ptr<cartographer::mapping::Submap2D> submap);
   bool SaveLineMap(const std::string& map_filename,

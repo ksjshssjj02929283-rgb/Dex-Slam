@@ -55,7 +55,8 @@ void WritePgm(const ::cartographer::io::Image& image, const double resolution,
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
-               double occ_thresh, double free_thresh)
+               double occ_thresh, double free_thresh,
+               const GridMapStats* stats)
 {
   // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
   // 这样无论地图目录位于何处（staging / 正式 / backup / 被整体移动），
@@ -71,7 +72,7 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
 
   // Magic constants taken directly from ros map_saver code:
   // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
-  const std::string output = absl::StrCat(
+  std::string output = absl::StrCat(
       "image: ", pgm_filename, "\n",
       "line_map: ", line_map_filename, "\n",
       "cloud_map: ", cloud_map_filename, "\n",
@@ -79,6 +80,12 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
       "resolution: ", resolution, "\n",
       "origin: [", origin.x(), ", ", origin.y(),
       ", 0.0]\nnegate: 0\noccupied_thresh: ", occ_thresh, "\nfree_thresh: ", free_thresh, "\n");
+  if (stats != nullptr) {
+    // 地图面积统计（口径见 GridMapStats）；读取侧对多余键不报错，旧地图无此段亦可加载
+    absl::StrAppend(&output,
+        "total_area_m2: ", stats->TotalAreaM2(), "\n",
+        "effective_area_m2: ", stats->EffectiveAreaM2(), "\n");
+  }
   file_writer->Write(output.data(), output.size());
 }
 
@@ -127,7 +134,8 @@ void WriteNavigationMap(const cv::Mat& original,
                        const std::string output_file_name,
                        const std::string& filter_mode,
                        bool save_debug_map,
-                       const std::string& map_dir)
+                       const std::string& map_dir,
+                       cv::Mat* filtered_out)
 {
   LOG(INFO) << "Starting WriteNavigationMap with noise removal for " << output_file_name;
   LOG(INFO) << "Input mat dimensions: " << original.cols << "x" << original.rows;
@@ -302,6 +310,9 @@ void WriteNavigationMap(const cv::Mat& original,
   LOG(INFO) << "  Kept components (has gray neighbors): " << kept_by_gray;
   
   // 步骤3: 保存为PNG文件
+  if (filtered_out != nullptr) {
+    *filtered_out = result;
+  }
   if (!cv::imwrite(output_file_name, result)) {
     LOG(ERROR) << "Failed to write navigation map to " << output_file_name;
     return;

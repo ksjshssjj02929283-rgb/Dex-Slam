@@ -88,7 +88,7 @@ TEST_ACTION_FLOWS = {
     "MAP-A-01": "读取 ROS2 node/service/topic 图，识别当前栈，并确认建图与定位业务栈没有同时运行。",
     "MAP-A-02": "读取建图输入 Topic、输出 Topic 和控制 Service 的名称与类型，逐项对照接口基线并汇总判定。",
     "MAP-A-03": "扫描旧服务、旧 Topic 和旧离线节点名，确认整理前接口均不存在。",
-    "MAP-A-04": "创建受管测试图哨兵，依次调用 set_map_name、start_mapping，并轮询 MappingState 到 MAPPING。",
+    "MAP-A-04": "创建受管测试图哨兵，调用 start_mapping(map_name, overwrite=true)，并轮询 MappingState 到 MAPPING。",
     "MAP-A-05": "检查同名 start_mapping 后旧哨兵和旧目录均被清除，且只重建空 slam 目录。",
     "MAP-A-06": "调用 cancel_mapping，轮询 MappingState 回到 IDLE，并按受管状态清理测试图。",
     "LOC-A-01": "读取 ROS2 node/service/topic 图，识别当前栈，并确认定位与建图业务栈没有同时运行。",
@@ -729,11 +729,9 @@ MAPPING_OUTPUT_TOPICS = {
     "/map": "nav_msgs/msg/OccupancyGrid",
 }
 MAPPING_SERVICES = {
-    "/mapping_node/start_mapping": "std_srvs/srv/Trigger",
+    "/mapping_node/start_mapping": "nav_interfaces/srv/StartMapping",
     "/mapping_node/cancel_mapping": "std_srvs/srv/Trigger",
     "/mapping_node/finish_mapping": "std_srvs/srv/Trigger",
-    "/mapping_node/save_map": "std_srvs/srv/Trigger",
-    "/mapping_node/set_map_name": "nav_interfaces/srv/SetMapName",
 }
 LOCALIZATION_INPUT_TOPICS = {
     "/laser_scan/front": "sensor_msgs/msg/LaserScan",
@@ -4563,35 +4561,11 @@ def run_mapping_mutations(
     try:
         target = prepare_mapping_sentinels(maps_root, map_name, result_root)
         prepared = True
-        set_name = call_service(
-            reporter,
-            "/mapping_node/set_map_name",
-            "nav_interfaces/srv/SetMapName",
-            f"{{map_name: '{map_name}'}}",
-        )
-        set_name_ok = bool_success(set_name.stdout)
-        if not set_name_ok:
-            reporter.add(
-                "MAP-A-04",
-                "set_map_name → start_mapping → MAPPING",
-                FAIL,
-                "set_map_name 失败；按 fail-closed 未调用 start_mapping",
-                [
-                    interface_check(
-                        "service",
-                        "/mapping_node/set_map_name",
-                        "success=true",
-                        f"success={set_name_ok}",
-                        False,
-                    )
-                ],
-            )
-            return
         start = call_service(
             reporter,
             "/mapping_node/start_mapping",
-            "std_srvs/srv/Trigger",
-            "{}",
+            "nav_interfaces/srv/StartMapping",
+            f"{{map_name: '{map_name}', overwrite: true}}",
         )
         started = bool_success(start.stdout)
         reached_mapping, statuses = wait_mapping_status(
@@ -4599,20 +4573,13 @@ def run_mapping_mutations(
         )
         reporter.add(
             "MAP-A-04",
-            "set_map_name → start_mapping → MAPPING",
+            "start_mapping(map_name, overwrite) → MAPPING",
             PASS
-            if set_name_ok and started and reached_mapping
+            if started and reached_mapping
             else FAIL,
-            f"set={set_name_ok} start={started} "
+            f"start={started} "
             f"状态序列={statuses}",
             [
-                interface_check(
-                    "service",
-                    "/mapping_node/set_map_name",
-                    "success=true",
-                    f"success={set_name_ok}",
-                    set_name_ok,
-                ),
                 interface_check(
                     "service",
                     "/mapping_node/start_mapping",
@@ -4690,7 +4657,7 @@ def run_mapping_mutations(
             [
                 interface_check(
                     "managed-operation",
-                    "/mapping_node/set_map_name + /mapping_node/start_mapping",
+                    "/mapping_node/start_mapping",
                     "completed without exception",
                     f"{type(exc).__name__}: {exc}",
                     False,
@@ -5153,7 +5120,7 @@ TEST_CATALOG = {
         ("MAP-A-01", "ROS2 图与建图模式唯一"),
         ("MAP-A-02", "建图输入/输出/服务接口名称与类型契约"),
         ("MAP-A-03", "建图模式旧接口与旧节点域无残留"),
-        ("MAP-A-04", "受管测试图 set_map_name/start_mapping"),
+        ("MAP-A-04", "受管测试图 start_mapping(map_name)"),
         ("MAP-A-05", "同名建图全目录重建"),
         ("MAP-A-06", "cancel_mapping 后回 IDLE"),
     ),
