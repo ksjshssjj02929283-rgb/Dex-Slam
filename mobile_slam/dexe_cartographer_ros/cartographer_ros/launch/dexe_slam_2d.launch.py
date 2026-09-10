@@ -81,6 +81,9 @@ def generate_launch_description():
         parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],  # 修复: 使用LaunchConfiguration
         arguments=[
             '-resolution', resolution,   # 修复: 使用LaunchConfiguration而不是硬编码
+            # /map 发布周期：对上层（X-Wiz）的契约承诺值，显式固化在此，
+            # 不再依赖 occupancy_grid_node_main.cc 里的 gflags 默认值。改动需同步契约文档。
+            '-publish_period_sec', '1.0',
         ],
     )
 

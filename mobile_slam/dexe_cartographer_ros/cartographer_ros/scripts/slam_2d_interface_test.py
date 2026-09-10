@@ -762,10 +762,7 @@ LOCALIZATION_SERVICES = {
     "/localization_node/reset_localization": "std_srvs/srv/Trigger",
     "/localization_node/save_map": "nav_interfaces/srv/SaveMap",
     "/localization_node/reset_map_origin": "std_srvs/srv/Trigger",
-    "/localization_node/relocalization": "nav_interfaces/srv/SetPose",
-    "/localization_node/trigger_global_relocalization": (
-        "std_srvs/srv/Trigger"
-    ),
+    "/localization_node/relocalization": "nav_interfaces/srv/Relocalize",
     "/map_asset_manager/save_assets": "nav_interfaces/srv/SaveAssets",
     "/map_asset_manager/reload_data": "std_srvs/srv/Trigger",
     "/map_asset_manager/transform_assets": (
@@ -2447,10 +2444,11 @@ def normalize_angle(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
-def set_pose_request(pose: dict[str, float | str]) -> str:
+def relocalize_local_request(pose: dict[str, float | str]) -> str:
+    """MODE_LOCAL 重定位请求（mode=1 + 合法 map 系 pose）。"""
     yaw = float(pose["yaw"])
     return (
-        "{pose: {header: {frame_id: 'map'}, pose: {pose: {"
+        "{mode: 1, pose: {header: {frame_id: 'map'}, pose: {pose: {"
         f"position: {{x: {float(pose['x']):.9f}, "
         f"y: {float(pose['y']):.9f}, z: {float(pose['z']):.9f}}}, "
         "orientation: {x: 0.0, y: 0.0, "
@@ -2680,8 +2678,7 @@ def run_relocalization_trial(
                     )
                     waiting_for_global_log_timing = bool(
                         state_closed
-                        and service
-                        == "/localization_node/trigger_global_relocalization"
+                        and "mode: 0" in request
                         and log_cursor["available"]
                         and not log_observation["complete"]
                         and time.monotonic() < relocalizing_deadline
@@ -2956,7 +2953,7 @@ def run_global_relocalization_metrics(
     log_path: Path,
     log_tag: str,
 ) -> dict[str, Any]:
-    service = "/localization_node/trigger_global_relocalization"
+    service = "/localization_node/relocalization"
     trials = []
     for trial in range(1, RELOCALIZATION_TRIALS + 1):
         trials.append(
@@ -2964,8 +2961,8 @@ def run_global_relocalization_metrics(
                 reporter,
                 trial=trial,
                 service=service,
-                service_type="std_srvs/srv/Trigger",
-                request="{}",
+                service_type="nav_interfaces/srv/Relocalize",
+                request="{mode: 0}",
                 timeout_s=timeout_s,
                 log_path=log_path,
                 log_tag=log_tag,
@@ -3104,8 +3101,8 @@ def run_perturbed_pose_metrics(
                     reporter,
                     trial=trial,
                     service=service,
-                    service_type="nav_interfaces/srv/SetPose",
-                    request=set_pose_request(requested),
+                    service_type="nav_interfaces/srv/Relocalize",
+                    request=relocalize_local_request(requested),
                     timeout_s=timeout_s,
                     log_path=log_path,
                     log_tag=log_tag,
@@ -4106,9 +4103,9 @@ def run_localization_mutations(
             relocalization_trial = run_relocalization_trial(
                 reporter,
                 trial=0,
-                service="/localization_node/trigger_global_relocalization",
-                service_type="std_srvs/srv/Trigger",
-                request="{}",
+                service="/localization_node/relocalization",
+                service_type="nav_interfaces/srv/Relocalize",
+                request="{mode: 0}",
                 timeout_s=localization_timeout_s,
                 log_path=localization_log,
                 log_tag=localization_log_tag,
@@ -4132,7 +4129,7 @@ def run_localization_mutations(
                 [
                     interface_check(
                         "service",
-                        "/localization_node/trigger_global_relocalization",
+                        "/localization_node/relocalization",
                         "success=true",
                         f"success={service_success}",
                         service_success,

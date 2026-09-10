@@ -171,6 +171,11 @@ double LocalizationUpdaterBridge::GetLocalizationConfidence() const
   return localization_updater_->GetLocalizationConfidence();
 }
 
+::cartographer::localization::MatchLevel LocalizationUpdaterBridge::GetMatchLevel() const
+{
+  return localization_updater_->GetMatchLevel();
+}
+
 bool LocalizationUpdaterBridge::ResetMapOrigin(
     const std::string& map_base_filename,
     const std::string& pbstream_filename,

@@ -17,6 +17,7 @@
 
 #include <iostream>
 #include <memory>
+#include <cmath>
 #include <string>
 #include <chrono>
 #include <ctime>
@@ -36,7 +37,7 @@
 #include "cartographer_ros/localization/localization_node.h"
 #include "cartographer_ros/localization/map_persistence_manager.h"
 #include "nav_interfaces/srv/save_map.hpp"
-#include "nav_interfaces/srv/set_pose.hpp"
+#include "nav_interfaces/srv/relocalize.hpp"
 #include "nav_interfaces/msg/map_state.hpp"
 #include "cartographer_ros/options/localization_node_options.h"
 #include "cartographer_ros/mapping/ros_log_sink.h"
@@ -182,8 +183,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_localization_srv_;
   rclcpp::Service<nav_interfaces::srv::SaveMap>::SharedPtr save_map_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_map_origin_srv_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr trigger_global_relocalization_srv_;
-  rclcpp::Service<nav_interfaces::srv::SetPose>::SharedPtr relocalization_srv_;
+  rclcpp::Service<nav_interfaces::srv::Relocalize>::SharedPtr relocalization_srv_;
   // rollback_map_to 服务已移除——回退归 command_board 文件级处理。
 
   // MapState 订阅：地图自动生效唯一入口。epoch 变即重载（含同名/回退、含未运行时启动）；
@@ -228,15 +228,11 @@ private:
         std::bind(&LocalizationManagerNode::HandleResetMapOrigin, this,
                   std::placeholders::_1, std::placeholders::_2));
 
-    trigger_global_relocalization_srv_ = create_service<std_srvs::srv::Trigger>(
-        "~/trigger_global_relocalization",
-        std::bind(&LocalizationManagerNode::HandleTriggerGlobalRelocalization, this,
-                  std::placeholders::_1, std::placeholders::_2));
-
-    // 局部重定位（SetPose）：控制服务在外围层注册，转调核心 Relocalize()
-    relocalization_srv_ = create_service<nav_interfaces::srv::SetPose>(
+    // 重定位（合并原 trigger_global_relocalization + relocalization）：mode 显式区分全局/局部，
+    // 本服务只触发，收敛结果经 ~/state 观察
+    relocalization_srv_ = create_service<nav_interfaces::srv::Relocalize>(
         "~/relocalization",
-        std::bind(&LocalizationManagerNode::HandleRelocalization, this,
+        std::bind(&LocalizationManagerNode::HandleRelocalize, this,
                   std::placeholders::_1, std::placeholders::_2));
 
     // 订阅 map_manager/map_state（latched）：地图自动生效唯一入口，epoch 变即重载（含冷启动）
@@ -489,12 +485,18 @@ private:
       return;
     }
 
-    // localization 保存当前已加载地图（只更新底图，不碰 map asset）。
-    // map_name 输入仅作记录：定位侧不支持 save-as（被保存的就是当前加载的地图）。
-    if (!request->map_name.empty()) {
-      RCLCPP_INFO(get_logger(),
-                  "save_map: request map_name='%s'（定位侧保存当前已加载地图，忽略改名）",
-                  request->map_name.c_str());
+    // localization 保存当前已加载地图（只更新底图，不碰 map asset），不支持 save-as。
+    // 给出与当前地图不同的 map_name 直接拒绝，不静默忽略——否则调用方会以为自己改名成功了。
+    if (!request->map_name.empty() && request->map_name != FLAGS_map_name) {
+      RCLCPP_ERROR(get_logger(),
+                   "save_map: save-as is not supported; requested map_name '%s' differs from "
+                   "the currently loaded map '%s'",
+                   request->map_name.c_str(), FLAGS_map_name.c_str());
+      response->success = false;
+      response->message = "save-as is not supported: requested map_name '" + request->map_name +
+                          "' differs from the currently loaded map '" + FLAGS_map_name +
+                          "'; leave map_name empty to save the current map";
+      return;
     }
 
     RCLCPP_INFO(get_logger(), "save_map service called, saving base map via MapPersistenceManager...");
@@ -583,55 +585,76 @@ private:
         "Map origin reset, localization restarted, relocalization triggered at new origin";
   }
 
-  void HandleTriggerGlobalRelocalization(
-      const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
-      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+  // 重定位统一入口：MODE_GLOBAL 全局搜索 / MODE_LOCAL 以给定 pose 为初值。
+  // 只负责触发；收敛过程与结果经 ~/state（LOC_RELOCALIZING → LOC_SUCCESS / LOC_FAILED）观察。
+  void HandleRelocalize(
+      const std::shared_ptr<nav_interfaces::srv::Relocalize::Request> request,
+      std::shared_ptr<nav_interfaces::srv::Relocalize::Response> response) {
+    using LS = nav_interfaces::msg::LocalizationState;
+    using Req = nav_interfaces::srv::Relocalize::Request;
+    auto fail = [&response](int32_t code, const std::string& msg) {
+      response->success = false;
+      response->error_code = code;
+      response->message = msg;
+    };
 
     std::lock_guard<std::mutex> lock(state_mutex_);
-
     if (state_ != LocalizationState::RUNNING || !localization_node_) {
-      response->success = false;
-      response->message = "Localization is not running, cannot trigger relocalization";
-      RCLCPP_WARN(get_logger(),
-                  "trigger_global_relocalization called but localization is not running");
+      RCLCPP_WARN(get_logger(), "relocalization called but localization is not running");
+      fail(LS::E_LOC_NOT_RUNNING, "Localization is not running; call start_localization first");
+      return;
+    }
+    if (request->mode != Req::MODE_GLOBAL && request->mode != Req::MODE_LOCAL) {
+      fail(LS::E_LOC_MODE_INVALID,
+           "Invalid mode " + std::to_string(static_cast<int>(request->mode)) +
+           "; expected 0 (GLOBAL) or 1 (LOCAL)");
       return;
     }
 
-    RCLCPP_INFO(get_logger(), "trigger_global_relocalization: invoking...");
-    const bool ok = localization_node_->TriggerGlobalRelocalization();
-
-    response->success = ok;
-    response->message = ok
-        ? "Global relocalization triggered successfully"
-        : "Global relocalization failed (see node logs)";
-
-    if (ok) {
-      RCLCPP_INFO(get_logger(), "trigger_global_relocalization: success");
-    } else {
-      RCLCPP_ERROR(get_logger(), "trigger_global_relocalization: failed");
-    }
-  }
-
-  // 局部重定位（SetPose）：外围层门面，转调核心 LocalizationNode::Relocalize()
-  void HandleRelocalization(
-      const std::shared_ptr<nav_interfaces::srv::SetPose::Request> request,
-      std::shared_ptr<nav_interfaces::srv::SetPose::Response> response) {
-
-    std::lock_guard<std::mutex> lock(state_mutex_);
-
-    if (state_ != LocalizationState::RUNNING || !localization_node_) {
-      response->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "relocalization called but localization is not running");
+    if (request->mode == Req::MODE_GLOBAL) {
+      RCLCPP_INFO(get_logger(), "relocalize[GLOBAL]: invoking...");
+      if (!localization_node_->TriggerGlobalRelocalization()) {
+        RCLCPP_ERROR(get_logger(), "relocalize[GLOBAL]: trigger failed");
+        fail(LS::E_LOC_TRIGGER_FAILED, "Global relocalization trigger rejected; see node logs");
+        return;
+      }
+      response->success = true;
+      response->error_code = LS::E_NONE;
+      response->message = "Global relocalization triggered; watch ~/state for result";
+      RCLCPP_INFO(get_logger(), "relocalize[GLOBAL]: triggered");
       return;
     }
 
-    response->success = localization_node_->Relocalize(request->pose);
-    if (response->success) {
-      RCLCPP_INFO(get_logger(), "relocalization: initial pose set successfully");
-    } else {
-      RCLCPP_ERROR(get_logger(), "relocalization: failed (see node logs)");
+    // MODE_LOCAL：pose 必须给全且合法（frame_id=map、四元数归一）
+    const auto& q = request->pose.pose.pose.orientation;
+    const double qn = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (request->pose.header.frame_id.empty() || qn < 1e-6) {
+      fail(LS::E_LOC_POSE_REQUIRED,
+           "MODE_LOCAL requires a pose with frame_id 'map' and a valid orientation");
+      return;
     }
+    if (request->pose.header.frame_id != "map") {
+      fail(LS::E_LOC_POSE_INVALID,
+           "pose.header.frame_id must be 'map', got '" + request->pose.header.frame_id + "'");
+      return;
+    }
+    if (std::abs(qn - 1.0) > 1e-3) {
+      fail(LS::E_LOC_POSE_INVALID,
+           "pose orientation is not a unit quaternion (norm=" + std::to_string(qn) + ")");
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "relocalize[LOCAL]: invoking at (%.3f, %.3f)...",
+                request->pose.pose.pose.position.x, request->pose.pose.pose.position.y);
+    if (!localization_node_->Relocalize(request->pose)) {
+      RCLCPP_ERROR(get_logger(), "relocalize[LOCAL]: trigger failed");
+      fail(LS::E_LOC_TRIGGER_FAILED, "Local relocalization rejected; see node logs");
+      return;
+    }
+    response->success = true;
+    response->error_code = LS::E_NONE;
+    response->message = "Local relocalization triggered; watch ~/state for result";
+    RCLCPP_INFO(get_logger(), "relocalize[LOCAL]: initial pose set");
   }
 
   bool ValidateMapResources() {

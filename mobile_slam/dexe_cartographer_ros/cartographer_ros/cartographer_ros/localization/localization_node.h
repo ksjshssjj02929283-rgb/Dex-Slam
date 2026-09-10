@@ -3,6 +3,7 @@
 
 #include <map>
 #include <memory>
+#include <atomic>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,10 +24,10 @@
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "nav_interfaces/msg/localization_state.hpp"
+#include "robot_localization/srv/set_pose.hpp"
 
 // ROS2 services
 #include "std_srvs/srv/trigger.hpp"
-#include "nav_interfaces/srv/set_pose.hpp"
 #include "cartographer_ros_msgs/srv/finish_trajectory.hpp"
 #include "cartographer_ros_msgs/srv/get_trajectory_states.hpp"
 #include "cartographer_ros_msgs/srv/read_metrics.hpp"
@@ -225,7 +226,7 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr matched_feature_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr scan_matched_point_cloud_publisher_;
   rclcpp::Publisher<nav_interfaces::msg::LocalizationState>::SharedPtr localization_state_publisher_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr set_pose_publisher_;
+  rclcpp::Client<robot_localization::srv::SetPose>::SharedPtr set_pose_client_;
 
   // Services (kept alive as members)
   rclcpp::Service<cartographer_ros_msgs::srv::SubmapQuery>::SharedPtr submap_query_service_;
@@ -279,6 +280,8 @@ private:
 
   // Flags
   bool need_set_pose_in_filter_ = false;
+  // /initialpose（RViz 2D Pose Estimate）路径的最近一次结果码；topic 无返回值，经 ~/state 上报
+  std::atomic<int32_t> last_reloc_error_{0};
   int last_localization_status_ = nav_interfaces::msg::LocalizationState::LOC_NOT_INIT;
   bool filter_stopped_ = false;
 };
