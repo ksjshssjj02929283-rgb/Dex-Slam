@@ -69,6 +69,18 @@ enum class LocalizationState
   LOCALIZED    = 4  // 重定位成功
 };
 
+// 对外匹配质量分档（LocalizationState.match_level 的产生源）。
+// 不是对 confidence 分数直接比阈值——confidence 是环境依赖的平均占用概率，
+// 绝对值在空旷区/走廊差别很大；分档一律取自已有的两套判定：
+// ConsistencyCheckResult.is_consistent（三路信号）+ DriftCheckResult.drift_suspected（static map 独立锚点）。
+enum class MatchLevel
+{
+  UNKNOWN  = 0,  // 定位未运行 / 未收敛（loc_state_ != LOCALIZED）
+  GOOD     = 1,  // 一致性通过，无自洽漂移嫌疑
+  DEGRADED = 2,  // 检测到自洽漂移，但已在 static map 上校正成功（位姿可用，地图/环境存疑）
+  POOR     = 3   // 一致性未通过，或漂移校正失败导致地图更新冻结（位姿不可信）
+};
+
 // Wires up the local SLAM stack (i.e. pose extrapolator, scan matching, etc.)
 // without loop closure.
 // TODO(gaschler): Add test for this class similar to the 3D test.
@@ -108,6 +120,9 @@ class PoseEstimator2D {
 
   // 获取当前定位置信度（ScanMatch 后的地图重合率 [0,1]）
   double GetLocalizationConfidence() const;
+
+  // 获取当前匹配质量分档（见 MatchLevel 注释：取自一致性检查 + 漂移门控，非分数比阈值）
+  MatchLevel GetMatchLevel() const { return match_level_; }
 
   // 触发全局重定位，不需要初始位姿
   void TriggerGlobalRelocalization();
@@ -228,6 +243,8 @@ private:
 
   // 一致性检查器，用于检测定位与地图的一致性
   std::unique_ptr<ConsistencyChecker> consistency_checker_;
+
+  MatchLevel match_level_ = MatchLevel::UNKNOWN;  // 每帧由一致性/漂移判定更新
 
   std::mutex data_mutex_;
   

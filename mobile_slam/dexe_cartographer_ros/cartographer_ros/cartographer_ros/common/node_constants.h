@@ -35,6 +35,12 @@ constexpr char kOccupancyGridTopic[] = "map";
 constexpr char kSubmapListTopic[] = "submap_list";
 constexpr char kTrackedPoseTopic[] = "tracked_pose";
 constexpr char kTrackedPathTopic[] = "tracked_path";
+// tracked_path 是标准可视化输出（非评估用全量轨迹）：滑窗只保留最近 N 个位姿。
+// @ pose_publish_period_sec=0.1（10Hz）≈ 5 秒尾迹；原实现无上限追加，内存与带宽随运行时长线性增长。
+constexpr size_t kTrackedPathWindowSize = 50;
+// 相邻两帧位姿跳变超过该距离（米）视为发生了重定位，清空尾迹——否则会画出一条跨越地图的直线。
+// 取值依据：10Hz 发布下正常运动帧间位移约 0.1m（1 m/s），留 5 倍余量；实测重定位跳变约 1.0m。
+constexpr double kTrackedPathJumpThreshold = 0.5;
 constexpr char kLocaliztionPoseTopic[] = "loc_pose";
 constexpr char kSubmapQueryServiceName[] = "submap_query";
 constexpr char kTrajectoryQueryServiceName[] = "trajectory_query";

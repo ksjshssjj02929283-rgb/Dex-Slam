@@ -685,6 +685,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       if (!recovery_pose) {
         LOG(ERROR) << "All recovery attempts failed! Localization lost.";
         loc_state_ = LocalizationState::LOCALIZATION_FAILED;
+        match_level_ = MatchLevel::POOR;
         active_submaps_.clear();
         return nullptr;
       }
@@ -712,6 +713,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   //   ③ 重定位失败/未通过校验 → 冻结地图，绝不在错误/不确定位姿更新。
   // 必须放在 pose_estimate / local_pose_ 计算之前，让校正后的位姿流入 TF 输出与后续插入。
   bool safe_to_update_map = true;
+  bool drift_flagged = false;  // 本帧是否确认自洽漂移（match_level 分档用）
   {
     auto static_submap = local_map_updater_->GetStaticSubmap();
     auto live_local = local_map_updater_->local_submap();
@@ -722,6 +724,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
           *static_submap,
           *live_local);
       if (drift_result.drift_suspected) {
+        drift_flagged = true;
         LOG(WARNING) << "Localization drift confirmed — relocalizing against static map "
                         "before any map update. " << drift_result.ToString();
 
@@ -781,6 +784,17 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   }
 
   // 使用merged_data中的数据进行插入（漂移嫌疑时冻结地图，不在错误位姿烤入数据）
+  // 匹配质量分档：漂移门控与地图更新裁决都已定，此处统一得出对外 match_level。
+  if (loc_state_ != LocalizationState::LOCALIZED) {
+    match_level_ = MatchLevel::UNKNOWN;
+  } else if (!drift_flagged) {
+    match_level_ = MatchLevel::GOOD;
+  } else if (safe_to_update_map) {
+    match_level_ = MatchLevel::DEGRADED;  // 漂移已用 static map 校正，位姿可用
+  } else {
+    match_level_ = MatchLevel::POOR;      // 漂移校正失败，地图已冻结
+  }
+
   std::unique_ptr<InsertionResult> insertion_result;
   if (safe_to_update_map) {
     insertion_result = InsertIntoSubmap(

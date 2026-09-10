@@ -40,7 +40,6 @@
 
 // 自定义消息/服务
 #include "std_srvs/srv/trigger.hpp"
-#include "nav_interfaces/srv/set_pose.hpp"
 #include "nav_interfaces/msg/localization_state.hpp"
 
 // Cartographer  
@@ -165,10 +164,9 @@ LocalizationNode::LocalizationNode(
   localization_state_publisher_ = node_->create_publisher<nav_interfaces::msg::LocalizationState>(
       "~/state", kLatestOnlyPublisherQueueSize);
   // Cross-node contract: localization_node pushes the accepted pose to the
-  // robot_localization filter through its fixed absolute topic.
-  set_pose_publisher_ =
-      node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-          "/robot_localization/set_pose", rclcpp::QoS(1));
+  // robot_localization filter through its fixed absolute service.
+  set_pose_client_ = node_->create_client<robot_localization::srv::SetPose>(
+      "/robot_localization/set_pose");
 
   // 服务  
   submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
@@ -201,7 +199,7 @@ LocalizationNode::LocalizationNode(
       std::bind(&LocalizationNode::HandleGetTrajectoryStates, this,
                 std::placeholders::_1, std::placeholders::_2));
 
-  // 注：~/relocalization（局部重定位，SetPose）为控制类服务，已按门面+引擎原则
+  // 注：~/relocalization（重定位，Relocalize；mode 区分全局/局部）为控制类服务，已按门面+引擎原则
   // 移到外围层 LocalizationManagerNode 注册；核心仅暴露 Relocalize() 方法。
 
   // 定时器（Wall timers 与 regular timer）
@@ -302,10 +300,35 @@ void LocalizationNode::PublishLocalizationState()
 {
   const auto loc_state = localization_updater_bridge_.GetLocalizationState();
   nav_interfaces::msg::LocalizationState loc_state_msg;
+  loc_state_msg.header.stamp = node_->now();
+  loc_state_msg.error_code = last_reloc_error_.load();
+
+  // 匹配质量分档：直接取自 ConsistencyChecker + 漂移门控的裁决（不是拿 score 比阈值）。
+  // 两侧枚举取值必须一一对应，用 static_assert 在编译期钉死，避免任一侧改动后静默错位。
+  {
+    using ML = ::cartographer::localization::MatchLevel;
+    using LS = nav_interfaces::msg::LocalizationState;
+    static_assert(static_cast<uint8_t>(ML::UNKNOWN)  == LS::MATCH_UNKNOWN,  "MatchLevel/msg mismatch");
+    static_assert(static_cast<uint8_t>(ML::GOOD)     == LS::MATCH_GOOD,     "MatchLevel/msg mismatch");
+    static_assert(static_cast<uint8_t>(ML::DEGRADED) == LS::MATCH_DEGRADED, "MatchLevel/msg mismatch");
+    static_assert(static_cast<uint8_t>(ML::POOR)     == LS::MATCH_POOR,     "MatchLevel/msg mismatch");
+    loc_state_msg.match_level =
+        static_cast<uint8_t>(localization_updater_bridge_.GetMatchLevel());
+  }
 
   // ScanMatch 后的地图重合率作为定位置信度 score（来自 ConsistencyChecker）
   loc_state_msg.score = static_cast<float>(
       localization_updater_bridge_.GetLocalizationConfidence());
+
+  // score 百分比分档：门限由契约（LocalizationState 常量）定义，此处是唯一产生点，
+  // 消费端读 score_level 即可，不必也不应各自再拿 score 比阈值。
+  {
+    using LS = nav_interfaces::msg::LocalizationState;
+    loc_state_msg.score_level =
+        loc_state_msg.score >= LS::SCORE_THRESHOLD_GOOD ? LS::SCORE_LEVEL_GOOD
+      : loc_state_msg.score <  LS::SCORE_THRESHOLD_BAD  ? LS::SCORE_LEVEL_BAD
+                                                        : LS::SCORE_LEVEL_FAIR;
+  }
 
   if (!loc_state.has_value()) {
     // 未初始化或不可用时可选择填充一个默认状态
@@ -568,13 +591,31 @@ void LocalizationNode::PublishLocalTrajectoryData()
         if (need_set_pose_in_filter_) {
           SetInitialPoseInFilter(pose_cov_msg);
         }
-        // ::geometry_msgs::PoseStamped pose_stamped_msg;
-        // pose_stamped_msg.header = pose_cov_msg.header;
-        // pose_stamped_msg.pose = pose_cov_msg.pose.pose;
-        // tracked_path_msg_.header.stamp = stamped_transform.header.stamp;
-        // tracked_path_msg_.header.frame_id = node_options_.map_frame;
-        // tracked_path_msg_.poses.push_back(pose_stamped_msg);
-        // tracked_path_publisher_->publish(tracked_path_msg_);
+        // tracked_path：机器人近期轨迹的可视化输出，滑窗保留最近 kTrackedPathWindowSize 个位姿
+        if (tracked_path_publisher_) {
+          geometry_msgs::msg::PoseStamped pose_stamped_msg;
+          pose_stamped_msg.header = pose_cov_msg.header;
+          pose_stamped_msg.pose = pose_cov_msg.pose.pose;
+
+          // 重定位会让位姿瞬间跳变，续接旧点会画出一条跨越地图的直线 → 跳变即清空重新起线
+          if (!tracked_path_msg_.poses.empty()) {
+            const auto& prev = tracked_path_msg_.poses.back().pose.position;
+            const double dx = pose_stamped_msg.pose.position.x - prev.x;
+            const double dy = pose_stamped_msg.pose.position.y - prev.y;
+            if (dx * dx + dy * dy >
+                kTrackedPathJumpThreshold * kTrackedPathJumpThreshold) {
+              tracked_path_msg_.poses.clear();
+            }
+          }
+
+          tracked_path_msg_.header = pose_cov_msg.header;
+          tracked_path_msg_.poses.push_back(pose_stamped_msg);
+          // 每帧只追加一个，超出窗口时删掉最旧的一个即可
+          if (tracked_path_msg_.poses.size() > kTrackedPathWindowSize) {
+            tracked_path_msg_.poses.erase(tracked_path_msg_.poses.begin());
+          }
+          tracked_path_publisher_->publish(tracked_path_msg_);
+        }
       }
 
       // 保存位姿（可选）
@@ -1086,26 +1127,30 @@ bool LocalizationNode::Relocalize(
 bool LocalizationNode::SetInitialPoseInFilter(
     const geometry_msgs::msg::PoseWithCovarianceStamped& pose_cov_msg)
 {
-  // 走话题而非服务：ros_filter 的 set_pose 服务类型是 robot_localization/srv/SetPose，
-  // 与本包的 nav_interfaces/srv/SetPose 类型不匹配，DDS 端点永远无法匹配（wait_for_service 必超时）。
-  // 同名话题订阅与服务共用 setPoseCallback，效果等价且无阻塞。
-  if (!set_pose_publisher_) {
+  // 直接用 ros_filter 自己的 robot_localization/srv/SetPose 服务。
+  // 该服务只在定位域内部使用（对外不暴露，契约分级 ⚪L3），无需本包再定义同名类型。
+  if (!set_pose_client_) {
     RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                          "Publisher /robot_localization/set_pose is not initialized; will retry");
+                          "Client /robot_localization/set_pose is not initialized; will retry");
     return false;  // fail closed，不清 need_set_pose_in_filter_
   }
 
-  if (set_pose_publisher_->get_subscription_count() == 0) {
+  if (!set_pose_client_->service_is_ready()) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                         "No subscriber on %s yet, will retry",
-                         set_pose_publisher_->get_topic_name());
+                         "Service /robot_localization/set_pose is not available yet, will retry");
     return false;  // 保留 need_set_pose_in_filter_，下个发布周期重试
   }
 
-  set_pose_publisher_->publish(pose_cov_msg);
+  auto request = std::make_shared<robot_localization::srv::SetPose::Request>();
+  request->pose = pose_cov_msg;
+  // 必须异步：本函数在位姿发布定时器回调内执行，同步等待响应会阻塞该回调。
+  // SetPose.srv 响应为空，回调只用于释放 pending request，不做判定。
+  set_pose_client_->async_send_request(
+      request,
+      [](rclcpp::Client<robot_localization::srv::SetPose>::SharedFuture) {});
   need_set_pose_in_filter_ = false;
-  RCLCPP_INFO(node_->get_logger(), "Initial pose published to %s",
-              set_pose_publisher_->get_topic_name());
+  RCLCPP_INFO(node_->get_logger(),
+              "Initial pose sent to /robot_localization/set_pose");
   return true;
 }
 
@@ -1233,21 +1278,42 @@ void LocalizationNode::HandleInitialPoseMessage(
   int trajectory_id, const std::string& sensor_id,
   const geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr& msg)
 {
-  if (msg->header.frame_id == "") {
+  // /initialpose 是 RViz「2D Pose Estimate」的标准入口，语义等同于
+  // Relocalize{mode: MODE_LOCAL, pose}；校验强度与该 service 保持一致。
+  // topic 无返回值，故拒绝原因经 ~/state 的 error_code 上报（LocalizationState 常量）。
+  using LS = nav_interfaces::msg::LocalizationState;
+  const auto& q = msg->pose.pose.orientation;
+  const double qn = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+  if (msg->header.frame_id.empty() || qn < 1e-6) {
     RCLCPP_WARN(node_->get_logger(),
-                "Received initial pose with empty frame_id. Using default: map.");
-  } else if (StripSlash(msg->header.frame_id) != node_options_.map_frame) {
+                "Ignoring initial pose: frame_id is empty or orientation is unset "
+                "(expected frame '%s' and a unit quaternion)",
+                node_options_.map_frame.c_str());
+    last_reloc_error_ = LS::E_LOC_POSE_REQUIRED;
+    return;
+  }
+  if (StripSlash(msg->header.frame_id) != node_options_.map_frame) {
     RCLCPP_WARN(node_->get_logger(),
                 "Ignoring initial pose in frame '%s'; must be in global frame '%s'",
                 StripSlash(msg->header.frame_id).c_str(), node_options_.map_frame.c_str());
+    last_reloc_error_ = LS::E_LOC_POSE_INVALID;
+    return;
+  }
+  if (std::abs(qn - 1.0) > 1e-3) {
+    RCLCPP_WARN(node_->get_logger(),
+                "Ignoring initial pose: orientation is not a unit quaternion (norm=%.6f)", qn);
+    last_reloc_error_ = LS::E_LOC_POSE_INVALID;
     return;
   }
 
   carto::transform::Rigid3d initial_pose = ToRigid3d(msg->pose.pose);
 
   if (!localization_updater_bridge_.SetInitialPose(initial_pose)) {
+    RCLCPP_ERROR(node_->get_logger(), "initialpose: SetInitialPose rejected by engine");
+    last_reloc_error_ = LS::E_LOC_TRIGGER_FAILED;
     return;
   }
+  last_reloc_error_ = LS::E_NONE;
   auto initial_pose_2d = carto::transform::Project2D(initial_pose);
   RCLCPP_WARN(node_->get_logger(),
               "Set initial pose: %.3f, %.3f, %.3f",
