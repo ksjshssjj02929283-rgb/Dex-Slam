@@ -55,7 +55,8 @@ def launch_setup(context, *args, **kwargs):
     localization_node = Node(
         package='robot_localization',
         executable=executable,
-        name='robot_localization',
+        name=filter_type,               # 节点名 = 滤波器类型（ukf/ekf/eskf）
+        namespace='localization',       # 归定位域：相对名 odometry/filtered、set_pose 等落到 /localization/*
         output='screen',
         respawn=True,
         respawn_delay=2.0,
@@ -63,11 +64,8 @@ def launch_setup(context, *args, **kwargs):
             params_file,
             {'use_sim_time': use_sim_time}
         ],
-        remappings=[
-            # 输出 topic 收敛到节点私有域 /robot_localization/（EKF 状态估计输出）
-            ('odometry/filtered', '~/odometry/filtered'),
-            ('accel/filtered', '~/accel/filtered'),
-        ]
+        # 不再 remap 到节点私有域：相对名经 namespace 解析为 /localization/odometry/filtered、/localization/accel/filtered
+        remappings=[]
     )
     
     return [localization_node]

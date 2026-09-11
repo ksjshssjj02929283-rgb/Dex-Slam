@@ -91,7 +91,7 @@ namespace cartographer_ros {
 class LocalizationManagerNode : public rclcpp::Node {
 public:
   explicit LocalizationManagerNode()
-      : Node("localization_node"), 
+      : Node("localization"), 
         state_(LocalizationState::STOPPED) {
     
     RCLCPP_INFO(get_logger(), "Initializing LocalizationManager Node");
@@ -740,15 +740,15 @@ private:
   }
 
   bool StartFilter() {
-    return CallRobotLocalizationService("/robot_localization/start_filter");
+    return CallRobotLocalizationService("/localization/start_filter");
   }
 
   bool StopFilter() {
-    return CallRobotLocalizationService("/robot_localization/stop_filter");
+    return CallRobotLocalizationService("/localization/stop_filter");
   }
 
   bool ResetFilter() {
-    return CallRobotLocalizationService("/robot_localization/reset_filter");
+    return CallRobotLocalizationService("/localization/reset_filter");
   }
 
   void PerformHealthCheck() {

@@ -166,7 +166,7 @@ LocalizationNode::LocalizationNode(
   // Cross-node contract: localization_node pushes the accepted pose to the
   // robot_localization filter through its fixed absolute service.
   set_pose_client_ = node_->create_client<robot_localization::srv::SetPose>(
-      "/robot_localization/set_pose");
+      "/localization/set_pose");
 
   // 服务  
   submap_query_service_ = node_->create_service<cartographer_ros_msgs::srv::SubmapQuery>(
@@ -1131,13 +1131,13 @@ bool LocalizationNode::SetInitialPoseInFilter(
   // 该服务只在定位域内部使用（对外不暴露，契约分级 ⚪L3），无需本包再定义同名类型。
   if (!set_pose_client_) {
     RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                          "Client /robot_localization/set_pose is not initialized; will retry");
+                          "Client /localization/set_pose is not initialized; will retry");
     return false;  // fail closed，不清 need_set_pose_in_filter_
   }
 
   if (!set_pose_client_->service_is_ready()) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                         "Service /robot_localization/set_pose is not available yet, will retry");
+                         "Service /localization/set_pose is not available yet, will retry");
     return false;  // 保留 need_set_pose_in_filter_，下个发布周期重试
   }
 
@@ -1150,7 +1150,7 @@ bool LocalizationNode::SetInitialPoseInFilter(
       [](rclcpp::Client<robot_localization::srv::SetPose>::SharedFuture) {});
   need_set_pose_in_filter_ = false;
   RCLCPP_INFO(node_->get_logger(),
-              "Initial pose sent to /robot_localization/set_pose");
+              "Initial pose sent to /localization/set_pose");
   return true;
 }
 
@@ -1166,7 +1166,7 @@ bool LocalizationNode::StopFilter()
     
     // 创建临时客户端
     auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(
-        "/robot_localization/stop_filter");
+        "/localization/stop_filter");
     
     if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
       RCLCPP_WARN(node_->get_logger(), "Timed out waiting for stop_filter service");
@@ -1225,7 +1225,7 @@ bool LocalizationNode::StartFilter()
         rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(false));
     
     auto temp_client = temp_node->create_client<std_srvs::srv::Trigger>(
-        "/robot_localization/start_filter");
+        "/localization/start_filter");
     
     if (!temp_client->wait_for_service(std::chrono::seconds(5))) {
       RCLCPP_WARN(node_->get_logger(), "Timed out waiting for start_filter service");

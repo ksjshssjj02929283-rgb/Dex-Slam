@@ -725,13 +725,13 @@ MAPPING_INPUT_TOPICS = {
     "/feedback/odom": "nav_msgs/msg/Odometry",
 }
 MAPPING_OUTPUT_TOPICS = {
-    "/mapping_node/state": "nav_interfaces/msg/MappingState",
+    "/mapping/state": "nav_interfaces/msg/MappingState",
     "/map": "nav_msgs/msg/OccupancyGrid",
 }
 MAPPING_SERVICES = {
-    "/mapping_node/start_mapping": "nav_interfaces/srv/StartMapping",
-    "/mapping_node/cancel_mapping": "std_srvs/srv/Trigger",
-    "/mapping_node/finish_mapping": "std_srvs/srv/Trigger",
+    "/mapping/start_mapping": "nav_interfaces/srv/StartMapping",
+    "/mapping/cancel_mapping": "std_srvs/srv/Trigger",
+    "/mapping/finish_mapping": "std_srvs/srv/Trigger",
 }
 LOCALIZATION_INPUT_TOPICS = {
     "/laser_scan/front": "sensor_msgs/msg/LaserScan",
@@ -742,13 +742,13 @@ LOCALIZATION_INPUT_TOPICS = {
     "/initialpose": "geometry_msgs/msg/PoseWithCovarianceStamped",
 }
 LOCALIZATION_OUTPUT_TOPICS = {
-    "/localization_node/loc_pose": (
+    "/localization/loc_pose": (
         "geometry_msgs/msg/PoseWithCovarianceStamped"
     ),
-    "/localization_node/state": "nav_interfaces/msg/LocalizationState",
-    "/localization_node/tracked_path": "nav_msgs/msg/Path",
-    "/robot_localization/odometry/filtered": "nav_msgs/msg/Odometry",
-    "/robot_localization/set_pose": (
+    "/localization/state": "nav_interfaces/msg/LocalizationState",
+    "/localization/tracked_path": "nav_msgs/msg/Path",
+    "/localization/odometry/filtered": "nav_msgs/msg/Odometry",
+    "/localization/set_pose": (
         "geometry_msgs/msg/PoseWithCovarianceStamped"
     ),
     "/map": "nav_msgs/msg/OccupancyGrid",
@@ -757,20 +757,20 @@ LOCALIZATION_SERVICES = {
     "/map_manager/load_map": "nav_interfaces/srv/LoadMap",
     "/map_manager/get_current_map_info": "nav_interfaces/srv/GetMapInfo",
     "/map_manager/get_map_list": "nav_interfaces/srv/GetMapList",
-    "/localization_node/start_localization": "std_srvs/srv/Trigger",
-    "/localization_node/stop_localization": "std_srvs/srv/Trigger",
-    "/localization_node/reset_localization": "std_srvs/srv/Trigger",
-    "/localization_node/save_map": "nav_interfaces/srv/SaveMap",
-    "/localization_node/reset_map_origin": "std_srvs/srv/Trigger",
-    "/localization_node/relocalization": "nav_interfaces/srv/Relocalize",
+    "/localization/start_localization": "std_srvs/srv/Trigger",
+    "/localization/stop_localization": "std_srvs/srv/Trigger",
+    "/localization/reset_localization": "std_srvs/srv/Trigger",
+    "/localization/save_map": "nav_interfaces/srv/SaveMap",
+    "/localization/reset_map_origin": "std_srvs/srv/Trigger",
+    "/localization/relocalization": "nav_interfaces/srv/Relocalize",
     "/map_asset_manager/save_assets": "nav_interfaces/srv/SaveAssets",
     "/map_asset_manager/reload_data": "std_srvs/srv/Trigger",
     "/map_asset_manager/transform_assets": (
         "nav_interfaces/srv/TransformAssets"
     ),
-    "/robot_localization/set_pose": "robot_localization/srv/SetPose",
-    "/robot_localization/start_filter": "std_srvs/srv/Trigger",
-    "/robot_localization/stop_filter": "std_srvs/srv/Trigger",
+    "/localization/set_pose": "robot_localization/srv/SetPose",
+    "/localization/start_filter": "std_srvs/srv/Trigger",
+    "/localization/stop_filter": "std_srvs/srv/Trigger",
 }
 
 
@@ -955,7 +955,7 @@ def check_set_pose_endpoints(
             "ros2",
             "topic",
             "info",
-            "/robot_localization/set_pose",
+            "/localization/set_pose",
             "--verbose",
             "--no-daemon",
             "--spin-time",
@@ -1037,12 +1037,12 @@ def check_set_pose_endpoints(
         for endpoint in all_subscription_endpoints
     ) or len(all_subscription_endpoints) > 1
     publisher_owner_ok = (
-        has_node(publishers, "localization_node")
-        or node_publishers.get("/robot_localization/set_pose") == expected_type
+        has_node(publishers, "localization")
+        or node_publishers.get("/localization/set_pose") == expected_type
     ) and not publisher_conflict
     subscriber_owner_ok = (
         has_node(subscriptions, "robot_localization")
-        or node_subscriptions.get("/robot_localization/set_pose") == expected_type
+        or node_subscriptions.get("/localization/set_pose") == expected_type
     ) and not subscriber_conflict
     anonymous_publisher_ok = bool(
         not publisher_owner_ok
@@ -1070,7 +1070,7 @@ def check_set_pose_endpoints(
         if anonymous_publisher_ok
         else (
             f"topic_info_publishers={sorted(publishers)}; "
-            f"node_info_type={node_publishers.get('/robot_localization/set_pose', 'missing')}"
+            f"node_info_type={node_publishers.get('/localization/set_pose', 'missing')}"
         )
     )
     subscriber_actual = (
@@ -1083,7 +1083,7 @@ def check_set_pose_endpoints(
         if anonymous_subscriber_ok
         else (
             f"topic_info_subscriptions={sorted(subscriptions)}; "
-            f"node_info_type={node_subscriptions.get('/robot_localization/set_pose', 'missing')}"
+            f"node_info_type={node_subscriptions.get('/localization/set_pose', 'missing')}"
         )
     )
     if not publisher_ok:
@@ -1098,14 +1098,14 @@ def check_set_pose_endpoints(
     checks = [
         interface_check(
             "topic-publisher",
-            "/robot_localization/set_pose <- /localization_node",
+            "/localization/set_pose <- /localization_node",
             expected_type,
             publisher_actual,
             publisher_ok,
         ),
         interface_check(
             "topic-subscription",
-            "/robot_localization/set_pose -> /robot_localization",
+            "/localization/set_pose -> /robot_localization",
             expected_type,
             subscriber_actual,
             subscriber_ok,
@@ -1123,7 +1123,7 @@ class LocalizationStateCapture:
             "ros2",
             "topic",
             "echo",
-            "/localization_node/state",
+            "/localization/state",
             "nav_interfaces/msg/LocalizationState",
         ]
         self.process: subprocess.Popen[str] | None = None
@@ -1609,7 +1609,7 @@ def read_localization_state(
 ) -> dict[str, Any] | None:
     result = read_topic_once(
         reporter,
-        "/localization_node/state",
+        "/localization/state",
         "nav_interfaces/msg/LocalizationState",
         timeout_s=timeout_s,
     )
@@ -1638,7 +1638,7 @@ def read_localization_pose(
 ) -> dict[str, float | str] | None:
     result = read_topic_once(
         reporter,
-        "/localization_node/loc_pose",
+        "/localization/loc_pose",
         "geometry_msgs/msg/PoseWithCovarianceStamped",
         timeout_s=timeout_s,
     )
@@ -1681,7 +1681,7 @@ def read_mapping_state(
 ) -> tuple[int, str] | None:
     result = read_topic_once(
         reporter,
-        "/mapping_node/state",
+        "/mapping/state",
         "nav_interfaces/msg/MappingState",
         timeout_s=timeout_s,
     )
@@ -1756,8 +1756,8 @@ def check_legacy_interfaces(
     reporter: Reporter, graph: GraphSnapshot, test_id: str
 ) -> None:
     forbidden_services = {
-        "/localization_node/set_map_changed",
-        "/localization_node/rollback_map_to",
+        "/localization/set_map_changed",
+        "/localization/rollback_map_to",
     }
     forbidden_topics = {
         "/map_manager/map_folder",
@@ -1859,9 +1859,9 @@ def check_legacy_interfaces(
 def check_mapping_contract(
     reporter: Reporter, graph: GraphSnapshot
 ) -> None:
-    nodes_missing = missing_nodes(graph.nodes, ("mapping_node",))
+    nodes_missing = missing_nodes(graph.nodes, ("mapping",))
     checks = presence_checks(
-        "node", graph.nodes, ("mapping_node",), expected_present=True
+        "node", graph.nodes, ("mapping",), expected_present=True
     )
     checks.extend(
         contract_interface_checks(
@@ -1905,7 +1905,7 @@ def check_localization_contract(
 ) -> None:
     required_nodes = (
         "map_manager",
-        "localization_node",
+        "localization",
         "map_asset_manager",
         "robot_localization",
     )
@@ -1937,8 +1937,8 @@ def check_localization_contract(
         if not check.normal
     )
     tracked_path_missing = (
-        "/localization_node/loc_pose" in graph.topics
-        and "/localization_node/tracked_path" not in graph.topics
+        "/localization/loc_pose" in graph.topics
+        and "/localization/tracked_path" not in graph.topics
     )
     if tracked_path_missing:
         deployment_hint = (
@@ -1953,7 +1953,7 @@ def check_localization_contract(
             deployment_hint,
         )
         detail_parts.append(deployment_hint)
-    if "/robot_localization/set_pose" in graph.topics:
+    if "/localization/set_pose" in graph.topics:
         endpoint_errors, endpoint_checks = check_set_pose_endpoints(reporter)
         detail_parts.extend(endpoint_errors)
         checks.extend(endpoint_checks)
@@ -2028,19 +2028,19 @@ def check_localization_state(reporter: Reporter) -> None:
         else (
             f"状态或得分非法：status={status} score={score}"
             if state is not None
-            else "10 秒内未收到 /localization_node/state"
+            else "10 秒内未收到 /localization/state"
         ),
         [
             interface_check(
                 "topic",
-                "/localization_node/state",
+                "/localization/state",
                 "LocalizationState.status in {-2,-1,0,1,2,3,4}",
                 status,
                 status in {-2, -1, 0, 1, 2, 3, 4},
             ),
             interface_check(
                 "message-field",
-                "/localization_node/state.score",
+                "/localization/state.score",
                 "finite value in [0,1]",
                 score,
                 score_ok,
@@ -2086,7 +2086,7 @@ def check_ekf_rate(reporter: Reporter, sample_s: float) -> None:
             "ros2",
             "topic",
             "hz",
-            "/robot_localization/odometry/filtered",
+            "/localization/odometry/filtered",
             "--window",
             "50",
         ],
@@ -2108,7 +2108,7 @@ def check_ekf_rate(reporter: Reporter, sample_s: float) -> None:
         [
             interface_check(
                 "topic-rate",
-                "/robot_localization/odometry/filtered",
+                "/localization/odometry/filtered",
                 "23~27 Hz",
                 f"{rate} Hz" if rate is not None else "unavailable",
                 passed,
@@ -2277,8 +2277,8 @@ def capture_package_prefixes(reporter: Reporter) -> None:
 def mode_checks(
     graph: GraphSnapshot, expected_mode: str
 ) -> list[InterfaceCheck]:
-    mapping_present = has_node(graph.nodes, "mapping_node")
-    localization_node_present = has_node(graph.nodes, "localization_node")
+    mapping_present = has_node(graph.nodes, "mapping")
+    localization_node_present = has_node(graph.nodes, "localization")
     map_manager_present = has_node(graph.nodes, "map_manager")
     if expected_mode == "mapping":
         return [
@@ -2342,9 +2342,9 @@ def run_check(
     graph = graph_snapshot(reporter, requested_id)
     if graph is None:
         return None, mode
-    mapping_present = has_node(graph.nodes, "mapping_node")
+    mapping_present = has_node(graph.nodes, "mapping")
     localization_present = has_node(
-        graph.nodes, "localization_node"
+        graph.nodes, "localization"
     ) or has_node(graph.nodes, "map_manager")
     detected = mode
     if mapping_present and localization_present:
@@ -2503,7 +2503,7 @@ def run_relocalization_trial(
     reporter.script_step(
         scope,
         "启动持续状态观察器",
-        "订阅 /localization_node/state，服务调用前必须先收到至少一个基线样本",
+        "订阅 /localization/state，服务调用前必须先收到至少一个基线样本",
     )
     observer_started = time.monotonic()
     capture = LocalizationStateCapture(reporter)
@@ -2918,7 +2918,7 @@ def metric_interface_checks(
             interface_check(
                 "service+topic",
                 (
-                    f"{service} + /localization_node/state + "
+                    f"{service} + /localization/state + "
                     f"{log_tag or 'all-tags'}@syslog "
                     f"trial {trial['trial']:02d}"
                 ),
@@ -2953,7 +2953,7 @@ def run_global_relocalization_metrics(
     log_path: Path,
     log_tag: str,
 ) -> dict[str, Any]:
-    service = "/localization_node/relocalization"
+    service = "/localization/relocalization"
     trials = []
     for trial in range(1, RELOCALIZATION_TRIALS + 1):
         trials.append(
@@ -3005,7 +3005,7 @@ def run_perturbed_pose_metrics(
     log_path: Path,
     log_tag: str,
 ) -> dict[str, Any]:
-    service = "/localization_node/relocalization"
+    service = "/localization/relocalization"
     bounds_ok = (
         0.0 <= position_min_m <= position_max_m
         and 0.0 <= yaw_min_deg <= yaw_max_deg <= 180.0
@@ -3063,7 +3063,7 @@ def run_perturbed_pose_metrics(
                 "samples": [],
                 "success": False,
                 "failure_reason": (
-                    "cannot read map-frame /localization_node/loc_pose; "
+                    "cannot read map-frame /localization/loc_pose; "
                     f"frame={actual_frame}"
                 ),
             }
@@ -3123,7 +3123,7 @@ def run_perturbed_pose_metrics(
                 position_max_m,
             ],
             "yaw_perturbation_deg": [yaw_min_deg, yaw_max_deg],
-            "pose_source": "/localization_node/loc_pose",
+            "pose_source": "/localization/loc_pose",
         }
     )
     store_relocalization_metrics(
@@ -3151,7 +3151,7 @@ def run_perturbed_pose_metrics(
         [
             interface_check(
                 "topic",
-                "/localization_node/loc_pose",
+                "/localization/loc_pose",
                 "current pose readable in map frame before each trial",
                 (
                     f"{pose_acquisition_count}/{RELOCALIZATION_TRIALS} "
@@ -3455,7 +3455,7 @@ def model_c_result_checks(
         ),
         interface_check(
             "topic",
-            "/localization_node/state",
+            "/localization/state",
             "final status=4 and finite score in [0,1]",
             (
                 f"statuses={result['localization_statuses']}, "
@@ -3536,7 +3536,7 @@ def run_model_c_backup_rollback(
     service_types = {
         backup_service: "std_srvs/srv/Trigger",
         rollback_service: "nav_interfaces/srv/RollbackMap",
-        "/localization_node/save_map": "nav_interfaces/srv/SaveMap",
+        "/localization/save_map": "nav_interfaces/srv/SaveMap",
         "/map_asset_manager/save_assets": "nav_interfaces/srv/SaveAssets",
     }
     observed_types = {
@@ -4089,7 +4089,7 @@ def run_localization_mutations(
             [
                 interface_check(
                     "topic",
-                    "/localization_node/state",
+                    "/localization/state",
                     "final status=4 without -2/-1",
                     statuses[-20:],
                     success,
@@ -4103,7 +4103,7 @@ def run_localization_mutations(
             relocalization_trial = run_relocalization_trial(
                 reporter,
                 trial=0,
-                service="/localization_node/relocalization",
+                service="/localization/relocalization",
                 service_type="nav_interfaces/srv/Relocalize",
                 request="{mode: 0}",
                 timeout_s=localization_timeout_s,
@@ -4129,7 +4129,7 @@ def run_localization_mutations(
                 [
                     interface_check(
                         "service",
-                        "/localization_node/relocalization",
+                        "/localization/relocalization",
                         "success=true",
                         f"success={service_success}",
                         service_success,
@@ -4137,7 +4137,7 @@ def run_localization_mutations(
                     interface_check(
                         "topic+log",
                         (
-                            "/localization_node/state + "
+                            "/localization/state + "
                             f"{localization_log_tag}@syslog"
                         ),
                         (
@@ -4172,7 +4172,7 @@ def run_localization_mutations(
 
         save_result = call_service(
             reporter,
-            "/localization_node/save_map",
+            "/localization/save_map",
             "nav_interfaces/srv/SaveMap",
             f"{{map_name: '{map_name}'}}",
             timeout_s=90,
@@ -4195,7 +4195,7 @@ def run_localization_mutations(
             [
                 interface_check(
                     "service",
-                    "/localization_node/save_map",
+                    "/localization/save_map",
                     "success=true",
                     f"success={bool_success(text)}",
                     bool_success(text),
@@ -4510,11 +4510,11 @@ def run_mapping_mutations(
             "MAP-G-02",
             "建图变更前状态门",
             PENDING_ENV,
-            "10 秒内未读到 /mapping_node/state；未创建测试目录、未调用控制服务",
+            "10 秒内未读到 /mapping/state；未创建测试目录、未调用控制服务",
             [
                 interface_check(
                     "topic",
-                    "/mapping_node/state",
+                    "/mapping/state",
                     "status=IDLE(0)",
                     "unreadable",
                     False,
@@ -4532,7 +4532,7 @@ def run_mapping_mutations(
             [
                 interface_check(
                     "topic",
-                    "/mapping_node/state",
+                    "/mapping/state",
                     "status=IDLE(0)",
                     f"status={initial_state[0]}",
                     False,
@@ -4548,7 +4548,7 @@ def run_mapping_mutations(
         [
             interface_check(
                 "topic",
-                "/mapping_node/state",
+                "/mapping/state",
                 "status=IDLE(0)",
                 f"status={initial_state[0]}",
                 True,
@@ -4560,7 +4560,7 @@ def run_mapping_mutations(
         prepared = True
         start = call_service(
             reporter,
-            "/mapping_node/start_mapping",
+            "/mapping/start_mapping",
             "nav_interfaces/srv/StartMapping",
             f"{{map_name: '{map_name}', overwrite: true}}",
         )
@@ -4579,14 +4579,14 @@ def run_mapping_mutations(
             [
                 interface_check(
                     "service",
-                    "/mapping_node/start_mapping",
+                    "/mapping/start_mapping",
                     "success=true",
                     f"success={started}",
                     started,
                 ),
                 interface_check(
                     "topic",
-                    "/mapping_node/state",
+                    "/mapping/state",
                     "contains MAPPING(1)",
                     statuses,
                     reached_mapping,
@@ -4615,7 +4615,7 @@ def run_mapping_mutations(
         )
         cancel = call_service(
             reporter,
-            "/mapping_node/cancel_mapping",
+            "/mapping/cancel_mapping",
             "std_srvs/srv/Trigger",
             "{}",
         )
@@ -4631,14 +4631,14 @@ def run_mapping_mutations(
             [
                 interface_check(
                     "service",
-                    "/mapping_node/cancel_mapping",
+                    "/mapping/cancel_mapping",
                     "success=true",
                     f"success={bool_success(cancel.stdout)}",
                     bool_success(cancel.stdout),
                 ),
                 interface_check(
                     "topic",
-                    "/mapping_node/state",
+                    "/mapping/state",
                     "final IDLE(0)",
                     statuses,
                     reached_idle,
@@ -4654,7 +4654,7 @@ def run_mapping_mutations(
             [
                 interface_check(
                     "managed-operation",
-                    "/mapping_node/start_mapping",
+                    "/mapping/start_mapping",
                     "completed without exception",
                     f"{type(exc).__name__}: {exc}",
                     False,
@@ -4665,7 +4665,7 @@ def run_mapping_mutations(
         if started:
             call_service(
                 reporter,
-                "/mapping_node/cancel_mapping",
+                "/mapping/cancel_mapping",
                 "std_srvs/srv/Trigger",
                 "{}",
             )
@@ -4794,7 +4794,7 @@ def handle_manual_mapping(
             return
         checks.extend(
             presence_checks(
-                "node", graph.nodes, ("mapping_node",), expected_present=True
+                "node", graph.nodes, ("mapping",), expected_present=True
             )
         )
         state = read_mapping_state(reporter, timeout_s=10)
@@ -4802,7 +4802,7 @@ def handle_manual_mapping(
         checks.append(
             interface_check(
                 "topic",
-                "/mapping_node/state",
+                "/mapping/state",
                 "final IDLE(0)",
                 f"status={state[0]}, map_name={state[1]}" if state else "unreadable",
                 state_ok,
@@ -4849,7 +4849,7 @@ def handle_manual_mapping(
         checks.append(
             interface_check(
                 "topic",
-                "/mapping_node/state",
+                "/mapping/state",
                 "MAPPING(1) while observing",
                 f"status={state[0]}" if state else "unreadable",
                 state is not None and state[0] == 1,
@@ -4884,7 +4884,7 @@ def handle_manual_localization(
         presence_checks(
             "node",
             graph.nodes,
-            ("localization_node", "robot_localization"),
+            ("localization", "robot_localization"),
             expected_present=True,
         )
     )
@@ -4893,9 +4893,9 @@ def handle_manual_localization(
             "topic",
             graph.topics,
             (
-                "/localization_node/state",
-                "/robot_localization/odometry/filtered",
-                "/robot_localization/set_pose",
+                "/localization/state",
+                "/localization/odometry/filtered",
+                "/localization/set_pose",
             ),
             expected_present=True,
         )
@@ -4907,7 +4907,7 @@ def handle_manual_localization(
     checks.append(
         interface_check(
             "topic",
-            "/localization_node/state",
+            "/localization/state",
             "LOC_SUCCESS(4)",
             status,
             status == 4,

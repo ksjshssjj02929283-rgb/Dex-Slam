@@ -71,7 +71,7 @@ def generate_launch_description():
     loc_offline_node = Node(
         package='cartographer_ros',
         executable='loc_offline_node',
-        name='localization_node',  # 统一域名到 /localization_node/（与在线定位一致）；executable 二进制名不变
+        name='localization',  # 统一域名到 /localization/（与在线定位一致）；executable 二进制名不变
         output='screen',
         parameters=[{'use_sim_time': True}],
         arguments=[
