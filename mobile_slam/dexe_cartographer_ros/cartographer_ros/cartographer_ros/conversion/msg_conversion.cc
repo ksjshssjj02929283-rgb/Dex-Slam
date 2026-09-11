@@ -481,40 +481,47 @@ std_msgs::msg::ColorRGBA GetColor(const COLOR& color)
   return color_msg;
 }
 
-visualization_msgs::msg::Marker CreateLineMsg(
-    const int& id, const std::string& frame_id,
-    std::pair<Eigen::Vector2d, Eigen::Vector2d> line,
-    const COLOR pub_color)
+visualization_msgs::msg::Marker CreateLineListMsg(
+    const rclcpp::Time& time, const std::string& frame_id,
+    const std::string& ns, int id,
+    const std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>>& lines,
+    COLOR pub_color, double scale, double alpha)
 {
-  visualization_msgs::msg::Marker line_map_marker;
+  visualization_msgs::msg::Marker line_marker;
+  line_marker.ns = ns;
+  line_marker.id = id;
+  // 时间戳跟随 SLAM 结果，而不是现场 new 一个 system clock 取 now()——后者忽略
+  // use_sim_time，bag 回放时会给出墙上时间戳，RViz 查 TF 失败后直接丢弃 Marker。
+  line_marker.header.stamp = time;
+  line_marker.header.frame_id = frame_id;
+  line_marker.type = visualization_msgs::msg::Marker::LINE_LIST;  // 线
+  line_marker.pose.orientation.w = 1.0;
+  line_marker.scale.x = scale;
+
   std_msgs::msg::ColorRGBA color = GetColor(pub_color);
-  
-  line_map_marker.ns = "global_line";
-  line_map_marker.type = visualization_msgs::msg::Marker::LINE_LIST;  // 线
-  line_map_marker.id = id;
-  line_map_marker.header.stamp = rclcpp::Clock().now();
-  line_map_marker.header.frame_id = frame_id;
-  line_map_marker.scale.x = 0.15;  // kLaneMapMarkerScale;
-  line_map_marker.pose.orientation.w = 1.0;
-  line_map_marker.action = visualization_msgs::msg::Marker::ADD;
-  geometry_msgs::msg::Point point1, point2;
-  if (std::isnan(line.first[0]) || std::isnan(line.first[1]) ||
-      std::isnan(line.second[0]) || std::isnan(line.second[1]))
-  {
-    return line_map_marker;
+  color.a = alpha;
+  line_marker.color = color;
+
+  line_marker.points.reserve(lines.size() * 2);
+  for (const auto& line : lines) {
+    if (!line.first.allFinite() || !line.second.allFinite()) {
+      continue;
+    }
+    geometry_msgs::msg::Point point1, point2;
+    point1.x = line.first[0];
+    point1.y = line.first[1];
+    point1.z = 0;
+    point2.x = line.second[0];
+    point2.y = line.second[1];
+    point2.z = 0;
+    line_marker.points.push_back(point1);
+    line_marker.points.push_back(point2);
   }
 
-
-  point1.x = line.first[0];
-  point1.y = line.first[1];
-  point1.z = 0;
-  point2.x = line.second[0];
-  point2.y = line.second[1];
-  point2.z = 0;
-  line_map_marker.points.push_back(point1);
-  line_map_marker.points.push_back(point2);
-  line_map_marker.color = color;
-  return line_map_marker;
+  line_marker.action = line_marker.points.empty()
+                           ? visualization_msgs::msg::Marker::DELETE
+                           : visualization_msgs::msg::Marker::ADD;
+  return line_marker;
 }
 
 std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> CreateLineMapMsg(
@@ -543,6 +550,8 @@ std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> CreateLineMapMsg(
     corrdinate_text.id = marker_id++;
     if (with_normal) normal_marker.id = marker_id++;
     line_map_marker.ns = corrdinate_text.ns = "lane map";
+    // 法向 Marker 原本没设 ns，落在空 namespace 里，RViz 侧无法单独勾选。
+    normal_marker.ns = "lane normal";
     line_map_marker.type = visualization_msgs::msg::Marker::LINE_LIST;  // 线
     line_map_marker.pose.orientation.w = 1.0;
     corrdinate_text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;

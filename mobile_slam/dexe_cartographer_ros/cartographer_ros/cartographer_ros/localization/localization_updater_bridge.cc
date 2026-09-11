@@ -786,7 +786,9 @@ LocalizationUpdaterBridge::GetLineMap(int& marker_id)
   if (g_line_map == nullptr) {
     return {};
   }
-  const auto line_map_msg = CreateLineMapMsg(rclcpp::Clock().now(),
+  // 全局线特征图是静态的，用零时间戳（RViz 取最新 TF）；取 system clock 的 now()
+  // 会忽略 use_sim_time，bag 回放时 Marker 会因为 TF 查不到而被丢弃。
+  const auto line_map_msg = CreateLineMapMsg(rclcpp::Time(),
                                              node_options_.map_frame,
                                              marker_id, g_line_map, COLOR::black);
 

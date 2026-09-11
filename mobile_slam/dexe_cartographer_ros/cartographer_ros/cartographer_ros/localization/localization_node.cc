@@ -447,40 +447,41 @@ void LocalizationNode::PublishLocalTrajectoryData()
               point_cloud, carto::transform::Rigid3f::Identity())));
     }
 
-    // Matched features (line segments)  
+    // 定位模式下 local 系与 map 系重合，线段无需再做 local_to_map 变换。
+    const rclcpp::Time marker_stamp =
+        ToRos(trajectory_data.local_slam_data->time);
+
+    // Matched features (line segments)
     if (matched_feature_publisher_->get_subscription_count() > 0) {
-      visualization_msgs::msg::MarkerArray local_line_msg;
-      const auto& line_data = trajectory_data.local_slam_data->line_data_in_local;
-      for (const auto& line_element : line_data) {
+      // 一个跟踪 id 可能对应多条观测线段，全部摊平进同一个 LINE_LIST。
+      std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> matched_lines;
+      for (const auto& line_element :
+           trajectory_data.local_slam_data->line_data_in_local) {
         for (const auto& line : line_element.second) {
-          std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen;
-          line_eigen.first = line.begin();
-          line_eigen.second = line.end();
-          local_line_msg.markers.push_back(CreateLineMsg(
-                                            line_element.first,
-                                            node_options_.map_frame,
-                                            line_eigen,
-                                            COLOR::green));
+          matched_lines.emplace_back(line.begin(), line.end());
         }
       }
+      visualization_msgs::msg::MarkerArray local_line_msg;
+      local_line_msg.markers.push_back(CreateLineListMsg(
+          marker_stamp, node_options_.map_frame, kMatchedLineMarkerNs,
+          entry.first /* 每条轨迹一个 id，多轨迹时互不覆盖 */, matched_lines,
+          COLOR::green));
       matched_feature_publisher_->publish(local_line_msg);
     }
 
-    // Local feature map  
+    // Local feature map
     if (local_feature_map_publisher_->get_subscription_count() > 0) {
-      visualization_msgs::msg::MarkerArray map_line_msg;
-      const auto& line_map_2d_list =
-          trajectory_data.local_slam_data->line_map_2d_list->GetLineMapData2DList();
-      for (const auto& line_map : line_map_2d_list) {
-        std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen;
-        line_eigen.first = line_map.second.line_data().begin();
-        line_eigen.second = line_map.second.line_data().end();
-        map_line_msg.markers.push_back(CreateLineMsg(
-                                          line_map.first,
-                                          node_options_.map_frame,
-                                          line_eigen,
-                                          COLOR::red));
+      std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> map_lines;
+      for (const auto& line_map :
+           trajectory_data.local_slam_data->line_map_2d_list
+               ->GetLineMapData2DList()) {
+        map_lines.emplace_back(line_map.second.line_data().begin(),
+                               line_map.second.line_data().end());
       }
+      visualization_msgs::msg::MarkerArray map_line_msg;
+      map_line_msg.markers.push_back(CreateLineListMsg(
+          marker_stamp, node_options_.map_frame, kLocalLineMapMarkerNs,
+          entry.first, map_lines, COLOR::red));
       local_feature_map_publisher_->publish(map_line_msg);
     }
 

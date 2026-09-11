@@ -26,6 +26,19 @@ install(TARGETS cartographer_assets_writer
 
 )
 
+# Standalone regression test for line-feature Marker publishing
+# (RViz Duplicate Marker Check on ~/matched_feature).
+google_binary(line_marker_test
+  SRCS
+    conversion/line_marker_test_main.cc
+)
+
+install(TARGETS line_marker_test
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(localization_node
   SRCS
     localization/loc_node_main.cc

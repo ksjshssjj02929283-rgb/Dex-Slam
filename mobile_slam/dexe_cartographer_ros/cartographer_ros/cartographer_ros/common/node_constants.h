@@ -59,6 +59,10 @@ constexpr char kGlobalFeatureMapTopic[] = "global_feature_map";
 constexpr char kLocalPointCloudTopic[] = "local_cloud_map";
 constexpr char kLocalFeatureMapTopic[] = "local_feature_map";
 constexpr char kMatchedFeatureTopic[] = "matched_feature";
+// 线特征 Marker 的 namespace。RViz 的 MarkerArray 显示按 ns 分组勾选，
+// 每个话题用各自的 ns，便于单独开关，也避免和全局特征图的 "lane map" 混淆。
+constexpr char kMatchedLineMarkerNs[] = "matched_line";
+constexpr char kLocalLineMapMarkerNs[] = "local_line_map";
 constexpr char kScanMatchedPointCloudTopic[] = "scan_matched_points2";
 constexpr char kLocalizationStateTopic[] = "localization_state";
 constexpr char kParticlePosesTopic[] = "particle_poses";
