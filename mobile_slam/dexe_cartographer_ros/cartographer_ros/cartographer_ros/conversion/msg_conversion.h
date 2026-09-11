@@ -17,6 +17,10 @@
 #ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_CONVERSION_MSG_CONVERSION_H
 #define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_CONVERSION_MSG_CONVERSION_H
 
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "cartographer/common/time.h"
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/sensor/landmark_data.h"
@@ -125,8 +129,21 @@ enum COLOR {
 
 std_msgs::msg::ColorRGBA GetColor(const COLOR& color);
 
-visualization_msgs::msg::Marker CreateLineMsg(const int& id, const std::string& frame_id,
-          std::pair<Eigen::Vector2d, Eigen::Vector2d> line, const COLOR pub_color = null);
+// 把一组线段打包进单个 LINE_LIST Marker。
+//
+// 线特征曾按「一条线段一个 Marker」发布，marker.id 直接取自线跟踪 id；而同一个
+// 跟踪 id 在一帧里可能对应多条观测线段（line_data_in_local 的 value 是 vector），
+// 于是同一个 MarkerArray 内出现重复的 (ns, id)，RViz 报 Duplicate Marker Check。
+// LINE_LIST 本身就支持一个 Marker 承载多条互不相连的线段，统一打包后 id 冲突不再
+// 可能出现，消息体也从 N 个 Marker 降到 1 个。
+//
+// lines 为空、或线段全部含 NaN/Inf 时，返回 action=DELETE 的 Marker：空点集的
+// LINE_LIST 会让 RViz 报错，而发空 MarkerArray 又清不掉上一帧的残留线段。
+visualization_msgs::msg::Marker CreateLineListMsg(
+    const rclcpp::Time& time, const std::string& frame_id,
+    const std::string& ns, int id,
+    const std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>>& lines,
+    COLOR pub_color = null, double scale = 0.15, double alpha = 1.0);
 std::unique_ptr<std::vector<visualization_msgs::msg::Marker>> CreateLineMapMsg(
           const rclcpp::Time& time,
           const std::string& frame_id, 

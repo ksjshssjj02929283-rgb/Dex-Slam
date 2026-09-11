@@ -527,39 +527,46 @@ void Node::PublishLocalTrajectoryData() {
       // 获取local到map的变换矩阵
       const Rigid3d& local_to_map = trajectory_data.local_to_map;
       
+      const rclcpp::Time marker_stamp =
+          ToRos(trajectory_data.local_slam_data->time);
+
       if (matched_feature_publisher_->get_subscription_count() > 0) {
-        visualization_msgs::msg::MarkerArray local_line_msg;
-        const auto& line_data = trajectory_data.local_slam_data->line_data_in_local;
-        
-        for (const auto& line_element : line_data) {
+        // 一个跟踪 id 可能对应多条观测线段，全部摊平进同一个 LINE_LIST。
+        std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> matched_lines;
+        for (const auto& line_element :
+             trajectory_data.local_slam_data->line_data_in_local) {
           for (const auto& line : line_element.second) {
             // 使用全局函数风格的坐标转换，与PointCloud保持一致
-            auto transformed_line = cartographer::sensor::TransformLineData(line, local_to_map);
-            std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen = {transformed_line.begin(), transformed_line.end()};
-            local_line_msg.markers.push_back(CreateLineMsg(
-                                              line_element.first,
-                                              node_options_.map_frame,
-                                              line_eigen,
-                                              COLOR::green));
+            const auto transformed_line =
+                cartographer::sensor::TransformLineData(line, local_to_map);
+            matched_lines.emplace_back(transformed_line.begin(),
+                                       transformed_line.end());
           }
         }
+        visualization_msgs::msg::MarkerArray local_line_msg;
+        local_line_msg.markers.push_back(CreateLineListMsg(
+            marker_stamp, node_options_.map_frame, kMatchedLineMarkerNs,
+            entry.first /* 每条轨迹一个 id，多轨迹时互不覆盖 */, matched_lines,
+            COLOR::green));
         matched_feature_publisher_->publish(local_line_msg);
       }
-      
+
       if (local_feature_map_publisher_->get_subscription_count() > 0) {
-        visualization_msgs::msg::MarkerArray map_line_msg;
-        const auto& line_map_2d_list = trajectory_data.local_slam_data->line_map_2d_list->GetLineMapData2DList();
-        
-        for (const auto& line_map : line_map_2d_list) {
+        std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> map_lines;
+        for (const auto& line_map :
+             trajectory_data.local_slam_data->line_map_2d_list
+                 ->GetLineMapData2DList()) {
           // 使用全局函数风格的坐标转换，与PointCloud保持一致
-          auto transformed_line = cartographer::sensor::TransformLineData(line_map.second.line_data(), local_to_map);
-          std::pair<Eigen::Vector2d, Eigen::Vector2d> line_eigen = {transformed_line.begin(), transformed_line.end()};
-          map_line_msg.markers.push_back(CreateLineMsg(
-                                            line_map.first,
-                                            node_options_.map_frame,
-                                            line_eigen,
-                                            COLOR::red));
+          const auto transformed_line =
+              cartographer::sensor::TransformLineData(
+                  line_map.second.line_data(), local_to_map);
+          map_lines.emplace_back(transformed_line.begin(),
+                                 transformed_line.end());
         }
+        visualization_msgs::msg::MarkerArray map_line_msg;
+        map_line_msg.markers.push_back(CreateLineListMsg(
+            marker_stamp, node_options_.map_frame, kLocalLineMapMarkerNs,
+            entry.first, map_lines, COLOR::red));
         local_feature_map_publisher_->publish(map_line_msg);
       }
       extrapolator.AddPose(trajectory_data.local_slam_data->time,
