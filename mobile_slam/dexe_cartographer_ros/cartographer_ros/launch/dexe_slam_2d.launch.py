@@ -55,7 +55,7 @@ def generate_launch_description():
     cartographer_node = Node(
         package='cartographer_ros',
         executable='cartographer_node',
-        name='mapping_node',
+        name='mapping',
         output='screen',
         parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],  # 修复: 使用LaunchConfiguration
         respawn=True,

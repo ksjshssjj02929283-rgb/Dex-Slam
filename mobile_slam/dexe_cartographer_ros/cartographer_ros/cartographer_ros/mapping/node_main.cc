@@ -89,10 +89,10 @@ class MappingNode : public rclcpp::Node
 {
 public:
   explicit MappingNode()
-  : rclcpp::Node("mapping_node")
+  : rclcpp::Node("mapping")
   {
     // Publisher
-    // ~/state：结构化建图状态（唯一状态出口，FQN /mapping_node/state；状态仅经 topic 发布）
+    // ~/state：结构化建图状态（唯一状态出口，FQN /mapping/state；状态仅经 topic 发布）
     state_pub_ = this->create_publisher<nav_interfaces::msg::MappingState>("~/state", 10);
 
     // 建图控制服务放独立回调组：finish 期间阻塞较久，不能拖住默认组里的状态定时器

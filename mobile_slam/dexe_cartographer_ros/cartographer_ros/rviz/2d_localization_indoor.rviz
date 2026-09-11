@@ -332,7 +332,7 @@ Visualization Manager:
       High Resolution: true
       Low Resolution: false
       Name: SubmapsDisplay
-      Submap query service: /localization_node/submap_query
+      Submap query service: /localization/submap_query
       Submaps:
         All: true
         All Submap Pose Markers: true
@@ -395,7 +395,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /localization_node/submap_list
+        Value: /localization/submap_list
       Tracking frame: map
       Value: true
     - Class: rviz_default_plugins/MarkerArray
@@ -408,7 +408,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /localization_node/trajectory_node_list
+        Value: /localization/trajectory_node_list
       Value: false
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false
@@ -420,7 +420,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /localization_node/constraint_list
+        Value: /localization/constraint_list
       Value: false
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false
@@ -432,7 +432,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /localization_node/landmark_poses_list
+        Value: /localization/landmark_poses_list
       Value: false
     - Class: rviz_common/Group
       Displays:
@@ -538,7 +538,7 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /localization_node/global_cloud_map
+            Value: /localization/global_cloud_map
           Use Fixed Frame: true
           Use rainbow: true
           Value: true
@@ -572,7 +572,7 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /localization_node/local_cloud_map
+            Value: /localization/local_cloud_map
           Use Fixed Frame: true
           Use rainbow: true
           Value: false
@@ -586,7 +586,7 @@ Visualization Manager:
             Durability Policy: Transient Local
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /localization_node/global_feature_map
+            Value: /localization/global_feature_map
           Value: true
         - Class: rviz_default_plugins/MarkerArray
           Enabled: false
@@ -598,7 +598,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /localization_node/local_feature_map
+            Value: /localization/local_feature_map
           Value: false
         - Class: rviz_default_plugins/MarkerArray
           Enabled: false
@@ -610,7 +610,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /localization_node/matched_feature
+            Value: /localization/matched_feature
           Value: false
       Enabled: true
       Name: FeatureMap
@@ -726,7 +726,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /localization_node/scan_matched_points2
+        Value: /localization/scan_matched_points2
       Use Fixed Frame: true
       Use rainbow: false
       Value: true
@@ -763,7 +763,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /localization_node/loc_pose
+        Value: /localization/loc_pose
       Value: true
   Enabled: true
   Global Options:
