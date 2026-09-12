@@ -69,7 +69,13 @@ public:
   ~DataPreprocessor() = default;
 
 public:
-  absl::optional<sensor::TimedRangeData> UndistortPointCloud(const sensor::TimedPointCloudOriginData& cloud_in);
+  // 去畸变并把点云表达到 reference_time 时刻的车体系。
+  // 多雷达合并时所有雷达必须传同一个 reference_time（同步时刻）：各雷达末点时刻不同，
+  // 若各自用自己的末点时刻做参考，拼接后的点云之间会相差「车体角速度 × 末点时间差」
+  // 的刚体变换（快速原地旋转时可达 2°），导致匹配结果偏航抖动。
+  absl::optional<sensor::TimedRangeData> UndistortPointCloud(
+      const sensor::TimedPointCloudOriginData& cloud_in,
+      const common::Time& reference_time);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
   
   // 新增接口
