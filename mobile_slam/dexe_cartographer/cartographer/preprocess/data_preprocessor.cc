@@ -1,5 +1,7 @@
 #include "cartographer/preprocess/data_preprocessor.h"
 
+#include <algorithm>
+
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
 #include "cartographer/sensor/sync_point_cloud.h"
@@ -110,7 +112,8 @@ absl::optional<ProcessedSensorData> DataPreprocessor::ProcessSingleSensorData(
   }
   
   // 数据预处理（去畸变）
-  auto undistort_range = UndistortPointCloud(sync_laser_data);
+  // 所有雷达统一表达到同步时刻 sync_time 的车体系，保证合并后点云内部一致
+  auto undistort_range = UndistortPointCloud(sync_laser_data, sync_time);
   if (!undistort_range.has_value()) {
     LOG(WARNING) << "DataPreprocessor: Failed to get processed range data for sensor: " << sensor_id
                  << ", odom_buff_size: " << odom_data_buff_.size();
@@ -290,7 +293,9 @@ sensor::FeatureData DataPreprocessor::GetFeatureData(
 
 // 外插的精度不够，全部使用内插进行去畸变计算
 
-absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(const sensor::TimedPointCloudOriginData& cloud_in)
+absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(
+    const sensor::TimedPointCloudOriginData& cloud_in,
+    const common::Time& reference_time)
 {
   if (!options_.use_odometry()) {
     // 不使用里程计时，直接返回未去畸变的数据
@@ -321,7 +326,9 @@ absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(con
 
     const common::Time cloud_time = cloud_in.time;
     const common::Time latest_odom_time = odom_data_buff_.back().time;
-    const double time_diff_seconds = common::ToSeconds(cloud_time - latest_odom_time);
+    // 参考时刻可能晚于本雷达末点（另一雷达更晚），一并纳入外推距离检查
+    const common::Time latest_needed_time = std::max(cloud_time, reference_time);
+    const double time_diff_seconds = common::ToSeconds(latest_needed_time - latest_odom_time);
     
     // 检查时间差是否过大
     if (time_diff_seconds > 0.1) {
@@ -415,11 +422,14 @@ absl::optional<sensor::TimedRangeData> DataPreprocessor::UndistortPointCloud(con
     undistort_range_data.data.returns.push_back(hit_in_odom, cloud_in.ranges[i].intensity);
   }
   
-  // 4. 将去畸变后的点云从odom坐标系转换回雷达坐标系
-  // 使用最后一个点的位姿作为参考坐标系（即点云结束时刻雷达的位姿）
-  const transform::Rigid3f range_in_odom = range_data_poses.back();
+  // 4. 将去畸变后的点云从odom坐标系转换到 reference_time 时刻的车体坐标系
+  // 不能用本雷达自己的末点位姿（range_data_poses.back()）做参考：多雷达合并时各雷达末点
+  // 时刻不同，各自回到自己的末点时刻再直接拼接，等于把另一雷达的点云多转了
+  // 「角速度 × 末点时间差」。统一用调用方给定的同步时刻，所有雷达才落在同一个车体系里。
+  const transform::Rigid3f range_in_odom =
+      GetOdometryPoseFromBuffer(reference_time, odom_copy).cast<float>();
   sensor::TimedRangeData final_range_data;
-  final_range_data.time = time;
+  final_range_data.time = reference_time;
   final_range_data.data.origin = Eigen::Vector3f::Zero(); // 在雷达坐标系下，origin为零
   
   // 转换returns点云到雷达坐标系
