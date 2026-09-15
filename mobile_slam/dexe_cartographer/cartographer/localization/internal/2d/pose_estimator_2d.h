@@ -18,55 +18,53 @@
 #define CARTOGRAPHER_LOCALIZATION_INTERNAL_2D_POSE_ESTIMATOR_2D_H_
 
 #include <chrono>
+#include <fstream>
 #include <memory>
 #include <mutex>
-#include <fstream>
-#include <string>
 #include <optional>
+#include <string>
 
 #include "cartographer/common/time.h"
+#include "cartographer/laser_perception/data_type.h"
+#include "cartographer/laser_perception/laser_perception.h"
+#include "cartographer/localization/2d/cloud_map_2d.h"
+#include "cartographer/localization/2d/consistency_debug_saver.h"
+#include "cartographer/localization/2d/grid_map_2d.h"
+#include "cartographer/localization/2d/local_map_updater_2d.h"
+#include "cartographer/localization/internal/2d/consistency_checker.h"
+#include "cartographer/localization/internal/2d/pose_initializer_2d.h"
+#include "cartographer/localization/proto/pose_estimator_options_2d.pb.h"
+#include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/ceres_scan_matcher_2d.h"
-#include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/internal/range_data_collator.h"
-#include "cartographer/preprocess/laser_synchronizer.h"
-#include "cartographer/preprocess/data_preprocessor.h"
-
 #include "cartographer/metrics/family_factory.h"
+#include "cartographer/preprocess/data_preprocessor.h"
+#include "cartographer/preprocess/laser_synchronizer.h"
 #include "cartographer/sensor/imu_data.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
+#include "cartographer/sensor/line_data.h"
 #include "cartographer/sensor/odometry_data.h"
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/sensor/timed_point_cloud_data.h"
-#include "cartographer/sensor/line_data.h"
 #include "cartographer/transform/rigid_transform.h"
-#include "cartographer/preprocess/data_preprocessor.h"
-#include "cartographer/laser_perception/data_type.h"
-#include "cartographer/laser_perception/laser_perception.h"
-#include "cartographer/localization/proto/pose_estimator_options_2d.pb.h"
-#include "cartographer/localization/2d/grid_map_2d.h"
-#include "cartographer/localization/2d/cloud_map_2d.h"
-#include "cartographer/mapping/2d/line_map_2d.h"
-#include "cartographer/localization/internal/2d/pose_initializer_2d.h"
-#include "cartographer/localization/internal/2d/consistency_checker.h"
-#include "cartographer/localization/2d/local_map_updater_2d.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
 
 namespace cartographer {
 namespace localization {
 
-enum class LocalizationState
-{
-  LOCALIZATION_FAILED = -2,  // 定位失败
+enum class LocalizationState {
+  LOCALIZATION_FAILED = -2,    // 定位失败
   INITIALIZATION_FAILED = -1,  // 系统初始化中
-  NOT_INITIALIZED = 0,  // 系统初始化中
-  INITIALIZING = 1,  // 系统初始化中
-  INITIALIZED  = 2,  // 系统初始化完成
-  RELOCALIZING = 3,  // 重定位中
-  LOCALIZED    = 4  // 重定位成功
+  NOT_INITIALIZED = 0,         // 系统初始化中
+  INITIALIZING = 1,            // 系统初始化中
+  INITIALIZED = 2,             // 系统初始化完成
+  RELOCALIZING = 3,            // 重定位中
+  LOCALIZED = 4                // 重定位成功
 };
 
 // Wires up the local SLAM stack (i.e. pose extrapolator, scan matching, etc.)
@@ -75,34 +73,41 @@ enum class LocalizationState
 class PoseEstimator2D {
  public:
   struct InsertionResult {
-    std::shared_ptr<const mapping::TrajectoryNode::Data> constant_data;  // 轨迹约束
-    std::vector<std::shared_ptr<const mapping::Submap2D>> insertion_submaps; // submap
+    std::shared_ptr<const mapping::TrajectoryNode::Data>
+        constant_data;  // 轨迹约束
+    std::vector<std::shared_ptr<const mapping::Submap2D>>
+        insertion_submaps;  // submap
   };
   struct MatchingResult {
     common::Time time;
-    transform::Rigid3d local_pose;  // 位姿(in local frame)
+    transform::Rigid3d local_pose;          // 位姿(in local frame)
     sensor::RangeData range_data_in_local;  // range data
-    std::map<int, std::vector<sensor::LineData>>  line_data_in_local;
+    std::map<int, std::vector<sensor::LineData>> line_data_in_local;
     // 'nullptr' if dropped by the motion filter.
-    std::unique_ptr<const InsertionResult> insertion_result;    // 插入结果
+    std::unique_ptr<const InsertionResult> insertion_result;  // 插入结果
   };
 
   explicit PoseEstimator2D(
-	  const proto::PoseEstimatorOptions2D& options,
-	  const std::vector<std::string>& expected_range_sensor_ids);
+      const proto::PoseEstimatorOptions2D& options,
+      const std::vector<std::string>& expected_range_sensor_ids);
   ~PoseEstimator2D();
 
   PoseEstimator2D(const PoseEstimator2D&) = delete;
   PoseEstimator2D& operator=(const PoseEstimator2D&) = delete;
 
-  void InitGlobalMapsFromSubmap(std::shared_ptr<mapping::Submap2D> global_submap);
+  void InitGlobalMapsFromSubmap(
+      std::shared_ptr<mapping::Submap2D> global_submap);
 
-  std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const { return global_static_submap_; }
-  
+  std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const {
+    return global_static_submap_;
+  }
+
   // 获取 LocalMapUpdater2D (用于访问动态地图策略和动态 submap)
-  LocalMapUpdater2D* GetLocalMapUpdater() const { return local_map_updater_.get(); }
+  LocalMapUpdater2D* GetLocalMapUpdater() const {
+    return local_map_updater_.get();
+  }
 
-  bool SetInitialPose(const transform::Rigid3d &initial_pose);
+  bool SetInitialPose(const transform::Rigid3d& initial_pose);
 
   LocalizationState GetLocalizationState() const { return loc_state_; }
 
@@ -118,8 +123,8 @@ class PoseEstimator2D {
   // `range_data` was acquired, `TimedPointCloudData::ranges` contains the
   // relative time of point with respect to `TimedPointCloudData::time`.
   std::unique_ptr<MatchingResult> AddRangeData(
-	  const std::string& sensor_id,
-	  const sensor::TimedPointCloudData& range_data);
+      const std::string& sensor_id,
+      const sensor::TimedPointCloudData& range_data);
   void AddImuData(const sensor::ImuData& imu_data);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
 
@@ -128,71 +133,71 @@ class PoseEstimator2D {
  private:
   // 使用MergedData进行位姿估计和地图更新的重载版本
   std::unique_ptr<MatchingResult> ProcessDataAndEstimatePose(
-    const std::string& sensor_id,
-    const common::Time& time,
-    const preprocess::MergedData& merged_data,
-    const transform::Rigid3d& gravity_alignment,
-    const absl::optional<common::Duration>& sensor_duration,
-    preprocess::DataPreprocessor* data_preprocessor);
-
-
+      const std::string& sensor_id, const common::Time& time,
+      const preprocess::MergedData& merged_data,
+      const transform::Rigid3d& gravity_alignment,
+      const absl::optional<common::Duration>& sensor_duration,
+      preprocess::DataPreprocessor* data_preprocessor);
 
   std::unique_ptr<MatchingResult> ProcessSynchronizedLaserData(
-      const preprocess::LaserSynchronizer::SynchronizedLaserData& synchronized_data);
+      const preprocess::LaserSynchronizer::SynchronizedLaserData&
+          synchronized_data);
 
   transform::Rigid3d GetOdomDeltaPose(const common::Time& laser_time);
-  absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
+  absl::optional<sensor::OdometryData> GetOdometryAtTime(
+      const common::Time& time) const;
   void UpdateLastOdomForDelta(const common::Time& time);
 
   sensor::FeatureData GetFeatureData(
-    const common::Time & time,
-    const std::vector<laser_perception::FeatureMsgWithOrigin> & feature_data);
+      const common::Time& time,
+      const std::vector<laser_perception::FeatureMsgWithOrigin>& feature_data);
 
   sensor::RangeData TransformToGravityAlignedFrameAndFilter(
-	  const transform::Rigid3f& transform_to_gravity_aligned_frame,
-	  const sensor::RangeData& range_data) const;
+      const transform::Rigid3f& transform_to_gravity_aligned_frame,
+      const sensor::RangeData& range_data) const;
 
-  sensor::RangeData FilterRangeData(
-	  const sensor::RangeData& range_data) const;
+  sensor::RangeData FilterRangeData(const sensor::RangeData& range_data) const;
 
   // 线特征存在两套互不相通的 id 编号，插入时必须各用各的：
-  //   tracked_lane_data        —— active_submaps_ 的局部编号，写回 active_submaps_
-  //   global_tracked_lane_data —— 全局地图编号（继承自 pbstream），写回全局动态图
+  //   tracked_lane_data        —— active_submaps_ 的局部编号，写回
+  //   active_submaps_ global_tracked_lane_data —— 全局地图编号（继承自
+  //   pbstream），写回全局动态图
   // 把局部编号写进全局图会让观测被合并进 id 相同但物理上无关的线段。
   std::unique_ptr<InsertionResult> InsertIntoSubmap(
-    const common::Time time,
-    const preprocess::MergedData& merged_data,
-    const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
-    const std::map<int, std::vector<sensor::LineData>>& global_tracked_lane_data,
-    const transform::Rigid3d& pose_estimate,
-    const Eigen::Quaterniond& gravity_alignment);
+      const common::Time time, const preprocess::MergedData& merged_data,
+      const std::map<int, std::vector<sensor::LineData>>& tracked_lane_data,
+      const std::map<int, std::vector<sensor::LineData>>&
+          global_tracked_lane_data,
+      const transform::Rigid3d& pose_estimate,
+      const Eigen::Quaterniond& gravity_alignment);
 
   // Scan matches 'filtered_gravity_aligned_point_cloud' and returns the
   // observed pose, or nullptr on failure.
-  // 两个跟踪结果都要输出：局部编号供 active_submaps_ 使用，全局编号供全局动态图使用。
+  // 两个跟踪结果都要输出：局部编号供 active_submaps_
+  // 使用，全局编号供全局动态图使用。
   std::unique_ptr<transform::Rigid2d> ScanMatch(
-    const common::Time time, const transform::Rigid2d& pose_prediction,
-    const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
-    const sensor::PointCloud& highlight_point_cloud,
-    const std::vector<sensor::LineData> & line_data,
-    std::map<int, std::vector<sensor::LineData>> & track_lane_data,
-    std::map<int, std::vector<sensor::LineData>> & global_tracked_lane_data);
+      const common::Time time, const transform::Rigid2d& pose_prediction,
+      const sensor::PointCloud& filtered_gravity_aligned_point_cloud,
+      const sensor::PointCloud& highlight_point_cloud,
+      const std::vector<sensor::LineData>& line_data,
+      std::map<int, std::vector<sensor::LineData>>& track_lane_data,
+      std::map<int, std::vector<sensor::LineData>>& global_tracked_lane_data);
 
   // 重定位之后，需要初始化建图相关的数据
   void ResetMapping();
 
-private:
+ private:
   const proto::PoseEstimatorOptions2D options_;
   mapping::ActiveSubmaps2D active_submaps_;
 
   // 全局静态地图submap，包含所有全局地图数据(包括cloud和highlight_cloud的ikd-tree)
   std::shared_ptr<mapping::Submap2D> global_static_submap_ = nullptr;
-  
+
   // MotionFilter motion_filter_;
   mapping::MotionFilter keyframe_motion_filter_;
   mapping::MotionFilter map_insertion_motion_filter_;
   mapping::scan_matching::RealTimeCorrelativeScanMatcher2D
-	  real_time_correlative_scan_matcher_;
+      real_time_correlative_scan_matcher_;
   mapping::scan_matching::CeresScanMatcher2D ceres_scan_matcher_;
 
   LocalizationState loc_state_ = LocalizationState::NOT_INITIALIZED;
@@ -229,8 +234,11 @@ private:
   // 一致性检查器，用于检测定位与地图的一致性
   std::unique_ptr<ConsistencyChecker> consistency_checker_;
 
+  // 一致性检查失败时调试数据保存器
+  std::unique_ptr<ConsistencyDebugSaver> consistency_debug_saver_;
+
   std::mutex data_mutex_;
-  
+
   bool has_tried_global_relocalization_ = false;  // 标志是否已尝试全局重定位
 
   std::fstream time_file_;

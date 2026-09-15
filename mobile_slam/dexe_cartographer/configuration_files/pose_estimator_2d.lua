@@ -15,6 +15,7 @@
 include "pose_initializer_2d.lua"
 
 POSE_ESTIMATOR_2D = {
+  save_consistency_debug_data = true,
   use_imu_data = true,
   min_range = 0.,
   max_range = 30.,

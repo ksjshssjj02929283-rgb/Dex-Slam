@@ -28,7 +28,7 @@ import "cartographer/laser_perception/proto/laser_perception_options.proto";
 import "cartographer/localization/proto/pose_initializer_options_2d.proto";
 import "cartographer/localization/proto/local_map_updater_options_2d.proto";
 import "cartographer/localization/proto/consistency_checker_options.proto";
-// NEXT ID: 30
+// NEXT ID: 34
 message PoseEstimatorOptions2D {
   cartographer.preprocess.proto.DataPreprocessorOptions
       data_preprocessor_options = 24;
@@ -94,4 +94,12 @@ message PoseEstimatorOptions2D {
   
   // Consistency checker options
   ConsistencyCheckerOptions consistency_checker_options = 31;
+
+  // IMU+lidar（extrapolator 预测 + 透传去畸变 + 放宽的一致性阈值）继续定位。
+  // 需与 TrajectoryBuilderOptions.odometry_stale_timeout_sec（collator 超时
+  // 跳过）配套开启。false（默认）= odom 强依赖，行为与原版完全一致。
+  bool odometry_optional = 32;
+
+  // 一致性检查失败（漂移确认）时保存调试数据（带彩色标注的地图图像和点云PCD）
+  bool save_consistency_debug_data = 33;
 }
