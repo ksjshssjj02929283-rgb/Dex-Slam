@@ -641,6 +641,22 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     LOG(WARNING) << "Pose consistency check failed, attempting validation and "
                     "recovery...";
 
+    // 保存debug数据： local_map.png + 当前点云/特征
+    if (consistency_debug_saver_) {
+      // 将线数据转换到local坐标系（用于调试可视化）
+      std::map<int, std::vector<sensor::LineData>> lines_in_local_for_debug;
+      for (const auto& data_vec : tracked_lane_data) {
+        for (const auto& line : data_vec.second) {
+          lines_in_local_for_debug[data_vec.first].push_back(
+              sensor::TransformLineData(*pose_estimate_2d, line));
+        }
+      }
+      consistency_debug_saver_->SaveDebugDataAsync(
+          time, *pose_estimate_2d, local_submap,
+          filtered_gravity_aligned_point_cloud,
+          merged_data.merged_highlight_cloud, lines_in_local_for_debug);
+    }
+
     // 步骤2a: 尝试验证位姿
     bool validation_passed = consistency_checker_->ValidatePoseEstimate(
         *pose_estimate_2d, filtered_gravity_aligned_point_cloud, *local_submap);
@@ -713,22 +729,6 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
             << "Localization drift confirmed — relocalizing against static map "
                "before any map update. "
             << drift_result.ToString();
-
-        // 保存漂移发生时的调试数据（异步，不阻塞主循环）
-        if (consistency_debug_saver_) {
-          // 将线数据转换到local坐标系（用于调试可视化）
-          std::map<int, std::vector<sensor::LineData>> lines_in_local_for_debug;
-          for (const auto& data_vec : tracked_lane_data) {
-            for (const auto& line : data_vec.second) {
-              lines_in_local_for_debug[data_vec.first].push_back(
-                  sensor::TransformLineData(*pose_estimate_2d, line));
-            }
-          }
-          consistency_debug_saver_->SaveDebugDataAsync(
-              time, *pose_estimate_2d, live_local,
-              filtered_gravity_aligned_point_cloud,
-              merged_data.merged_highlight_cloud, lines_in_local_for_debug);
-        }
 
         // 以 static map 再匹配位姿为初值，从【漂移免疫的 static 底图】重建干净
         // local map （含 grid + cloud → ikdtree）。绝不能用
