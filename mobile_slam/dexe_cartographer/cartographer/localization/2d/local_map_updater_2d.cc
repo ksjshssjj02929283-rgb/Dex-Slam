@@ -148,6 +148,11 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
       latest_line_id,
       active_line_data);
       
+  // 继承静态底图的线特征 culling 判据（其判据来自 pbstream 内嵌的建图期
+  // submaps_options）。必须在 Finish() 之前 —— Finish() 会立即触发一次
+  // LineDataCulling()，此时若还是类内默认值，建图判据与默认值的差集会被剔除。
+  global_dynamic_submap_->InheritLineCullingParamFrom(*global_static_submap_);
+
   // 重建ikd-trees
   global_dynamic_submap_->RebuildIkdTrees();
   if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
@@ -359,6 +364,8 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
       nullptr,  // local_submap 只用于匹配，不需要 conversion_tables
       std::move(local_cloud), std::make_unique<sensor::PointCloud>(),
       latest_line_id, active_line_data);
+  // 同 SetGlobalSubmap：深拷贝不带 culling 判据，需从源 submap 继承后再 Finish()。
+  new_submap->InheritLineCullingParamFrom(*source_submap);
   new_submap->RebuildIkdTrees();
   new_submap->Finish();
 

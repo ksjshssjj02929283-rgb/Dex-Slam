@@ -843,6 +843,17 @@ void Submap2D::SetLineCullingParam(const double& min_line_length,
   line_map_2d_list_->SetCullingParam(min_line_length, max_line_length, culling_obs);
 }
 
+void Submap2D::InheritLineCullingParamFrom(const Submap2D& source)
+{
+  const LineMap2DList* source_list = source.line_map_2d_list();
+  if (source_list == nullptr || line_map_2d_list_ == nullptr) {
+    return;
+  }
+  line_map_2d_list_->SetCullingParam(source_list->min_line_length(),
+                                     source_list->max_line_length(),
+                                     source_list->culling_obs());
+}
+
 void Submap2D::InsertLineData(
   const std::map<int, std::vector<sensor::LineData>> & line_data)
 {

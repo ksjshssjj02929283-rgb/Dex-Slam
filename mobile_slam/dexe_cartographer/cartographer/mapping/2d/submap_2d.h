@@ -142,6 +142,11 @@ class Submap2D : public Submap {
   void SetLineCullingParam(const double& min_line_length,
                            const double& max_line_length,
                            const int& culling_obs);
+  // 从源 submap 继承线特征 culling 判据。
+  // 深拷贝构造（origin/grid/cloud/line_data 那个 ctor）不会带上判据，新 submap
+  // 会退回 LineMap2DList 的类内默认值；若源 submap 的判据来自建图期 lua 或
+  // pbstream 内嵌 options，两套判据的差集就会在首次 culling 时被静默剔除。
+  void InheritLineCullingParamFrom(const Submap2D& source);
   void SetCullingInterval(const int& interval) { culling_interval_ = interval; }
 
   void FreshCloudData() const;
