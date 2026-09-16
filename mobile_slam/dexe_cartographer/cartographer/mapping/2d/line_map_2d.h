@@ -43,7 +43,9 @@ private:
   sensor::LineData line_data_;
   std::vector<sensor::LineData> line_data_list_;
   int lose_time_;
-  int inliers_;
+  // 两个构造函数都不在初始化列表里给它赋值，而 LineDataCulling() 以
+  // `inliers < 3` 判剔除 —— 不给默认值就会拿栈上残留值去做剔除判定。
+  int inliers_ = 0;
 
 public:
   enum LineMapTpye
@@ -155,6 +157,12 @@ public:
   void SetCullingParam(const double& min_line_length,
                        const double& max_line_length,
                        const int& culling_obs);
+
+  // 当前生效的 culling 判据。深拷贝出的 submap 需要据此继承源 submap 的判据，
+  // 否则退回本类默认值，与建图期 lua 配置不一致（见 Submap2D::InheritLineCullingParamFrom）。
+  double min_line_length() const {return min_line_length_;}
+  double max_line_length() const {return max_line_length_;}
+  int culling_obs() const {return culling_obs_;}
 
   size_t size() const {return line_map_data_list_.size();}
   void UpdateLoseTime();

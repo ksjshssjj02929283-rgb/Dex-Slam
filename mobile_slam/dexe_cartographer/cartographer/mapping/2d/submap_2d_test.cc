@@ -39,6 +39,15 @@ TEST(Submap2DTest, TheRightNumberOfRangeDataAreInserted) {
       "num_range_data = " +
       std::to_string(kNumRangeData) +
       ", "
+      // 本 fork 给 CreateSubmapsOptions2D 增加了 5 个必填键，上游用例的内联
+      // 字典一直没同步，导致该用例在读 cloud_culling_prob 时 CHECK 失败。
+      // cloud_culling_prob 取 0.1（CloudDataCulling 的关闭值），使本用例仍然
+      // 只度量它原本要度量的「插入了多少帧 range data」。
+      "cloud_culling_prob = 0.1, "
+      "min_line_length = 0.3, "
+      "max_line_length = 7.0, "
+      "line_culling_obs = 2, "
+      "culling_interval = 5, "
       "grid_options_2d = {"
       "grid_type = \"PROBABILITY_GRID\","
       "resolution = 0.05, "
@@ -128,6 +137,55 @@ TEST(Submap2DTest, ToFromProto) {
       actual.grid()->limits().max(), 1e-6));
   EXPECT_EQ(expected.grid()->limits().cell_limits().num_x_cells,
             actual.grid()->limits().cell_limits().num_x_cells);
+}
+
+// B20260817：LocalMapUpdater2D 从 static submap 深拷贝出 dynamic submap 后，
+// 从不调用 SetLineCullingParam，于是这棵 submap 全程使用 LineMap2DList 的类内
+// 默认 min 0.4，而建图 lua 配的是 0.3 —— 长度落在 [0.3, 0.4) 的线段会在定位期
+// 首次 culling 被静默剔除，并在 dynamic_map_policy = PERSISTENT 下随下一次
+// save_map 写回磁盘，即每存一次盘就永久少一批短线段。
+// 真实地图 20260711_xmk 实测：108 条线里 2 条命中该区间。
+TEST(Submap2DTest, InheritedLineCullingParamKeepsShortLineThatDefaultsWouldCull) {
+  constexpr double kShortLineLength = 0.36;  // 落在 [建图 0.3, 类内默认 0.4)
+  ValueConversionTables conversion_tables;
+
+  const auto make_submap_with_short_line = [&conversion_tables,
+                                            kShortLineLength] {
+    const sensor::LineData short_line(Eigen::Vector2d(0.0, 0.0),
+                                      Eigen::Vector2d(kShortLineLength, 0.0));
+    MapLine2D line(/*local_id=*/0, short_line);
+    line.SetInliers(20);  // 远高于 inliers < 3 门槛，确保只有长度判据起作用
+    std::map<int, MapLine2D> active_line_data;
+    active_line_data.insert({0, line});
+    return absl::make_unique<Submap2D>(
+        Eigen::Vector2f(0.f, 0.f),
+        absl::make_unique<ProbabilityGrid>(
+            MapLimits(1., Eigen::Vector2d(2., 3.), CellLimits(100, 110)),
+            &conversion_tables),
+        &conversion_tables, absl::make_unique<sensor::PointCloud>(),
+        absl::make_unique<sensor::PointCloud>(), /*latest_line_id=*/1,
+        std::move(active_line_data));
+  };
+
+  // 对照组：不继承判据 → 走类内默认 0.4 → Finish() 触发 culling 后线段消失。
+  // 这正是缺陷现场。
+  auto without_inheritance = make_submap_with_short_line();
+  ASSERT_EQ(without_inheritance->line_map_2d_list()->size(), 1u);
+  without_inheritance->Finish();
+  ASSERT_EQ(without_inheritance->line_map_2d_list()->size(), 0u)
+      << "前提失效：该长度在类内默认判据下本应被剔除";
+
+  // 源 submap 持有建图期判据（线上实际来自 pbstream 内嵌 submaps_options）。
+  auto source = make_submap_with_short_line();
+  source->SetLineCullingParam(/*min_line_length=*/0.3, /*max_line_length=*/7.0,
+                              /*culling_obs=*/2);
+
+  auto target = make_submap_with_short_line();
+  target->InheritLineCullingParamFrom(*source);
+  target->Finish();
+
+  EXPECT_EQ(target->line_map_2d_list()->size(), 1u)
+      << "继承源 submap 判据后，[0.3, 0.4) 区间的线段不应在定位期被剔除";
 }
 
 }  // namespace

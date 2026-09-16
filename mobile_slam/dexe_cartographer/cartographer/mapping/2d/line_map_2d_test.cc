@@ -16,7 +16,9 @@
 
 #include "cartographer/mapping/2d/line_map_2d.h"
 
+#include <cstring>
 #include <map>
+#include <new>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -127,6 +129,62 @@ TEST(LineMap2DListTest, CullingStillRemovesPersistedLinesFailingOtherCriteria) {
 
   EXPECT_EQ(line_map.size(), 1u) << "长度/内点不合格的加载线段仍应被剔除";
   EXPECT_EQ(line_map.GetLineMapData2DList().count(0), 1u);
+}
+
+// culling 判据需要能被读出来，深拷贝的 submap 才能从源 submap 继承它们。
+TEST(LineMap2DListTest, CullingParamGettersExposeEffectiveCriteria) {
+  LineMap2DList line_map;
+
+  EXPECT_DOUBLE_EQ(line_map.min_line_length(), 0.4);
+  EXPECT_DOUBLE_EQ(line_map.max_line_length(), 7.0);
+  EXPECT_EQ(line_map.culling_obs(), 3);
+
+  line_map.SetCullingParam(0.3, 6.0, 2);
+
+  EXPECT_DOUBLE_EQ(line_map.min_line_length(), 0.3);
+  EXPECT_DOUBLE_EQ(line_map.max_line_length(), 6.0);
+  EXPECT_EQ(line_map.culling_obs(), 2);
+}
+
+// 在一块被 0xAB 填满的存储上 placement-new 构造，使「未初始化」与「初始化为 0」
+// 可区分 —— 否则栈上恰好残留 0 时，测试会假过。
+template <typename Ctor>
+int InliersOfFreshlyConstructedLine(const Ctor& construct) {
+  alignas(MapLine2D) unsigned char storage[sizeof(MapLine2D)];
+  std::memset(storage, 0xAB, sizeof(storage));
+  MapLine2D* line = construct(storage);
+  const int inliers = line->inliers();
+  line->~MapLine2D();
+  return inliers;
+}
+
+// LineDataCulling() 以 `inliers < 3` 作为剔除判据之一，而 MapLine2D 的两个构造
+// 函数都没给 inliers_ 赋初值。读到的残留值既可能让未拟合的线段逃过剔除，
+// 也可能把合格线段误删，且随构建/调用栈变化，不可复现。
+TEST(MapLine2DTest, FreshLineStartsWithZeroInliers) {
+  const sensor::LineData line_data(Eigen::Vector2d(0.0, 0.0),
+                                   Eigen::Vector2d(1.0, 0.0));
+
+  const int inliers = InliersOfFreshlyConstructedLine(
+      [&line_data](void* storage) {
+        return new (storage) MapLine2D(/*local_id=*/1, line_data);
+      });
+
+  EXPECT_EQ(inliers, 0) << "inliers_ 未初始化，读到的是构造前的残留值";
+}
+
+// 另一个构造函数（static_line / updata 路径）同样未初始化 inliers_。
+TEST(MapLine2DTest, PersistedLineStartsWithZeroInliers) {
+  const sensor::LineData line_data(Eigen::Vector2d(0.0, 0.0),
+                                   Eigen::Vector2d(1.0, 0.0));
+
+  const int inliers = InliersOfFreshlyConstructedLine(
+      [&line_data](void* storage) {
+        return new (storage) MapLine2D(MapLine2D::static_line,
+                                       /*global_id=*/7, line_data);
+      });
+
+  EXPECT_EQ(inliers, 0) << "inliers_ 未初始化，读到的是构造前的残留值";
 }
 
 }  // namespace
