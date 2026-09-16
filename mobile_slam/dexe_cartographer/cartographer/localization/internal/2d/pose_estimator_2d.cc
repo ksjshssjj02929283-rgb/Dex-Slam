@@ -76,6 +76,20 @@ PoseEstimator2D::PoseEstimator2D(
 
   // 初始化一致性检查器
   consistency_checker_ = std::make_unique<ConsistencyChecker>(options_);
+
+  // 一致性/恢复现场快照（排障用，由 lua consistency_checker.debug_dump_enabled 打开）
+  {
+    const auto& cc = options_.consistency_checker_options();
+    ConsistencyDebugDumper::Options dump_options;
+    dump_options.enabled = cc.debug_dump_enabled();
+    dump_options.dir = cc.debug_dump_dir();
+    dump_options.max_files =
+        cc.debug_dump_max_files() != 0 ? cc.debug_dump_max_files() : 1000;
+    dump_options.scale = cc.debug_dump_scale() != 0 ? cc.debug_dump_scale() : 2;
+    dump_options.point_radius = cc.debug_dump_point_radius();
+    dump_options.every_frame = cc.debug_dump_every_frame();
+    consistency_debug_dumper_.Configure(dump_options);
+  }
   
   // 设置 scan matchers 到 consistency checker
   consistency_checker_->SetRealTimeCorrelativeScanMatcher(&real_time_correlative_scan_matcher_);
@@ -610,6 +624,14 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     }
   }
 
+  // 供快照元数据：本帧里程计预测增量。快照里的 trans_err 就是它与扫描匹配位移之差，
+  // 把它单独打出来才能区分「匹配跑偏」和「预测没跟上」——两者的 trans_err 长得一样。
+  const auto odom_delta_2d = transform::Project2D(odom_delta_pose);
+  const std::string odom_dxy_str =
+      std::to_string(odom_delta_2d.translation().norm());
+  const std::string odom_dyaw_str =
+      std::to_string(odom_delta_2d.rotation().angle());
+
   const sensor::PointCloud& filtered_gravity_aligned_point_cloud = merged_data.merged_filtered_cloud;
   if (filtered_gravity_aligned_point_cloud.empty()) {
     return nullptr;
@@ -653,7 +675,25 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   // 步骤2: 如果一致性检查失败，尝试验证和恢复
   if (!check_result.is_consistent) {
     LOG(WARNING) << "Pose consistency check failed, attempting validation and recovery...";
-    
+
+    // 快照①：恢复行为被触发的那一刻——当前位姿下的点云 + 本次匹配用的 local submap。
+    // 各雷达合并前的去畸变点云分色绘出，若多雷达时间对齐有问题会整体错开一个角度。
+    if (consistency_debug_dumper_.enabled()) {
+      consistency_debug_dumper_.Dump(
+          ConsistencyDebugDumper::Event::kCheckFailed, time, *pose_estimate_2d,
+          &pose_prediction, *local_submap, filtered_gravity_aligned_point_cloud,
+          merged_data.original_undistorted_range_datas,
+          merged_data.original_sensor_ids,
+          {{"conf", std::to_string(check_result.confidence)},
+           {"trans_err", std::to_string(check_result.translation_error)},
+           {"rot_err", std::to_string(check_result.rotation_error)},
+           {"v", std::to_string(check_result.linear_velocity)},
+           {"w", std::to_string(check_result.angular_velocity)},
+           {"odom_dxy", odom_dxy_str},
+           {"odom_dyaw", odom_dyaw_str},
+           {"reason", check_result.failure_reason}});
+    }
+
     // 步骤2a: 尝试验证位姿
     bool validation_passed = consistency_checker_->ValidatePoseEstimate(
         *pose_estimate_2d,
@@ -683,12 +723,42 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       
       // 步骤2d: 如果恢复失败，返回错误
       if (!recovery_pose) {
+        // 快照③：恢复失败 → 定位丢失。画的是「失败时仍在用的估计位姿 + 重建后的
+        // local submap」，用来回答「是点云不对，还是这块地图本来就没有这些东西」。
+        if (consistency_debug_dumper_.enabled()) {
+          consistency_debug_dumper_.Dump(
+              ConsistencyDebugDumper::Event::kRecoveryFailed, time,
+              *pose_estimate_2d, &pose_prediction, *recovery_local_submap,
+              filtered_gravity_aligned_point_cloud,
+              merged_data.original_undistorted_range_datas,
+              merged_data.original_sensor_ids,
+              {{"conf", std::to_string(check_result.confidence)},
+               {"odom_dxy", odom_dxy_str},
+               {"odom_dyaw", odom_dyaw_str},
+               {"reason", "all recovery attempts failed -> localization lost"}});
+        }
         LOG(ERROR) << "All recovery attempts failed! Localization lost.";
         loc_state_ = LocalizationState::LOCALIZATION_FAILED;
         active_submaps_.clear();
         return nullptr;
       }
-      
+
+      // 快照②：恢复成功——画恢复后的位姿，与快照①同位置对比即可看出恢复把位姿挪去了哪。
+      if (consistency_debug_dumper_.enabled()) {
+        const transform::Rigid2d delta = pose_estimate_2d->inverse() * *recovery_pose;
+        consistency_debug_dumper_.Dump(
+            ConsistencyDebugDumper::Event::kRecoverySucceeded, time,
+            *recovery_pose, &pose_prediction, *recovery_local_submap,
+            filtered_gravity_aligned_point_cloud,
+            merged_data.original_undistorted_range_datas,
+            merged_data.original_sensor_ids,
+            {{"conf", std::to_string(check_result.confidence)},
+             {"odom_dxy", odom_dxy_str},
+             {"odom_dyaw", odom_dyaw_str},
+             {"fix_dxy", std::to_string(delta.translation().norm())},
+             {"fix_dyaw", std::to_string(delta.rotation().angle())}});
+      }
+
       // 恢复成功（已经过一致性检查），更新位姿
       pose_estimate_2d = std::move(recovery_pose);
       
@@ -702,6 +772,25 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       // 验证成功，继续使用当前估计位姿
       LOG(INFO) << "Pose validation successful, using estimated pose";
     }
+  }
+
+  // 逐帧快照：不论本帧是否通过一致性检查都存一张，用于看「正常帧」长什么样——
+  // 只有失败帧时，无从判断哪些现象是常态、哪些才是异常。
+  // 落在 frames/ 子目录、独立环形区，不会挤掉主目录里的失败现场。
+  if (consistency_debug_dumper_.every_frame()) {
+    consistency_debug_dumper_.Dump(
+        ConsistencyDebugDumper::Event::kFrame, time, *pose_estimate_2d,
+        &pose_prediction, *local_submap, filtered_gravity_aligned_point_cloud,
+        merged_data.original_undistorted_range_datas,
+        merged_data.original_sensor_ids,
+        {{"conf", std::to_string(check_result.confidence)},
+         {"trans_err", std::to_string(check_result.translation_error)},
+         {"rot_err", std::to_string(check_result.rotation_error)},
+         {"v", std::to_string(check_result.linear_velocity)},
+         {"w", std::to_string(check_result.angular_velocity)},
+         {"odom_dxy", odom_dxy_str},
+         {"odom_dyaw", odom_dyaw_str},
+         {"consistent", check_result.is_consistent ? "1" : "0"}});
   }
 
   // ========== P0 漂移门控 + 重定位：拦截自洽漂移，先恢复正确位姿，再决定是否更新地图 ==========

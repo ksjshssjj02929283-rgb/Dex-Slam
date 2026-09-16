@@ -51,6 +51,7 @@
 #include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
 #include "cartographer/localization/internal/2d/consistency_checker.h"
+#include "cartographer/localization/internal/2d/consistency_debug_dumper.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -228,6 +229,9 @@ private:
 
   // 一致性检查器，用于检测定位与地图的一致性
   std::unique_ptr<ConsistencyChecker> consistency_checker_;
+
+  // 一致性/恢复现场快照（排障用，默认关闭）
+  ConsistencyDebugDumper consistency_debug_dumper_;
 
   std::mutex data_mutex_;
   
