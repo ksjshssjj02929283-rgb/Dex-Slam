@@ -60,6 +60,33 @@ proto::ConsistencyCheckerOptions CreateConsistencyCheckerOptions(
           ? parameter_dictionary->GetInt("drift_persist_frames")
           : 3);
 
+  // ===== 一致性/恢复现场快照（基础功能，缺省开启；旧 lua 无需改动）=====
+  // 只在一致性检查失败时产图，健康运行下不写盘，故默认开启是安全的。
+  options.set_debug_dump_enabled(
+      parameter_dictionary->HasKey("debug_dump_enabled")
+          ? parameter_dictionary->GetBool("debug_dump_enabled")
+          : true);
+  options.set_debug_dump_dir(
+      parameter_dictionary->HasKey("debug_dump_dir")
+          ? parameter_dictionary->GetString("debug_dump_dir")
+          : "");
+  options.set_debug_dump_max_files(
+      parameter_dictionary->HasKey("debug_dump_max_files")
+          ? parameter_dictionary->GetInt("debug_dump_max_files")
+          : 1000);
+  options.set_debug_dump_scale(
+      parameter_dictionary->HasKey("debug_dump_scale")
+          ? parameter_dictionary->GetInt("debug_dump_scale")
+          : 2);
+  options.set_debug_dump_point_radius(
+      parameter_dictionary->HasKey("debug_dump_point_radius")
+          ? parameter_dictionary->GetInt("debug_dump_point_radius")
+          : 2);
+  options.set_debug_dump_every_frame(
+      parameter_dictionary->HasKey("debug_dump_every_frame")
+          ? parameter_dictionary->GetBool("debug_dump_every_frame")
+          : false);
+
   return options;
 }
 

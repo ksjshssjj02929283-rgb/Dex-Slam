@@ -216,6 +216,7 @@ MergedData DataPreprocessor::GetMergedData(const std::vector<ProcessedSensorData
     
     // 保存原始去畸变数据
     merged_data.original_undistorted_range_datas.push_back(range_data);
+    merged_data.original_sensor_ids.push_back(sensor_data.sensor_id);
   }
   
   // 对合并后的返回点云进行自适应体素滤波，生成filtered_gravity_aligned_point_cloud

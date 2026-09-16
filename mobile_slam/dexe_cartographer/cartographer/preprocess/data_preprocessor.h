@@ -48,6 +48,9 @@ struct MergedData {
   std::vector<sensor::LineData> merged_line_data;
   std::vector<sensor::LandmarkPointData> merged_reflector_data;
   std::vector<sensor::RangeData> original_undistorted_range_datas;
+  // 与 original_undistorted_range_datas 一一对应的 sensor_id（按 sensor_id 排序）。
+  // 调试渲染时靠它给各雷达分色，避免只能按下标猜是前雷达还是后雷达。
+  std::vector<std::string> original_sensor_ids;
 
   bool IsEmpty() const {
     return merged_range_data.returns.empty() && 

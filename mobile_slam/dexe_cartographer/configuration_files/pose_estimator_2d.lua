@@ -31,8 +31,25 @@ POSE_ESTIMATOR_2D = {
     translation_threshold = 0.05,        -- 平移误差阈值 (米)，5cm
     rotation_threshold = math.rad(30.),  -- 旋转误差阈值 (弧度)，30度
     max_linear_velocity = 1.0,           -- 最大线速度 (m/s)
-    max_angular_velocity = math.rad(45.),-- 最大角速度 (rad/s)，45度/秒
+    max_angular_velocity = math.rad(90.),-- 最大角速度 (rad/s)，45度/秒
     min_score = 0.3,                     -- 最小匹配分数阈值，用于验证和恢复
+
+    -- ===== 一致性/恢复现场快照（基础功能，默认开启）=====
+    -- 一致性检查失败 / 恢复成功 / 恢复失败 三个时刻各存一张 PNG：
+    -- 背景 = 本次匹配用的 local submap（灰度同 local_map.png），叠加当前位姿下的点云。
+    -- 合并前各雷达的去畸变点云分色：若多雷达时间对齐有问题，两片会整体错开一个角度。
+    -- PNG 编码在后台线程，定位主链路只付约 1-3 ms；队列满则丢弃新帧并计数。
+    -- 文件名 = 当前帧时间戳 + 事件名；目录是环形的，写满后删最早的一张。
+    -- 之所以能常开：只在一致性检查失败时产图，健康运行一张不写、零开销；
+    -- 实测单张约 140 KB（±15m submap、scale=2），1000 张 ≈ 136 MB 稳态上限。
+    debug_dump_enabled = true,
+    debug_dump_dir = "",                 -- 空 = $HOME/.dexe/data/consistency_check
+    debug_dump_max_files = 1000,         -- 保留最近 N 张，超出删最早；<=0 不限
+    debug_dump_scale = 1,                -- 输出放大倍数
+    debug_dump_point_radius = 2,         -- 雷达点半径(像素)，点太小看不清就调大；0 = 单像素
+    -- 每帧匹配都存一张（不只失败时），落到 frames/ 子目录、独立环形区，
+    -- 不会挤掉主目录里的失败现场。1.88Hz 下约 0.26 MB/s，1000 张约 9 分钟一轮。
+    debug_dump_every_frame = false,
 
     -- 静态地图漂移门控：边定位边更新地图时拦截"自洽漂移"（在错误位姿更新地图）。
     -- 原理：现有三路信号都参照 odom 预测 + live local map（被同一漂移污染），对缓慢漂移失明。

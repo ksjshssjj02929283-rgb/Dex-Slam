@@ -39,4 +39,17 @@ message ConsistencyCheckerOptions {
   double drift_trans_threshold = 9;  // 独立再匹配相对估计位姿的平移 delta 阈值 (m)，默认 0.12
   double drift_rot_threshold  = 10;  // 独立再匹配相对估计位姿的旋转 delta 阈值 (rad)，默认 0.105 (~6度)
   int32  drift_persist_frames = 11;  // 连续多少帧确认漂移才冻结地图(去抖)，默认 3
+
+  // ===== 一致性/恢复现场快照（基础功能，默认开启）=====
+  // 把「当前位姿下的点云」与「用于匹配的 local submap」叠加渲染成 PNG，
+  // 让匹配失败从一个分数变成可直接看的图。PNG 编码在后台线程，主链路只付约 1-3 ms；
+  // 只在一致性检查失败时产图，健康运行下不写盘。
+  bool   debug_dump_enabled   = 12;  // 是否保存快照，默认 true
+  string debug_dump_dir       = 13;  // 输出目录，空则 $HOME/.dexe/data/consistency_check
+  int32  debug_dump_max_files = 14;  // 目录内保留的 PNG 上限（环形，超出删最早），默认 1000；<=0 不限
+  int32  debug_dump_scale     = 15;  // 输出放大倍数，默认 2
+  int32  debug_dump_point_radius = 16; // 雷达点半径(像素)，默认 2；0 = 单像素
+  // 每帧匹配都存一张（不只失败时），落到 frames/ 子目录、独立环形区，
+  // 不会把主目录里真正有价值的失败现场挤掉。开销大，仅排查期打开。
+  bool   debug_dump_every_frame  = 17; // 默认 false
 }
