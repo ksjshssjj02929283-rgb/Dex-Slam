@@ -43,4 +43,7 @@ message DataPreprocessorOptions {
   cartographer.sensor.proto.AdaptiveVoxelFilterOptions adaptive_voxel_filter_options = 10;
 
   cartographer.laser_perception.proto.LaserPerceptionOptions laser_perception_options = 11;
+  // 里程计外插上限（秒）= odom delta 限幅。查询时间超过最新样本这么久就保持最后位姿、twist 置零。
+  // 默认 0.2（覆盖正常抖动）；底盘掉 OP 停发时防止预测位姿匀速跑飞。
+  float max_odometry_extrapolation_seconds = 12;
 }
