@@ -33,6 +33,12 @@ POSE_ESTIMATOR_2D = {
     max_linear_velocity = 1.0,           -- 最大线速度 (m/s)
     max_angular_velocity = math.rad(90.),-- 最大角速度 (rad/s)，45度/秒
     min_score = 0.3,                     -- 最小匹配分数阈值，用于验证和恢复
+    -- 恢复（RecoverFromLocalMap）改用 FCSM 大窗口；旧 RTCSM 0.2 m/15° 与检查容差同量级搜不到
+    fast_correlative_scan_matcher = {
+      linear_search_window = 3.,           -- 局部图 ±15 m，恢复窗口不越出
+      angular_search_window = math.rad(180.),
+      branch_and_bound_depth = 7,
+    },
 
     -- ===== 一致性/恢复现场快照（基础功能，默认开启）=====
     -- 一致性检查失败 / 恢复成功 / 恢复失败 三个时刻各存一张 PNG：
@@ -76,6 +82,8 @@ POSE_ESTIMATOR_2D = {
     voxel_filter_size = 0.04,
     use_deskew = true,
     use_odometry = true,
+    -- 里程计外插上限（秒）= odom delta 限幅：超过即保持最后位姿、twist 置零。底盘掉 OP 停发时防预测跑飞
+    max_odometry_extrapolation_seconds = 0.2,
     enable_feature_detection = true,
     enable_multi_sensor_fusion = false,
 

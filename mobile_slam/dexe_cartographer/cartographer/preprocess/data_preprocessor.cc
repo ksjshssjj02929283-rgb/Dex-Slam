@@ -564,11 +564,15 @@ transform::Rigid3d DataPreprocessor::GetOdometryPoseFromBuffer(const common::Tim
     return odom_buffer.front().pose;
   }
   
-  // 如果查询时间晚于最新的数据，进行外插
+  // 如果查询时间晚于最新的数据：短时外插，超时保持（理由见 GetOdometryAtTime）
   if (time > odom_buffer.back().time) {
-    // 外插逻辑：使用最后一个数据点的速度信息
     const auto& last = odom_buffer.back();
     const double dt = common::ToSeconds(time - last.time);
+    const double max_dt = options_.max_odometry_extrapolation_seconds() > 0.0
+      ? options_.max_odometry_extrapolation_seconds() : 0.2;
+    if (dt > max_dt) {
+      return last.pose;
+    }
 
     const Eigen::Vector3d w = last.twist.angular; // 角速度
     Eigen::Vector3d v = last.twist.linear;
@@ -675,23 +679,34 @@ absl::optional<sensor::OdometryData> DataPreprocessor::GetOdometryAtTime(
     return odom_buffer.front();
   }
 
-  // 如果查询时间晚于最新的数据，进行外插
+  // 如果查询时间晚于最新的数据：短时外插，超时保持
   if (time > odom_buffer.back().time) {
-    // 外插逻辑：使用最后一个数据点的速度信息
     const auto& last = odom_buffer.back();
     const double dt = common::ToSeconds(time - last.time);
-
+    // ⚠️ 陈旧守卫（odom delta 限幅）：里程计一旦停发（典型：底盘掉 OP，EtherCAT 反馈停 →
+    // PublishOdometry 不再触发），dt 会随墙钟无限增长；按最后一帧 twist 无上限外插等于把最后
+    // 一瞬的速度当成永恒，预测位姿会匀速跑飞（0.3 m/s 一分钟 18 m），之后一致性检查/恢复
+    // 全部在错误位置搜索。超过阈值即「保持最后位姿、twist 置零」——不截断到阈值，
+    // 因为截断仍残留 dt_max × v 的偏移。
+    const double max_dt = options_.max_odometry_extrapolation_seconds() > 0.0
+      ? options_.max_odometry_extrapolation_seconds() : 0.2;
+    if (dt > max_dt) {
+      LOG_EVERY_N(WARNING, 100)
+          << "Odometry is stale by " << dt << " s (> " << max_dt
+          << " s), holding last pose instead of extrapolating (chassis stopped publishing?)";
+      return sensor::OdometryData{
+        time, last.pose,
+        sensor::Twist{Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero()}};
+    }
     const Eigen::Vector3d w = last.twist.angular; // 角速度
     Eigen::Vector3d v = last.twist.linear;
     v = last.pose.rotation() * v;  // 将线速度转换到世界坐标系
-
     const Eigen::Vector3d t = last.pose.translation() + dt * v;
     const Eigen::Quaterniond dq =
         transform::AngleAxisVectorToRotationQuaternion(
           Eigen::Vector3d(w * dt));
     Eigen::Quaterniond q = last.pose.rotation() * dq;
     q.normalize();
-
     return sensor::OdometryData{time, transform::Rigid3d(t, q), last.twist};
   }
 

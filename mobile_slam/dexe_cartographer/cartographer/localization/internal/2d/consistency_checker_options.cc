@@ -16,6 +16,8 @@
 
 #include "cartographer/localization/internal/2d/consistency_checker_options.h"
 
+#include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+
 namespace cartographer {
 namespace localization {
 
@@ -87,6 +89,16 @@ proto::ConsistencyCheckerOptions CreateConsistencyCheckerOptions(
           ? parameter_dictionary->GetBool("debug_dump_every_frame")
           : false);
 
+  if (parameter_dictionary->HasKey("fast_correlative_scan_matcher")) {
+    *options.mutable_fast_correlative_scan_matcher_options() =
+        mapping::scan_matching::CreateFastCorrelativeScanMatcherOptions2D(
+            parameter_dictionary->GetDictionary("fast_correlative_scan_matcher").get());
+  } else {
+    auto* f = options.mutable_fast_correlative_scan_matcher_options();
+    f->set_linear_search_window(3.0);
+    f->set_angular_search_window(3.14159265358979);
+    f->set_branch_and_bound_depth(7);
+  }
   return options;
 }
 

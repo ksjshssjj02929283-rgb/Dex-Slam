@@ -16,6 +16,8 @@ syntax = "proto3";
 
 package cartographer.localization.proto;
 
+import "cartographer/mapping/proto/scan_matching/fast_correlative_scan_matcher_options_2d.proto";
+
 // 一致性检查器配置选项
 message ConsistencyCheckerOptions {
   // 位姿一致性阈值
@@ -52,4 +54,7 @@ message ConsistencyCheckerOptions {
   // 每帧匹配都存一张（不只失败时），落到 frames/ 子目录、独立环形区，
   // 不会把主目录里真正有价值的失败现场挤掉。开销大，仅排查期打开。
   bool   debug_dump_every_frame  = 17; // 默认 false
+
+  // 恢复（RecoverFromLocalMap）用 FCSM 大窗口搜索；旧实现 RTCSM 0.2 m/15° 与检查容差同量级
+  cartographer.mapping.scan_matching.proto.FastCorrelativeScanMatcherOptions2D fast_correlative_scan_matcher_options = 18;
 }

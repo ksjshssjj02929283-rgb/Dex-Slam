@@ -566,8 +566,18 @@ void CeresScanMatcher2D::Match(
 
   // LOG(INFO) << "ceres_pose_estimate pose validationt: \n delta dist: " << delta_dist << " delta yaw: " << delta_yaw << std::endl;
 
-  if (delta_dist > 0.2 || delta_yaw > 0.1) {
-    LOG(ERROR) << "ceres_pose_estimate pose is not good.";
+  last_revert_info_.delta_dist = delta_dist;
+  last_revert_info_.delta_yaw = delta_yaw;
+  last_revert_info_.reverted = (delta_dist > 0.2 || delta_yaw > 0.1);
+
+  if (last_revert_info_.reverted) {
+    // ⚠️ 这里丢弃匹配结果、退回初值，会让下游一致性检查的 translation_error
+    // 与 rotation_error 恒为 0（输出 ≡ 输入），即「修正量越大越安静」。
+    // delta 已记入 last_revert_info_，由调用方写进快照元数据以便量化。
+    LOG(ERROR) << "ceres_pose_estimate pose is not good. delta_dist="
+               << delta_dist << "m delta_yaw=" << delta_yaw << "rad"
+               << " (reverting to initial pose — downstream consistency errors"
+                  " will read as 0)";
     *pose_estimate = initial_pose_estimate;
   }
 }

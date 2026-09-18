@@ -16,6 +16,8 @@
 
 #include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 
+#include <algorithm>
+
 #include <limits>
 #include <memory>
 #include <cmath>
@@ -648,6 +650,14 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
                 tracked_lane_data,
                 global_tracked_lane_data);
   
+  // 回退门三项：必须**紧跟主匹配之后**取——recovery 路径复用同一个 matcher 对象会覆盖它。
+  // `revert=1` 表示 Ceres 结果被丢弃、输出位姿 ≡ 初值，此时下游 trans_err/rot_err 必为 0；
+  // 快照里同时看到 revert=1 与 trans_err=0，就说明这一帧的一致性检查是「被构造成通过的」。
+  const auto revert_info = ceres_scan_matcher_.last_revert_info();
+  const std::string revert_dxy_str = std::to_string(revert_info.delta_dist);
+  const std::string revert_dyaw_str = std::to_string(revert_info.delta_yaw);
+  const std::string reverted_str = revert_info.reverted ? "1" : "0";
+
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
@@ -691,6 +701,9 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
            {"w", std::to_string(check_result.angular_velocity)},
            {"odom_dxy", odom_dxy_str},
            {"odom_dyaw", odom_dyaw_str},
+           {"revert", reverted_str},
+           {"ceres_dxy", revert_dxy_str},
+           {"ceres_dyaw", revert_dyaw_str},
            {"reason", check_result.failure_reason}});
     }
 
@@ -735,6 +748,9 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
               {{"conf", std::to_string(check_result.confidence)},
                {"odom_dxy", odom_dxy_str},
                {"odom_dyaw", odom_dyaw_str},
+               {"revert", reverted_str},
+               {"ceres_dxy", revert_dxy_str},
+               {"ceres_dyaw", revert_dyaw_str},
                {"reason", "all recovery attempts failed -> localization lost"}});
         }
         LOG(ERROR) << "All recovery attempts failed! Localization lost.";
@@ -756,6 +772,8 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
             {{"conf", std::to_string(check_result.confidence)},
              {"odom_dxy", odom_dxy_str},
              {"odom_dyaw", odom_dyaw_str},
+             {"revert", reverted_str},
+             {"ceres_dxy", revert_dxy_str},
              {"fix_dxy", std::to_string(delta.translation().norm())},
              {"fix_dyaw", std::to_string(delta.rotation().angle())}});
       }
@@ -791,6 +809,9 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
          {"w", std::to_string(check_result.angular_velocity)},
          {"odom_dxy", odom_dxy_str},
          {"odom_dyaw", odom_dyaw_str},
+         {"revert", reverted_str},
+         {"ceres_dxy", revert_dxy_str},
+         {"ceres_dyaw", revert_dyaw_str},
          {"consistent", check_result.is_consistent ? "1" : "0"}});
   }
 
@@ -812,6 +833,30 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
           filtered_gravity_aligned_point_cloud,
           *static_submap,
           *live_local);
+      // 漂移门控的「没触发」有两种含义：判据没命中 / 压根没判。指纹条件是
+      //   static_overlap < static_map_min_score  且  (live - static) > drift_score_gap
+      // 中等幅度的稳定偏移会让 static_overlap 停在阈值之上、live-static 差值又不够大，
+      // 从两条判据下面同时滑过去。不把分量打出来，只能看到「一条日志都没有」。
+      if (consistency_debug_dumper_.enabled()) {
+        const auto& cc_opt = options_.consistency_checker_options();
+        const double gap = drift_result.live_overlap - drift_result.static_overlap;
+        const bool near_miss =
+            !drift_result.drift_suspected &&
+            (drift_result.static_overlap < cc_opt.static_map_min_score() ||
+             gap > cc_opt.drift_score_gap());
+        if (near_miss) {
+          LOG(WARNING) << "DriftGate NEAR-MISS (only one condition met) | "
+                       << drift_result.ToString() << " | gap=" << gap
+                       << " need static<" << cc_opt.static_map_min_score()
+                       << " AND gap>" << cc_opt.drift_score_gap();
+        } else {
+          LOG_EVERY_N(INFO, 20)
+              << "DriftGate telemetry | " << drift_result.ToString()
+              << " | gap=" << gap << " need static<"
+              << cc_opt.static_map_min_score() << " AND gap>"
+              << cc_opt.drift_score_gap();
+        }
+      }
       if (drift_result.drift_suspected) {
         drift_flagged = true;
         LOG(WARNING) << "Localization drift confirmed — relocalizing against static map "
@@ -1100,6 +1145,22 @@ transform::Rigid3d PoseEstimator2D::GetOdomDeltaPose(const common::Time& laser_t
   const transform::Rigid3d delta_pose = 
       last_odom_for_delta_->pose.inverse() * current_odom->pose;
   
+  // odom delta 限幅：里程计还在发但位姿跳变（底盘节点重启从零开始、坏样本）时 delta 会大到
+  // 物理上不可能——超过「速度上限 × 时间」就当作跳变：重新对齐基准、本帧预测零运动。
+  // 上限复用一致性检查器的 max_linear/angular_velocity，×2 留余量，dt 下限 0.1 s 防 dt≈0 误判。
+  // （停发/陈旧的情况由 DataPreprocessor 的守卫负责，那边是保持最后位姿。）
+  const double dt = std::max(common::ToSeconds(laser_time - last_odom_for_delta_->time), 0.1);
+  const auto& cc = options_.consistency_checker_options();
+  const double max_dist = 2.0 * (cc.max_linear_velocity() > 0.0 ? cc.max_linear_velocity() : 1.0) * dt;
+  const double max_yaw = 2.0 * (cc.max_angular_velocity() > 0.0 ? cc.max_angular_velocity() : 1.5708) * dt;
+  const double dist = delta_pose.translation().head<2>().norm();
+  const double yaw = std::abs(transform::GetYaw(delta_pose.rotation()));
+  if (dist > max_dist || yaw > max_yaw) {
+    LOG(ERROR) << "Odometry delta implausible: " << dist << " m / " << yaw << " rad in " << dt
+               << " s (max " << max_dist << " m / " << max_yaw << " rad); rebasing, no motion this frame";
+    last_odom_for_delta_ = *current_odom;
+    return transform::Rigid3d::Identity();
+  }
   return delta_pose;
 }
 
