@@ -80,6 +80,10 @@ public:
       const sensor::TimedPointCloudOriginData& cloud_in,
       const common::Time& reference_time);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
+
+  // 里程计连续性：AddOdometryData 发现相邻样本跳变（计数被重置）或断流（间隔超过陈旧阈值）时
+  // 清空缓冲并置位；调用方（odom delta 计算）取走一次后清零——该帧只对齐基准、不推算运动。
+  bool TakeOdometryDiscontinuity();
   
   // 新增接口
   /**
@@ -155,6 +159,7 @@ private:
 
   std::deque<sensor::OdometryData> odom_data_buff_;
   mutable std::mutex odometry_buffer_mutex_;
+  bool odom_discontinuity_ = false;   // 见 TakeOdometryDiscontinuity
 };
 
 }  // namespace preprocess
