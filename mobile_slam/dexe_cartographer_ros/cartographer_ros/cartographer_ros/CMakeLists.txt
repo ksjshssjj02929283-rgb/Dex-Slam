@@ -183,9 +183,24 @@ endif()
 google_binary(reset_map_origin_tool
   SRCS
     tools/reset_map_origin_main.cc
+    tools/map_transform_common.h
+    tools/map_transform_common.cc
 )
 
 install(TARGETS reset_map_origin_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+google_binary(align_map_tool
+  SRCS
+    tools/align_map_main.cc
+    tools/map_transform_common.h
+    tools/map_transform_common.cc
+)
+
+install(TARGETS align_map_tool
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
