@@ -60,6 +60,38 @@ TEST_F(DataPreprocessorOdomTest, InterpolationInsideBufferUnchanged) {
   EXPECT_NEAR(odom->pose.translation().x(), 0.015, 1e-6);
 }
 
+TEST_F(DataPreprocessorOdomTest, NormalMotionIsNotDiscontinuity) {
+  EXPECT_FALSE(preprocessor_->TakeOdometryDiscontinuity());
+  preprocessor_->AddOdometryData(sensor::OdometryData{
+    At(0.03), transform::Rigid3d::Translation(Eigen::Vector3d(0.03, 0., 0.)),
+    sensor::Twist{Eigen::Vector3d(1.0, 0., 0.), Eigen::Vector3d::Zero()}});
+  EXPECT_FALSE(preprocessor_->TakeOdometryDiscontinuity());
+}
+
+TEST_F(DataPreprocessorOdomTest, JumpBetweenConsecutiveSamplesIsReset) {
+  // 10 ms 内跳 1.98 m（198 m/s）：只能是计数被重置。缓冲清空，不跨断点插值；标记取走一次即清
+  preprocessor_->AddOdometryData(sensor::OdometryData{
+    At(0.03), transform::Rigid3d::Translation(Eigen::Vector3d(2.0, 0., 0.)),
+    sensor::Twist{Eigen::Vector3d(1.0, 0., 0.), Eigen::Vector3d::Zero()}});
+  EXPECT_TRUE(preprocessor_->TakeOdometryDiscontinuity());
+  EXPECT_FALSE(preprocessor_->TakeOdometryDiscontinuity());
+  const auto at_new = preprocessor_->GetOdometryAtTime(At(0.03));
+  ASSERT_TRUE(at_new.has_value());
+  EXPECT_NEAR(at_new->pose.translation().x(), 2.0, 1e-6);
+  const auto before_new = preprocessor_->GetOdometryAtTime(At(0.025));
+  ASSERT_TRUE(before_new.has_value());
+  EXPECT_NEAR(before_new->pose.translation().x(), 2.0, 1e-6);  // 不会插到 1.0 附近
+}
+
+TEST_F(DataPreprocessorOdomTest, GapLongerThanStaleThresholdIsDiscontinuity) {
+  // 断流 0.98 s（> 0.2 s）后恢复，即使位姿看起来连续也不信断前后的差
+  preprocessor_->AddOdometryData(sensor::OdometryData{
+    At(1.0), transform::Rigid3d::Translation(Eigen::Vector3d(1.0, 0., 0.)),
+    sensor::Twist{Eigen::Vector3d(1.0, 0., 0.), Eigen::Vector3d::Zero()}});
+  EXPECT_TRUE(preprocessor_->TakeOdometryDiscontinuity());
+  EXPECT_FALSE(preprocessor_->TakeOdometryDiscontinuity());
+}
+
 }  // namespace
 }  // namespace preprocess
 }  // namespace cartographer

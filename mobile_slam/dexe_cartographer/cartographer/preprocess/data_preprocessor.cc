@@ -638,6 +638,29 @@ void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data
   {
     return;
   }
+  // 里程计连续性判据（与 delta 限幅不同：限幅问"这个增量物理上可能吗"，这里问"还是同一条计数吗"）：
+  //  - 断流：相邻样本间隔超过陈旧阈值，断流期间车动没动无从知道；
+  //  - 重置：相邻样本换算速度超过任何真实运动（5 m/s / 10 rad/s），只能是计数被清零（底盘节点重启）。
+  // 两者都清空缓冲（不跨断点插值）并置位，下一次 delta 只对齐基准。
+  if (!odom_data_buff_.empty()) {
+    const auto& last = odom_data_buff_.back();
+    const double dt = std::max(common::ToSeconds(odometry_data.time - last.time), 1e-3);
+    const double max_dt = options_.max_odometry_extrapolation_seconds() > 0.0
+      ? options_.max_odometry_extrapolation_seconds() : 0.2;
+    const transform::Rigid3d step = last.pose.inverse() * odometry_data.pose;
+    const double dist = step.translation().head<2>().norm();
+    const double yaw = std::abs(transform::GetYaw(step.rotation()));
+    constexpr double kMaxPlausibleSpeed = 5.0, kMaxPlausibleYawRate = 10.0;
+    const bool gap = dt > max_dt;
+    const bool jump = !gap && (dist / dt > kMaxPlausibleSpeed || yaw / dt > kMaxPlausibleYawRate);
+    if (gap || jump) {
+      LOG(WARNING) << "Odometry discontinuity (" << (gap ? "gap" : "reset") << "): " << dist
+                   << " m / " << yaw << " rad in " << dt
+                   << " s; clearing odometry buffer, next delta will re-align only";
+      odom_data_buff_.clear();
+      odom_discontinuity_ = true;
+    }
+  }
   odom_data_buff_.push_back(odometry_data);
   
   // 每次添加都检查buffer大小，超过500个数据点就删除最旧的
@@ -645,6 +668,14 @@ void DataPreprocessor::AddOdometryData(const sensor::OdometryData& odometry_data
   
   // std::cout << "DataPreprocessor: Added odometry data at time: " << odometry_data.time
   //           << ", odom_buff_size: " << odom_data_buff_.size() << std::endl;
+}
+
+bool DataPreprocessor::TakeOdometryDiscontinuity()
+{
+  std::lock_guard<std::mutex> lock(odometry_buffer_mutex_);
+  const bool flag = odom_discontinuity_;
+  odom_discontinuity_ = false;
+  return flag;
 }
 
 void DataPreprocessor::TrimOdomData()

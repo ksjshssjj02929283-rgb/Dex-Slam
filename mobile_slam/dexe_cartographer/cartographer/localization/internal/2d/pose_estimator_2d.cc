@@ -1154,6 +1154,13 @@ transform::Rigid3d PoseEstimator2D::GetOdomDeltaPose(const common::Time& laser_t
     last_odom_for_delta_ = *current_odom;
     return transform::Rigid3d::Identity();
   }
+  // 里程计断流 / 重置之后的第一帧：断前后的差不是运动，只对齐基准（判据在 DataPreprocessor）
+  if (data_preprocessor_ && data_preprocessor_->TakeOdometryDiscontinuity()) {
+    LOG(WARNING) << "Odometry discontinuity before this frame: re-aligning delta baseline, "
+                    "no motion this frame";
+    last_odom_for_delta_ = *current_odom;
+    return transform::Rigid3d::Identity();
+  }
   
   // 计算delta pose
   const transform::Rigid3d delta_pose = 
