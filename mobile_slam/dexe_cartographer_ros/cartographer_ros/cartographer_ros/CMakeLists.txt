@@ -202,6 +202,17 @@ install(TARGETS merge_maps_tool
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+google_binary(replace_map_tool
+  SRCS
+    tools/replace_map_main.cc
+)
+
+install(TARGETS replace_map_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(bbs_benchmark_tool
   SRCS
     tools/bbs_benchmark_main.cc
