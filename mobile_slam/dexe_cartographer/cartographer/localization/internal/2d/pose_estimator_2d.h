@@ -160,6 +160,10 @@ class PoseEstimator2D {
   absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
   void UpdateLastOdomForDelta(const common::Time& time);
 
+  // 清空 active submap 并重置与之绑定的状态（关键帧过滤器、一致性检查的速度历史）。
+  // 只 clear() 会留下三处仍记着重置前轨迹的状态，见 .cc 内说明。
+  void ResetActiveSubmaps(const char* reason);
+
   sensor::FeatureData GetFeatureData(
     const common::Time & time,
     const std::vector<laser_perception::FeatureMsgWithOrigin> & feature_data);

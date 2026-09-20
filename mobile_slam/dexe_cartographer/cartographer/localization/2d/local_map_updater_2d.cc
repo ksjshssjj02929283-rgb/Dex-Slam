@@ -523,6 +523,32 @@ void LocalMapUpdater2D::RebuildLocalSubmapFromStaticAt(const transform::Rigid2d&
   }
 }
 
+void LocalMapUpdater2D::ResetDynamicMapFromStatic(const transform::Rigid2d& pose)
+{
+  // 在途的异步裁剪裁自污染前的旧 dynamic，落地会把错墙带回参考：先等它结束并丢弃结果。
+  if (build_future_.valid()) {
+    build_future_.wait();
+    build_future_ = std::future<std::shared_ptr<mapping::Submap2D>>();
+    is_building_ = false;
+  }
+  std::shared_ptr<mapping::Submap2D> static_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    static_snapshot = global_static_submap_;
+  }
+  if (!static_snapshot) {
+    LOG(ERROR) << "ResetDynamicMapFromStatic: global_static_submap_ is not initialized.";
+    return;
+  }
+  common::TicToc t;
+  // 重新从 static 深拷贝 dynamic（grid / cloud / line + ikd-tree）；
+  // SetGlobalSubmap 会把 local_submap_ 建在地图原点，随后裁回机器人当前位姿。
+  SetGlobalSubmap(static_snapshot);
+  RebuildLocalSubmapFromStaticAt(pose);
+  LOG(WARNING) << "Dynamic map reset from static map in " << t.toc()
+               << " ms; accumulated dynamic layer discarded.";
+}
+
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::local_submap()
 {
   std::lock_guard<std::mutex> lock(data_mutex_);

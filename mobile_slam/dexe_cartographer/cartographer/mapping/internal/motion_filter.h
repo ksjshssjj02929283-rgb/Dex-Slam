@@ -44,6 +44,9 @@ class MotionFilter {
   // threshold, returns false. Otherwise the relative motion is accumulated and
   // true is returned.
   bool IsSimilar(common::Time time, const transform::Rigid3d& pose);
+  // 重新开始计数：下一次 IsSimilar 必返回 false 并以该帧为新基准。
+  // 用于 active submap 被清空后强制插入首帧，否则修正量小于阈值时 active 会一直为空。
+  void Reset() { num_total_ = 0; }
 
  private:
   const proto::MotionFilterOptions options_;
