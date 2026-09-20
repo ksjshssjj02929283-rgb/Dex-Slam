@@ -362,7 +362,7 @@ std::unique_ptr<transform::Rigid2d> ConsistencyChecker::RecoverFromLocalMap(
   //    以前用 RTCSM，窗口 0.2 m / 15°，与一致性检查容差同量级——检查会失败的偏差恢复也搜不到。
   //    窗口由 consistency_checker.fast_correlative_scan_matcher 给（默认 3 m / 180° / 深度 7）。
   //    预计算栈按需构造：恢复是稀有路径，不能逐帧建。
-  //    注意：因为pose check失败，local map不会被错误更新，所以使用local map是安全的
+  //    传入哪张 local map 由调用方决定：恢复路径用 static 裁剪，避免在可能已被污染的 dynamic 上找最优。
   const double min_score = options_.consistency_checker_options().min_score();
   const auto t0 = std::chrono::steady_clock::now();
   mapping::scan_matching::FastCorrelativeScanMatcher2D fcsm(

@@ -104,6 +104,20 @@ TEST_F(MotionFilterTest, RotationalMotion) {
                                       transform::Rigid3d::Identity()));
 }
 
+TEST_F(MotionFilterTest, ResetForcesNextPoseThrough) {
+  MotionFilter motion_filter(options_);
+  EXPECT_FALSE(motion_filter.IsSimilar(SecondsSinceEpoch(42),
+                                       transform::Rigid3d::Identity()));
+  EXPECT_TRUE(motion_filter.IsSimilar(SecondsSinceEpoch(42),
+                                      transform::Rigid3d::Identity()));
+  motion_filter.Reset();
+  // 重置后同一位姿也必须放行，并以它为新基准。
+  EXPECT_FALSE(motion_filter.IsSimilar(SecondsSinceEpoch(42),
+                                       transform::Rigid3d::Identity()));
+  EXPECT_TRUE(motion_filter.IsSimilar(SecondsSinceEpoch(42),
+                                      transform::Rigid3d::Identity()));
+}
+
 }  // namespace
 }  // namespace mapping
 }  // namespace cartographer

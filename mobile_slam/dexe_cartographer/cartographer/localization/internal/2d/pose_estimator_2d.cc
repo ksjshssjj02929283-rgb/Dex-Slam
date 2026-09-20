@@ -372,7 +372,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                               pose_observation.get(),
                               &summary);
 
-    active_submaps_.clear();
+    ResetActiveSubmaps("scan match fallback");
     if (!summary.IsSolutionUsable() || summary.final_cost == -1 ||
         std::isinf(summary.final_cost) || std::isnan(summary.final_cost))
     {
@@ -532,7 +532,7 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
         UpdateLastOdomForDelta(sync_time);
         loc_state_ = LocalizationState::LOCALIZED;
         pose_initializer_->stop();
-        active_submaps_.clear();
+        ResetActiveSubmaps("global relocalization succeeded");
         local_map_updater_->UpdateRobotPose(transform::Project2D(local_pose_));
         
         // 重置全局重定位尝试标志
@@ -716,13 +716,13 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     if (!validation_passed) {
       LOG(WARNING) << "Pose validation also failed";
       
-      // 步骤2b: 以估计位姿为中心同步重建 local_map_updater_ 内部的 local_submap_
-      // 原因：当前 local_submap 可能以里程计位姿为中心，与 scan match 估计位置有偏差
-      // 重建后 local_submap_ 以 pose_estimate_2d 为中心，搜索范围更加合理
-      local_map_updater_->RebuildLocalSubmapAt(*pose_estimate_2d);
+      // 步骤2b: 以估计位姿为中心、从【static 底图】同步重建 local_submap_ 供恢复搜索。
+      // 不从 dynamic 裁：一致性检查失败但验证通过的帧仍会插图，dynamic 可能已被错位观测污染，
+      // 在它上面恢复等于在错墙上找最优；static 不随定位漂。搜索窗口由 FCSM 子表给。
+      local_map_updater_->RebuildLocalSubmapFromStaticAt(*pose_estimate_2d);
       auto recovery_local_submap = local_map_updater_->local_submap();
       if (!recovery_local_submap) {
-        LOG(WARNING) << "RebuildLocalSubmapAt returned nullptr, falling back to current local submap";
+        LOG(WARNING) << "RebuildLocalSubmapFromStaticAt returned nullptr, falling back to current local submap";
         recovery_local_submap = local_submap;
       }
       
@@ -755,7 +755,7 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
         }
         LOG(ERROR) << "All recovery attempts failed! Localization lost.";
         loc_state_ = LocalizationState::LOCALIZATION_FAILED;
-        active_submaps_.clear();
+        ResetActiveSubmaps("recovery failed");
         return nullptr;
       }
 
@@ -784,8 +784,8 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
                 << "\n  Recovered pose: " << *pose_estimate_2d
                 << "\n  Cleared active submaps, restarting mapping";
       
-      // 清空active_submaps重新开始
-      active_submaps_.clear();
+      // 清空 active_submaps 重新开始（含过滤器与速度历史）
+      ResetActiveSubmaps("recovery from local map succeeded");
     } else {
       // 验证成功，继续使用当前估计位姿
       LOG(INFO) << "Pose validation successful, using estimated pose";
@@ -879,7 +879,10 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
           // 重定位成功且通过一致性校验 → 用校正后的正确位姿，清空 active_submaps 重启匹配，
           // 位姿已确认正确 → 允许在正确位姿更新地图。
           pose_estimate_2d = std::move(corrected);
-          active_submaps_.clear();
+          // 漂移已被 static 独立确认 → 漂移期间写入 dynamic 的观测同样是漂的：整层丢弃、
+          // 从 static 重新起算，否则下次裁剪重建会把错墙裁回参考、再把位姿拉回漂移方向。
+          local_map_updater_->ResetDynamicMapFromStatic(*pose_estimate_2d);
+          ResetActiveSubmaps("static-map drift correction");
           safe_to_update_map = true;
           LOG(WARNING) << "Static-map relocalization succeeded — resuming map update at corrected pose "
                        << *pose_estimate_2d;
@@ -1031,8 +1034,20 @@ PoseEstimator2D::InsertIntoSubmap(
         }
         return dst;
       };
+  // active 刚被重置（submaps 为空）时，本帧 tracked_lane_data 的 id 仍是旧 active 线图的编号；
+  // 新线图的计数从 0 起，沿用旧 id 会与之后的新线撞号（map::insert 静默失败、角度索引与
+  // 观测计数却照写）。改成负号 → InsertLineData 按新线 PushBack，由新线图重新编号。
+  std::map<int, std::vector<sensor::LineData>> lines_for_active;
+  if (active_submaps_.submaps().empty()) {
+    int fresh_id = -1;
+    for (const auto& kv : tracked_lane_data) {
+      lines_for_active[fresh_id--] = kv.second;
+    }
+  } else {
+    lines_for_active = tracked_lane_data;
+  }
   const std::map<int, std::vector<sensor::LineData>> tracked_lines_in_local =
-      to_local_frame(tracked_lane_data);
+      to_local_frame(lines_for_active);
   const std::map<int, std::vector<sensor::LineData>> global_tracked_lines_in_local =
       to_local_frame(global_tracked_lane_data);
 
@@ -1171,6 +1186,26 @@ absl::optional<sensor::OdometryData> PoseEstimator2D::GetOdometryAtTime(const co
  * 
  * @param time 时间戳
  */
+/**
+ * @brief 清空 active submap 并重置与之绑定的状态。
+ *
+ * 只 clear() 不够，三处状态仍记着重置前的轨迹：
+ *  - map_insertion_motion_filter_：修正量小于 0.2 m / 1° 且不足 5 s 时本帧不插图 →
+ *    active 为空 → ScanMatch 直接返回预测、不做任何匹配，直到走出阈值；
+ *  - ConsistencyChecker 的速度历史：修正量 ÷ 帧间隔被当成速度，连续报超限并逐帧走验证；
+ *  - 本帧线段 id 仍是旧 active 线图的编号：在 InsertIntoSubmap 里按新线改号。
+ */
+void PoseEstimator2D::ResetActiveSubmaps(const char* reason) {
+  active_submaps_.clear();
+  map_insertion_motion_filter_.Reset();
+  if (consistency_checker_) {
+    consistency_checker_->Reset();
+  }
+  LOG(INFO) << "Active submaps reset (" << reason
+            << "): motion filter and consistency history cleared, "
+               "next frame will be inserted.";
+}
+
 void PoseEstimator2D::UpdateLastOdomForDelta(const common::Time& time) {
   auto current_odom = GetOdometryAtTime(time);
   if (current_odom.has_value()) {

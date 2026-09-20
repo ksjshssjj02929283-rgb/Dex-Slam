@@ -61,6 +61,12 @@ public:
   // global_static_submap_ 未初始化时为 no-op。
   void RebuildLocalSubmapFromStaticAt(const transform::Rigid2d& pose);
 
+  // 丢弃 global_dynamic_submap_ 已积累的动态层，从 global_static_submap_ 重新深拷贝，
+  // 并把 local_submap_ 裁回给定位姿。用于漂移被 static 独立确认之后：漂移期间写入 dynamic
+  // 的观测同样是漂的，不丢弃则下次裁剪重建会把错墙带回参考、再把位姿拉回漂移方向。
+  // 代价 = 一次整图深拷贝 + ikd-tree 重建（与启动时 SetGlobalSubmap 相同量级）。
+  void ResetDynamicMapFromStatic(const transform::Rigid2d& pose);
+
   // reset_map_origin 时同步更新内部地图和状态到新坐标系。
   void ApplyOriginTransform(const transform::Rigid3d& T);
   
