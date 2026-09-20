@@ -417,7 +417,8 @@ private:
     is_mapping_ = false;
     is_saving_ = false;
     trajectories_finished_ = false;  // 重置标志
-    
+    // 地图原点重置的幂等标志在 Node 内部，mapping_node_ 重建时自然复位
+
     LOG(INFO) << "Mapping node reset completed.";
   }
 
@@ -445,6 +446,18 @@ private:
     } else {
       LOG(INFO) << "Trajectories already finished, skipping optimization.";
     }
+
+    // 保存前重置地图起点以对齐结构化环境（来自 cdd81f3；rebase 到 apply_for_xwiz
+    // 后，原先挂在旧 FinishMapping 上的调用移植到重构后的 RunFinishPipeline）。
+    // 调用前提：FinishAllTrajectories + RunFinalOptimization 已完成、尚未
+    // SaveOptimizedPoses / SerializeState —— 这样 pbstream / png / yaml / pcd
+    // 全部产物天然落在新坐标系，不需要事后各自变换。
+    // 幂等性由 Node::ResetMapOriginToAlignStructure 内部标志保证：保存失败重试
+    // 不会重复施加旋转。
+    // 刻意不新增 stage：MappingState.msg 的 stage 取值是对外契约
+    //（FINISHING_TRAJECTORIES / OPTIMIZING / SERIALIZING / WRITING_GRID / DONE），
+    // 对齐属于收尾优化的一部分，沿用当前 stage，不在冲突解决里悄悄改契约。
+    mapping_node_->ResetMapOriginToAlignStructure();
     if (node_options_->save_tracked_pose) {
       mapping_node_->SaveOptimizedPoses(int(0));
     }

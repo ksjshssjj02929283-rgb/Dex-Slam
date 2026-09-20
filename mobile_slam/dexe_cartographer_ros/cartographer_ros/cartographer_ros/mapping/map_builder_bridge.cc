@@ -205,6 +205,20 @@ void MapBuilderBridge::RunFinalOptimization() {
   map_builder_->pose_graph()->RunFinalOptimization();
 }
 
+void MapBuilderBridge::ApplyMapOriginTransform(
+    const ::cartographer::transform::Rigid3d& T_old_to_new) {
+  LOG(INFO) << "ApplyMapOriginTransform: T_old_to_new translation=("
+            << T_old_to_new.translation().x() << ", "
+            << T_old_to_new.translation().y() << "), rotation="
+            << T_old_to_new.rotation().coeffs().transpose();
+  map_builder_->ApplyOriginTransform(T_old_to_new);
+}
+
+absl::optional<double> MapBuilderBridge::EstimateStructureAlignmentYaw(
+    const ::cartographer::mapping::StructureAlignmentOptions& options) {
+  return map_builder_->EstimateStructureAlignmentYaw(options);
+}
+
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
   using Clock = std::chrono::steady_clock;

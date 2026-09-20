@@ -92,6 +92,19 @@ class MapBuilderBridge {
       const TrajectoryOptions& trajectory_options);
   void FinishTrajectory(int trajectory_id);
   void RunFinalOptimization();
+
+  // 重置地图原点：把位姿图所有全局位姿变换到新坐标系。
+  // 'T_old_to_new' 为 旧系 → 新系 的变换（新原点位姿的逆）。
+  // 必须在 RunFinalOptimization 之后、SerializeState/SaveMap 之前调用，
+  // 这样 pbstream 与地图文件都会以新坐标系产出。
+  void ApplyMapOriginTransform(
+      const ::cartographer::transform::Rigid3d& T_old_to_new);
+
+  // 从位姿图节点线特征估计对齐结构化环境的新原点朝向（|yaw| ≤ π/4）。
+  // 必须在 RunFinalOptimization 之后、ApplyMapOriginTransform 之前调用；
+  // 无可靠正交结构时返回 nullopt。
+  absl::optional<double> EstimateStructureAlignmentYaw(
+      const ::cartographer::mapping::StructureAlignmentOptions& options);
   // noted by hz: 序列化/压缩 数据，保存到文件, 包含 header/位姿图/参数配置/submap数据/scan数据+前后端pose+时间戳/重力+imu系数+fixed_frame_origin_in_map/其他传感器数据
   bool SerializeState(const std::string& filename,
                       const bool include_unfinished_submaps);

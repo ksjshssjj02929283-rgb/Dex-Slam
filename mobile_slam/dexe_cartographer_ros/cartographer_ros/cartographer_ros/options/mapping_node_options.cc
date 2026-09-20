@@ -86,6 +86,33 @@ MappingNodeOptions CreateMappingNodeOptions(
     options.save_map_pcd = lua_parameter_dictionary->GetBool("save_map_pcd");
   }
 
+  // 保存前重置地图原点以对齐结构化环境（重置角度由全局线特征在线估计）
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_to_align_structure")) {
+    options.reset_map_origin_to_align_structure =
+        lua_parameter_dictionary->GetBool("reset_map_origin_to_align_structure");
+  }
+  // 对齐角度估计阈值（缺省值见 mapping_node_options.h）
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_min_line_length")) {
+    options.reset_map_origin_min_line_length =
+        lua_parameter_dictionary->GetDouble("reset_map_origin_min_line_length");
+  }
+  if (lua_parameter_dictionary->HasKey("reset_map_origin_max_candidate_lines")) {
+    options.reset_map_origin_max_candidate_lines =
+        lua_parameter_dictionary->GetInt("reset_map_origin_max_candidate_lines");
+  }
+  if (lua_parameter_dictionary->HasKey(
+          "reset_map_origin_orthogonality_tolerance_deg")) {
+    options.reset_map_origin_orthogonality_tolerance_deg =
+        lua_parameter_dictionary->GetDouble(
+            "reset_map_origin_orthogonality_tolerance_deg");
+  }
+  if (lua_parameter_dictionary->HasKey(
+          "reset_map_origin_min_secondary_support_ratio")) {
+    options.reset_map_origin_min_secondary_support_ratio =
+        lua_parameter_dictionary->GetDouble(
+            "reset_map_origin_min_secondary_support_ratio");
+  }
+
   return options;
 }
 
@@ -102,6 +129,18 @@ std::tuple<MappingNodeOptions, TrajectoryOptions> LoadMappingOptions(
 
   return std::make_tuple(CreateMappingNodeOptions(&lua_parameter_dictionary),
              CreateTrajectoryOptions(&lua_parameter_dictionary));
+}
+
+::cartographer::mapping::StructureAlignmentOptions
+CreateStructureAlignmentOptions(const MappingNodeOptions& options) {
+  ::cartographer::mapping::StructureAlignmentOptions align_options;
+  align_options.min_line_length = options.reset_map_origin_min_line_length;
+  align_options.max_candidate_lines = options.reset_map_origin_max_candidate_lines;
+  align_options.orthogonality_tolerance_deg =
+      options.reset_map_origin_orthogonality_tolerance_deg;
+  align_options.min_secondary_support_ratio =
+      options.reset_map_origin_min_secondary_support_ratio;
+  return align_options;
 }
 
 }  // namespace cartographer_ros

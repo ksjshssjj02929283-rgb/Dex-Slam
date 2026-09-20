@@ -31,6 +31,7 @@
 #include "cartographer/mapping/proto/map_builder_options.pb.h"
 #include "cartographer/mapping/proto/submap_visualization.pb.h"
 #include "cartographer/mapping/proto/trajectory_builder_options.pb.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/submaps.h"
 #include "cartographer/mapping/trajectory_builder_interface.h"
@@ -131,6 +132,20 @@ class MapBuilderInterface {
 
   // 保存进度回调：GenerateGlobalStaticSubmap 逐 node 处理时上报 (done, total)。默认无回调。
   virtual void SetProgressCallback(std::function<void(size_t, size_t)> /*callback*/) {}
+  // 重置地图原点：把位姿图中所有全局位姿（node / submap / landmark）变换到
+  // 新坐标系。'transform' 为 旧系 → 新系 的变换（即新原点位姿的逆）。
+  // 必须在最终优化之后、序列化/保存地图之前调用；约束为相对量，对全局刚体
+  // 变换不变，因此无需重新优化。默认空实现，非 2D 实现（mock/stub）无需处理。
+  virtual void ApplyOriginTransform(const transform::Rigid3d& /*transform*/) {}
+
+  // 从位姿图节点的线特征聚合出全局线特征地图，估计对齐结构化环境的
+  // 新原点朝向（返回值语义见 structure_alignment.h 的 EstimateAlignmentYaw）。
+  // 必须在最终优化之后调用；估计失败（无可靠正交结构）时返回 nullopt。
+  // 默认空实现，非 2D 实现（mock/stub）无需处理。
+  virtual absl::optional<double> EstimateStructureAlignmentYaw(
+      const StructureAlignmentOptions& /*options*/) {
+    return absl::nullopt;
+  }
 
   virtual mapping::PoseGraphInterface* pose_graph() = 0;
 

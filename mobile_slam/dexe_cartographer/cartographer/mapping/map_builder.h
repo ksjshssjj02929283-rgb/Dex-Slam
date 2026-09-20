@@ -110,6 +110,19 @@ class MapBuilder : public MapBuilderInterface {
   // Generate global static submap from all trajectory nodes
   std::shared_ptr<Submap2D> GenerateGlobalStaticSubmap(double resolution);
 
+  // 重置地图原点：把位姿图全局位姿变换到新坐标系（'T_old_to_new' 为
+  // 旧系 → 新系），并使已缓存的 global_static_submap_ 失效（下次
+  // SerializeState/SerializeStateToFile 会基于变换后的节点位姿重建）。
+  void ApplyOriginTransform(const transform::Rigid3d& T_old_to_new) override;
+
+  // 从位姿图节点线特征聚合全局线特征地图并估计对齐结构化环境的新原点朝向。
+  // 与 GenerateGlobalStaticSubmap 的线特征处理（跟踪 → 全局化 → culling）一致，
+  // 但不构建栅格/点云，因此可在 SerializeState 之前低成本调用。
+  // 返回新原点在旧地图坐标系下的朝向（|yaw| ≤ π/4），无可靠正交结构时返回
+  // nullopt。
+  absl::optional<double> EstimateStructureAlignmentYaw(
+      const StructureAlignmentOptions& options) override;
+
   // 返回已缓存的全局静态 Submap（SerializeStateToFile 后可用），否则返回 nullptr
   void SetProgressCallback(std::function<void(size_t, size_t)> callback) override {
     progress_callback_ = std::move(callback);

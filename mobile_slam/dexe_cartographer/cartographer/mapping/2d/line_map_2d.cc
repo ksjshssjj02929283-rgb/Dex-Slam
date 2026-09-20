@@ -174,8 +174,8 @@ Eigen::Vector2d MapLine2D::ProjectPointToLine(const Eigen::Vector2d& point,
   const double eps = 1e-8;
   
   if (std::abs(k) > 1e6) {
-    // 垂直线 x = c，投影就是 (c, point_y)
-    double x_line = -b;  // 对于垂直线，通常表示为 x = -b/a
+    // 垂直线：|k|→∞ 时 y = kx + b ⇒ x = (y − b)/k ≈ −b/k（与 point_y 无关）
+    double x_line = -b / k;
     return Eigen::Vector2d(x_line, point[1]);
   } else if (std::abs(k) < eps) {
     // 水平线 y = b，投影就是 (point_x, b)
@@ -453,23 +453,77 @@ void LineMap2DList::LineDataCulling()
   //       << " (removal rate: " << (100.0 * to_remove.size() / (line_map_data_list_.size() + to_remove.size())) << "%)";
 }
 
+// 遗留 OLS（y-on-x，最小化竖直残差）拟合，保留以备外部引用；
+// LineFittingRANSAC 已改用正交回归（OrthogonalRegression）。
+// OLS 会把斜率系统性衰减向 0（线段角度被拉向水平方向），对近竖直
+// 线段尤其不稳，不应用于线段角度估计。
 void LinearRegression(const std::vector<double> &xs, const std::vector<double> &ys, double &a, double &b) {
-  double xmean = 0.0, ymean = 0.0;  
-  for (int i = 0; i < static_cast<int>(xs.size()); ++i) {  
-    xmean += xs[i];  
-    ymean += ys[i];  
-  }  
-  xmean /= xs.size();  
-  ymean /= xs.size();  
+  double xmean = 0.0, ymean = 0.0;
+  for (int i = 0; i < static_cast<int>(xs.size()); ++i) {
+    xmean += xs[i];
+    ymean += ys[i];
+  }
+  xmean /= xs.size();
+  ymean /= xs.size();
 
-  double varx2 = 0.0, varxy = 0.0;  
-  for (int i = 0; i < static_cast<int>(xs.size()); ++i) {  
-    varx2 += (xs[i] - xmean) * (xs[i] - xmean);  
-    varxy += (ys[i] - ymean) * (xs[i] - xmean);  
-  }  
+  double varx2 = 0.0, varxy = 0.0;
+  for (int i = 0; i < static_cast<int>(xs.size()); ++i) {
+    varx2 += (xs[i] - xmean) * (xs[i] - xmean);
+    varxy += (ys[i] - ymean) * (xs[i] - xmean);
+  }
 
-  a = varxy / varx2;  
-  b = ymean - a * xmean;  
+  a = varxy / varx2;
+  b = ymean - a * xmean;
+}
+
+namespace {
+// 高于各处「|k| > 1e6 视为垂直线」判据的垂直斜率输出值
+constexpr double kVerticalSlope = 1e7;
+}  // namespace
+
+// 正交回归（TLS / PCA 主轴）：最小化点到直线垂直距离平方和，输出契约
+// 与 LinearRegression 相同（y = a*x + b）。
+// 主轴方向由散射矩阵特征向量给出：θ = 0.5·atan2(2Sxy, Sxx−Syy)，
+// Sxy ≈ 0 的退化情形由 atan2 自然处理（Sxx ≥ Syy → 水平；否则垂直）。
+// 近竖直结果按既有垂直约定输出 |a| > 1e6 且 b = −a·x̄，使
+// ProjectPointToLine 的 x = −b/a 恰好还原 x̄。
+void OrthogonalRegression(const std::vector<double> &xs, const std::vector<double> &ys, double &a, double &b) {
+  const int n = static_cast<int>(xs.size());
+  double xmean = 0.0, ymean = 0.0;
+  for (int i = 0; i < n; ++i) {
+    xmean += xs[i];
+    ymean += ys[i];
+  }
+  xmean /= n;
+  ymean /= n;
+
+  double sxx = 0.0, syy = 0.0, sxy = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const double dx = xs[i] - xmean;
+    const double dy = ys[i] - ymean;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+
+  // 点重合（无散布）：退化为水平线兜底
+  if (sxx + syy + std::abs(sxy) < 1e-18) {
+    a = 0.0;
+    b = ymean;
+    return;
+  }
+
+  const double theta = 0.5 * std::atan2(2.0 * sxy, sxx - syy);
+  const double c = std::cos(theta);
+  const double s = std::sin(theta);
+  if (std::abs(c) * kVerticalSlope <= std::abs(s)) {
+    // 近竖直：用大斜率 + 过质心的截距表达，保持 (k, b) 输出契约
+    a = kVerticalSlope;
+    b = -a * xmean;
+    return;
+  }
+  a = s / c;  // tan(theta)
+  b = ymean - a * xmean;
 }
 
 
@@ -482,9 +536,9 @@ int LineFittingRANSAC(
     throw std::runtime_error("Insufficient or unequal data points.");  
   }
 
-  // Handle small datasets - use simple linear regression
+  // Handle small datasets - use orthogonal fit (exact through 2 points)
   if (xs.size() < 4) {
-    LinearRegression(xs, ys, *a, *b);
+    OrthogonalRegression(xs, ys, *a, *b);
     *r = 1.0;
     return static_cast<int>(xs.size());
   }
@@ -550,9 +604,9 @@ int LineFittingRANSAC(
     }
   }  
 
-  // If no good fit found, fall back to standard linear regression
+  // If no good fit found, fall back to an orthogonal fit of all points
   if (bestInliers < 2) {
-    LinearRegression(xs, ys, *a, *b);
+    OrthogonalRegression(xs, ys, *a, *b);
     *r = 0.5;  // Low confidence
     return static_cast<int>(xs.size());
   }
@@ -567,9 +621,11 @@ int LineFittingRANSAC(
     }  
   }  
 
-  // Refine fit with inliers only
+  // Refine fit with inliers only.
+  // 正交回归（垂直残差）：观测噪声垂直于墙面，OLS 会把斜率衰减向 0、
+  // 把线段角度系统性拉向水平方向，近竖直线段尤甚。
   if (inlierXs.size() >= 2) {
-    LinearRegression(inlierXs, inlierYs, bestA, bestB);  
+    OrthogonalRegression(inlierXs, inlierYs, bestA, bestB);
   }
 
   *a = bestA;  
