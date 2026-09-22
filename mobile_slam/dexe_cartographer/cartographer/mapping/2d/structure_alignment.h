@@ -43,6 +43,30 @@ struct StructureAlignmentOptions {
   double min_secondary_support_ratio = 0.1;
 };
 
+// 估角过程中的诊断量。此前只打进日志，现在带出函数供调用方使用：
+//   - 离线工具把它打进 [ALIGN_RESULT] 结果行，供 command_board 编排判断是否值得执行；
+//   - pbstream_check ALIGN-01 区分「没对齐」与「已达算法最优但地图本身不正交」。
+// 单独成 struct 而非塞进返回值，是为了让返回 nullopt（估角失败）时调用方
+// 仍能拿到已算出的部分信息（如候选线段数）用于报错提示。
+struct StructureAlignmentDiagnostics {
+  // 通过长度门槛并参与估计的候选线段数（Top-N 截断后）
+  int candidate_lines = 0;
+  // 主/次结构方向（弧度，归一化到 [0, π)）；estimated=false 时无意义
+  double primary_direction = 0.0;
+  double secondary_direction = 0.0;
+  // 主/次方向的支撑量 = 各自精化窗口内候选线段长度之和（米）
+  double primary_support = 0.0;
+  double secondary_support = 0.0;
+  // δ：两族墙的正交误差 = wrap(θ2 − θ1 − π/2)（弧度，∈ [−π/2, π/2)）。
+  // 位姿图漂移会让两族墙不严格正交；|δ|/2 是对齐后残余角的物理下界
+  // （等支撑时），据此可区分「对齐质量差」与「已达算法最优」。
+  double orthogonality_error = 0.0;
+  // 对齐后两族各自保留残余角的支撑加权 RMS（弧度）
+  double rms_axis_residual = 0.0;
+  // 上面几项是否已算出（走到第 6 段才为 true；提前 nullopt 时为 false）
+  bool estimated = false;
+};
+
 // 从全局线特征地图 'line_map'（应为聚合 + culling 后的 LineMap2DList）估计
 // 对齐结构化环境的新原点朝向。
 //
@@ -52,8 +76,12 @@ struct StructureAlignmentOptions {
 // 线段角度迭代精化（收窄窗口剔除不对称尾部），再按各自支撑量加权融合，
 // 使两族墙平分非严格正交带来的残余角（见 .cc 第 6 段）。
 // 找不到可靠的正交结构方向时返回 nullopt。
+//
+// 'diagnostics' 可为 nullptr（默认）；非空时无论成功与否都会被填写，
+// 失败路径至少填 candidate_lines，estimated 保持 false。
 absl::optional<double> EstimateAlignmentYaw(
-    const LineMap2DList& line_map, const StructureAlignmentOptions& options);
+    const LineMap2DList& line_map, const StructureAlignmentOptions& options,
+    StructureAlignmentDiagnostics* diagnostics = nullptr);
 
 }  // namespace mapping
 }  // namespace cartographer

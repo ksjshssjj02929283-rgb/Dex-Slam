@@ -35,10 +35,12 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -92,6 +94,15 @@ DEFINE_bool(save_origin_map, false,
             "（原目录已存在 *_origin.png 时会自动保存，无需此 flag）");
 DEFINE_bool(save_debug_map, false, "是否保存噪声过滤的中间调试图（debug_map/）");
 
+
+// ⭐ 资产失效确认门：本工具只旋转 <map>/slam/ 下的底图，
+// 不碰 <map>/assets/（点位/路网/禁区）与 <map>/versions/（manifest）。
+// 对已挂资产的地图直接跑 = 资产全部错位且 backups/ 不覆盖它们、无回滚路径。
+// 正确路径是走 command_board 的 ~/align_map（它随后会调 transform_assets 补上）。
+DEFINE_bool(i_know_assets_will_break, false,
+            "地图目录下存在 assets/ 或 versions/ 时，必须显式加此 flag 才继续"
+            "（本工具不变换它们；请改用 command_board 的 ~/align_map 编排）");
+
 namespace cartographer_ros {
 namespace {
 
@@ -131,6 +142,78 @@ void ReadYamlDefaults(const std::string& yaml_file, double* resolution,
   }
 }
 
+// 机器可读结果行。恒输出到 stdout，前缀是固定标记：
+//
+//   [ALIGN_RESULT] {"ok":true,"reason":"applied",...}
+//
+// 为什么用 stdout 标记行而不是写临时文件：command_board 用 popen 调本工具，
+// 本来就在收 stdout，多走一个 /tmp 文件只是白增三个失败面（路径不可写 /
+// 残留 / 读不到）。为什么不直接让编排解析日志文本：glog 的 alsologtostderr
+// 会把时间戳、线程号混进同一个流，且日志措辞一改解析就断——固定标记 + JSON
+// 才是稳定契约。编排侧取**最后一条**标记行即可，不受前面日志干扰。
+//
+// 字段与 nav_interfaces/srv/AlignMap.srv 的响应一一对应，编排侧直接映射。
+// ⚠️ 必须在任何 LOG(FATAL) 之前调用：FATAL 会 abort，std::endl 先 flush 才保得住。
+void PrintResultLine(
+    const bool ok, const std::string& reason,
+    const ::cartographer::mapping::StructureAlignmentDiagnostics& diag,
+    const double yaw_rad, const bool applied, const double residual_rad) {
+  constexpr double kRadToDeg = 180.0 / M_PI;
+  std::cout << std::boolalpha << "[ALIGN_RESULT] {"
+            << "\"ok\":" << ok
+            << ",\"reason\":\"" << reason << "\""
+            << ",\"yaw_rad\":" << yaw_rad
+            << ",\"yaw_deg\":" << yaw_rad * kRadToDeg
+            << ",\"orthogonality_error_deg\":" << diag.orthogonality_error * kRadToDeg
+            << ",\"rms_axis_residual_deg\":" << diag.rms_axis_residual * kRadToDeg
+            << ",\"primary_support_m\":" << diag.primary_support
+            << ",\"secondary_support_m\":" << diag.secondary_support
+            << ",\"candidate_lines\":" << diag.candidate_lines
+            << ",\"applied\":" << applied
+            << ",\"residual_yaw_deg\":" << residual_rad * kRadToDeg
+            << "}" << std::endl;
+}
+
+// 资产失效确认门：找出本工具**不会**变换、但会因底图旋转而失效的东西。
+// 宁可多报不可少报——漏报的后果是现场标注的点位/路网静默错位且无回滚路径。
+//
+// 覆盖三种布局：
+//   ① 分层（当前布局）：map_filestem = <map>/slam/map，资产在 <map>/assets/、
+//      manifest 在 <map>/versions/；
+//   ② 遗留单数目录 <map>/asset/（早期数据里出现过，迁移逻辑并不认它，
+//      所以更要拦——没人会帮它迁走）；
+//   ③ 旧扁平布局（分层之前）：map_filestem = <map>/map，
+//      map_assets.json 直接躺在底图旁边。此前这一路完全没有门。
+std::vector<std::string> DetectAssetDirs(const std::string& map_filestem) {
+  std::vector<std::string> found;
+  std::error_code ec;
+  const fs::path base_dir = fs::path(map_filestem).parent_path();
+
+  const auto add_if_nonempty_dir = [&](const fs::path& p) {
+    if (fs::is_directory(p, ec) && !ec && !fs::is_empty(p, ec) && !ec) {
+      found.push_back(p.string());
+    }
+  };
+
+  if (base_dir.filename() == "slam") {
+    // 布局 ①②：资产目录在 slam/ 的同级
+    const fs::path map_dir = base_dir.parent_path();
+    for (const char* sub : {"assets", "asset", "versions"}) {
+      add_if_nonempty_dir(map_dir / sub);
+    }
+  } else {
+    // 布局 ③：扁平，资产文件与底图同级
+    if (fs::is_regular_file(base_dir / "map_assets.json", ec) && !ec) {
+      found.push_back((base_dir / "map_assets.json").string());
+    }
+    // 扁平布局下也可能已经手工建了资产子目录
+    for (const char* sub : {"assets", "asset", "versions"}) {
+      add_if_nonempty_dir(base_dir / sub);
+    }
+  }
+  return found;
+}
+
 void Run(const std::string& pbstream_file, const std::string& map_filestem,
          const bool dry_run) {
   // === Step 1: 加载 pbstream ===
@@ -158,6 +241,7 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
     }
   }
   if (static_submap_proto == nullptr) {
+    PrintResultLine(false, "no_global_static_submap", {}, 0.0, false, 0.0);
     LOG(FATAL) << "pbstream has no global_static_submap record.\n"
                << "  This tool requires maps saved by the add_align_map branch "
                   "(global_static_submap + line features).\n"
@@ -168,6 +252,7 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
                          static_submap_proto->line_map_2d_list()
                                  .line_map_data_size() > 0;
   if (!has_lines) {
+    PrintResultLine(false, "no_line_features", {}, 0.0, false, 0.0);
     LOG(FATAL) << "global_static_submap has no line features "
                   "(line_map_2d_list absent or empty).\n"
                << "  Submap2D::ToProto() skips the field when every line was "
@@ -188,9 +273,11 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   align_opts.orthogonality_tolerance_deg = FLAGS_orthogonality_tolerance_deg;
   align_opts.min_secondary_support_ratio = FLAGS_min_secondary_support_ratio;
 
+  ::cartographer::mapping::StructureAlignmentDiagnostics diag;
   const auto yaw_opt =
-      ::cartographer::mapping::EstimateAlignmentYaw(line_map, align_opts);
+      ::cartographer::mapping::EstimateAlignmentYaw(line_map, align_opts, &diag);
   if (!yaw_opt.has_value()) {
+    PrintResultLine(false, "no_reliable_orthogonal_structure", diag, 0.0, false, 0.0);
     LOG(FATAL) << "EstimateAlignmentYaw found no reliable orthogonal "
                   "structure; files were NOT modified.\n"
                << "  Try adjusting --min_line_length / "
@@ -201,10 +288,46 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   LOG(INFO) << "=== Estimated alignment yaw: " << new_yaw << " rad ("
             << new_yaw * 180.0 / M_PI << " deg) ===";
 
+  LOG(INFO) << "    orthogonality error delta=" << diag.orthogonality_error * 180.0 / M_PI
+            << " deg, weighted RMS axis residual="
+            << diag.rms_axis_residual * 180.0 / M_PI << " deg, candidates="
+            << diag.candidate_lines;
+
   if (dry_run) {
+    // 估角成功但 applied=false；residual 填 estimated（尚未施加）
+    PrintResultLine(true, "dry_run", diag, new_yaw, /*applied=*/false, new_yaw);
     LOG(INFO) << "Dry run: no file modified. Re-run without --dry_run to "
                  "apply the rotation.";
     return;
+  }
+
+  // === Step 3b: 资产失效确认门 ===
+  // 放在估角之后、备份之前：估角失败时连这层检查都不必做；
+  // 一旦走到这里就意味着真的要改文件了。
+  const auto asset_dirs = DetectAssetDirs(map_filestem);
+  if (!asset_dirs.empty() && !FLAGS_i_know_assets_will_break) {
+    std::string dirs;
+    for (const auto& d : asset_dirs) dirs += "\n    " + d;
+    PrintResultLine(false, "assets_present_without_confirmation", diag, new_yaw, false,
+             new_yaw);
+    LOG(FATAL)
+        << "Map has assets that this tool does NOT transform:" << dirs << "\n"
+        << "  Rotating the base map by " << new_yaw * 180.0 / M_PI
+        << " deg would leave every navigation point / route / forbidden area\n"
+        << "  at its old coordinates, and backups/ does NOT cover them.\n"
+        << "  Use the orchestrated entry instead:\n"
+        << "    ros2 service call /command_board/align_map "
+           "nav_interfaces/srv/AlignMap \"{map_name: '...'}\"\n"
+        << "  which rotates the base map and the assets together and rolls "
+           "back on failure.\n"
+        << "  To proceed anyway (assets WILL break), pass "
+           "--i_know_assets_will_break.\n"
+        << "  Files were NOT modified.";
+  }
+  if (!asset_dirs.empty()) {
+    LOG(WARNING) << "Proceeding with --i_know_assets_will_break: "
+                 << asset_dirs.size()
+                 << " asset director(y|ies) will be left in the OLD frame.";
   }
 
   // === Step 4: 备份原地图文件（修改任何文件之前）===
@@ -257,14 +380,12 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   LOG(INFO) << "Pose graph transformed: " << n_submap << " submap poses, "
             << n_node << " node poses, " << n_landmark << " landmark poses";
 
-  // === Step 7: 变换 SerializedData（非 grid 部分）===
+  // === Step 7: 变换 trajectory_data 的 fixed_frame_origin ===
+  // （global_static_submap 不在这里变换——它整体重建，见 Step 8）
   size_t n_traj_data = 0;
   for (auto& rec : all_records) {
-    if (rec.has_global_static_submap()) {
-      mt::TransformStaticSubmapNonGrid(rec.mutable_global_static_submap(),
-                                       T_inv);
-    } else if (rec.has_trajectory_data() &&
-               rec.trajectory_data().has_fixed_frame_origin_in_map()) {
+    if (rec.has_trajectory_data() &&
+        rec.trajectory_data().has_fixed_frame_origin_in_map()) {
       auto* td = rec.mutable_trajectory_data();
       const auto old_pose = ::cartographer::transform::ToRigid3(
           td->fixed_frame_origin_in_map());
@@ -273,11 +394,13 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
       ++n_traj_data;
     }
   }
-  LOG(INFO) << "SerializedData transformed (non-grid): global_static_submap "
-               "(local_pose + cloud + line), "
-            << n_traj_data << " trajectory_data fixed_frame_origin";
+  LOG(INFO) << "SerializedData transformed: " << n_traj_data
+            << " trajectory_data fixed_frame_origin";
 
-  // === Step 8: 栅格重建 ===
+  // === Step 8: 重建 global_static_submap（栅格 + 点云 + 线特征）===
+  // ⭐ 旋转改变的不只是位姿——栅格 cell、点云体素格、线段拟合都锚在
+  // 坐标系上，所以三类地图必须在新系从 node 重建，而不是把旧产物刚体搬过去。
+  // 只有「无 node 可重建」的退化情形才退回「刚体变换 + 重栅格化」旧路径。
   bool has_nodes = false;
   for (const auto& traj : pose_graph.trajectory()) {
     if (traj.node_size() > 0) { has_nodes = true; break; }
@@ -286,23 +409,31 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
     CHECK(has_nodes)
         << "--rebuild_grid_from_nodes requires trajectory nodes in pose graph";
     // padding 30m，覆盖典型激光最大距离（与 reset_map_origin_tool 一致）
-    *static_submap_proto->mutable_grid() = mt::BuildFreshGridFromNodes(
+    *static_submap_proto = mt::RebuildGlobalStaticSubmapFromNodes(
         pose_graph, all_records, traj_options, resolution,
         /*lidar_range_pad=*/30.0);
   } else if (static_submap_proto->has_grid()) {
+    // --norebuild_grid_from_nodes：保留原栅格概率（含 miss 射线的 free space），
+    // 代价是点云 / 线特征只能跟着做刚体变换，仍带旧系体素量化与旧栅格 culling
+    // 结论。观感最接近保存时，但产物内部不如重建自洽。
+    LOG(WARNING) << "--norebuild_grid_from_nodes: rerasterizing the old grid "
+                    "and rigid-transforming cloud/lines. Point cloud keeps the "
+                    "OLD frame's voxel quantization and culling decisions; "
+                    "prefer the default rebuild unless you need free space.";
+    mt::TransformStaticSubmapNonGrid(static_submap_proto, T_inv);
     mt::RerasterizeGridProto(static_submap_proto->mutable_grid(), T_inv);
   } else if (has_nodes) {
     LOG(WARNING) << "global_static_submap has no grid; falling back to "
                     "rebuilding from node clouds";
-    *static_submap_proto->mutable_grid() = mt::BuildFreshGridFromNodes(
+    *static_submap_proto = mt::RebuildGlobalStaticSubmapFromNodes(
         pose_graph, all_records, traj_options, resolution,
         /*lidar_range_pad=*/30.0);
   } else {
+    PrintResultLine(false, "no_grid_and_no_nodes", diag, new_yaw, false, new_yaw);
     LOG(FATAL) << "global_static_submap has no grid and pose graph has no "
-                  "nodes; cannot rebuild the grid. Backups are kept in "
+                  "nodes; cannot rebuild. Backups are kept in "
                   "backups/, no output file has been written yet.";
   }
-
   // === Step 9: 重渲染 map.png + map.yaml（与 node 端 SaveMap 一致）===
   cv::Mat origin_mat;
   Eigen::Vector2d map_origin;
@@ -338,16 +469,34 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   // === Step 12: 复检 —— 对变换后的线特征重跑估计，残余角应 ≈ 0 ===
   const ::cartographer::mapping::LineMap2DList line_map_after =
       mt::LineMap2DListFromProto(static_submap_proto->line_map_2d_list());
+  ::cartographer::mapping::StructureAlignmentDiagnostics diag_after;
   const auto residual_opt = ::cartographer::mapping::EstimateAlignmentYaw(
-      line_map_after, align_opts);
+      line_map_after, align_opts, &diag_after);
+  double residual = 0.0;
   if (residual_opt.has_value()) {
-    LOG(INFO) << "=== Post-transform residual yaw: " << *residual_opt
-              << " rad (" << *residual_opt * 180.0 / M_PI
+    residual = *residual_opt;
+    LOG(INFO) << "=== Post-transform residual yaw: " << residual
+              << " rad (" << residual * 180.0 / M_PI
               << " deg), expected < 1 deg ===";
+    // 线特征已在新系重拟合（Step 8），残余角理论下界是 |δ|/2；
+    // 超出该下界较多说明重建或变换有问题，值得告警而不是静默。
+    const double lower_bound_deg =
+        std::abs(diag_after.orthogonality_error) * 0.5 * 180.0 / M_PI;
+    const double residual_deg = std::abs(residual) * 180.0 / M_PI;
+    if (residual_deg > std::max(1.0, lower_bound_deg + 0.5)) {
+      LOG(WARNING) << "Residual " << residual_deg
+                   << " deg exceeds the expected bound (max(1.0, |delta|/2 + "
+                      "0.5) = "
+                   << std::max(1.0, lower_bound_deg + 0.5)
+                   << " deg); check the rebuild.";
+    }
   } else {
     LOG(WARNING) << "Post-transform re-estimation returned nullopt (structure "
                     "no longer evaluable after rotation — unexpected)";
   }
+  // 成功路径：诊断量用施加前的 diag（描述这次对齐做了什么），
+  // residual 用施加后的复检值。
+  PrintResultLine(true, "applied", diag, new_yaw, /*applied=*/true, residual);
   LOG(INFO) << "align_map_tool done: " << map_dir << " (backup: "
             << backup_dir << ")";
 }

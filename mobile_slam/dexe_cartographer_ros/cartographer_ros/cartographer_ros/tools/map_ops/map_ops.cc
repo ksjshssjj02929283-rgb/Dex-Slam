@@ -12,6 +12,8 @@
 
 #include "cartographer_ros/tools/map_ops/map_ops.h"
 
+#include "cartographer_ros/tools/map_transform_common.h"
+
 #include <unistd.h>
 
 #include <algorithm>
@@ -1328,12 +1330,13 @@ void TransformAndRewriteMap(
 
   // Step 2: 应用变换到 SerializedData（global_static_submap 非栅格部分 +
   // trajectory_data 的 fixed_frame_origin）。
+  // 注意：global_static_submap 的非栅格部分只在「无 node 可重建」的退化路径
+  // 才需要刚体变换（Step 3 有 node 时会整体重建并覆盖），故此处先只定位指针，
+  // 变换推迟到 Step 3 的退化分支里做。
   ::cartographer::mapping::proto::Submap2D* static_submap_proto = nullptr;
   size_t n_static = 0, n_traj_data = 0;
   for (auto& rec : all_records) {
     if (rec.has_global_static_submap()) {
-      TransformStaticSubmapNonGrid(rec.mutable_global_static_submap(),
-                                   T_old_to_new);
       static_submap_proto = rec.mutable_global_static_submap();
       ++n_static;
     } else if (rec.has_trajectory_data() &&
@@ -1346,14 +1349,18 @@ void TransformAndRewriteMap(
       ++n_traj_data;
     }
   }
-  LOG(INFO) << "SerializedData transformed (non-grid): " << n_static
-            << " global_static_submap, " << n_traj_data
+  LOG(INFO) << "SerializedData: located " << n_static
+            << " global_static_submap, transformed " << n_traj_data
             << " trajectory_data fixed_frame_origin";
   CHECK(static_submap_proto != nullptr)
       << "Map has no global_static_submap; cannot rewrite. "
          "Regenerate the map first.";
 
-  // Step 3: 从节点重建全局栅格（无节点时回退到重栅格化）。
+  // Step 3: 重建 global_static_submap（栅格 + 点云 + 线特征）。
+  // ⭐ 与 align_map_tool 同款——刚体变换只搬位姿，栅格 cell / 点云
+  // 体素格 / 线段拟合都锚在坐标系上，必须在新系从 node 重建。替换的变换是
+  // 任意刚体（含平移），比对齐的纯旋转更容易把旧体素格与新栅格错开。
+  // 直接复用 map_transform 的实现（同包同目录），不再在本文件里造第三份副本。
   bool has_nodes = false;
   for (const auto& traj : pose_graph.trajectory()) {
     if (traj.node_size() > 0) {
@@ -1362,11 +1369,16 @@ void TransformAndRewriteMap(
     }
   }
   if (has_nodes) {
-    *static_submap_proto->mutable_grid() = BuildFreshGridFromNodes(
-        pose_graph, all_records, traj_options, opts.resolution,
-        /*lidar_range_pad=*/30.0);
+    *static_submap_proto = ::cartographer_ros::map_transform::
+        RebuildGlobalStaticSubmapFromNodes(pose_graph, all_records,
+                                           traj_options, opts.resolution,
+                                           /*lidar_range_pad=*/30.0);
   } else if (static_submap_proto->has_grid()) {
-    LOG(WARNING) << "pose_graph has no nodes; falling back to rerasterize";
+    // 无 node 可重建的退化路径：只能刚体变换 + 重栅格化，产物保留旧系量化。
+    LOG(WARNING) << "pose_graph has no nodes; falling back to rigid transform "
+                    "+ rerasterize (cloud/lines keep the OLD frame's voxel "
+                    "quantization and culling decisions)";
+    TransformStaticSubmapNonGrid(static_submap_proto, T_old_to_new);
     RerasterizeGridProto(static_submap_proto->mutable_grid(), T_old_to_new);
   }
 

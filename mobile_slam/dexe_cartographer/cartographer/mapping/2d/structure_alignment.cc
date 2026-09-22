@@ -95,7 +95,15 @@ double RefineDirection(const std::vector<Candidate>& candidates,
 
 absl::optional<double> EstimateAlignmentYaw(
     const LineMap2DList& line_map,
-    const StructureAlignmentOptions& options) {
+    const StructureAlignmentOptions& options,
+    StructureAlignmentDiagnostics* diagnostics) {
+  // 本地诊断缓冲：调用方不关心时也照常填写，末尾统一回写，
+  // 避免每个 return 点重复判空。
+  StructureAlignmentDiagnostics diag;
+  const auto emit = [&diagnostics, &diag]() {
+    if (diagnostics != nullptr) *diagnostics = diag;
+  };
+
   // ── 1. 候选筛选：结构长度门槛 ────────────────────────────────────────
   // （观测次数 / RANSAC 内点等基础质量剔除已由上游 LineDataCulling 完成）
   std::vector<Candidate> candidates;
@@ -109,9 +117,11 @@ absl::optional<double> EstimateAlignmentYaw(
             << line_map.size()
             << " global lines passed structure length gate (min_length="
             << options.min_line_length << " m)";
+  diag.candidate_lines = static_cast<int>(candidates.size());
   // 正交结构至少需要两条方向不同的线段
   if (candidates.size() < 2) {
     LOG(INFO) << "EstimateAlignmentYaw: not enough candidates, giving up.";
+    emit();
     return absl::nullopt;
   }
 
@@ -123,6 +133,8 @@ absl::optional<double> EstimateAlignmentYaw(
   if (static_cast<int>(candidates.size()) > options.max_candidate_lines) {
     candidates.resize(options.max_candidate_lines);
   }
+  // Top-N 截断后的实际参与数才是「估计用了多少条线」
+  diag.candidate_lines = static_cast<int>(candidates.size());
 
   // ── 3. 加权角度直方图（权重 = 线段长度），仅用于粗找峰 ──────────────
   //    方向值由第 4/5 段用线段自身角度精化给出，直方图不承担估值职责，
@@ -150,6 +162,7 @@ absl::optional<double> EstimateAlignmentYaw(
       std::max_element(hist.begin(), hist.end()) - hist.begin());
   if (hist[peak1] <= 0.0) {
     LOG(INFO) << "EstimateAlignmentYaw: empty histogram, giving up.";
+    emit();
     return absl::nullopt;
   }
 
@@ -167,6 +180,7 @@ absl::optional<double> EstimateAlignmentYaw(
   if (masked[peak2] <= 0.0) {
     LOG(INFO) << "EstimateAlignmentYaw: single direction only, no "
                  "orthogonal structure. Giving up.";
+    emit();
     return absl::nullopt;
   }
   double w2 = 0.0;
@@ -176,6 +190,7 @@ absl::optional<double> EstimateAlignmentYaw(
     LOG(INFO) << "EstimateAlignmentYaw: secondary direction ("
               << theta2 / kDegToRad << " deg) is not orthogonal to primary ("
               << theta1 / kDegToRad << " deg). Giving up.";
+    emit();
     return absl::nullopt;
   }
   // 支撑比门槛直接用精化窗口内累计长度 w2/w1
@@ -183,6 +198,7 @@ absl::optional<double> EstimateAlignmentYaw(
     LOG(INFO) << "EstimateAlignmentYaw: secondary support too weak ("
               << w2 << " vs primary " << w1 << ", required ratio "
               << options.min_secondary_support_ratio << "). Giving up.";
+    emit();
     return absl::nullopt;
   }
 
@@ -207,6 +223,15 @@ absl::optional<double> EstimateAlignmentYaw(
   const double res2 = std::abs(delta) * w1 / w_sum;  // 次方向族残余
   const double rms_residual =
       std::sqrt((w1 * res1 * res1 + w2 * res2 * res2) / w_sum);
+
+  diag.primary_direction = theta1;
+  diag.secondary_direction = theta2;
+  diag.primary_support = w1;
+  diag.secondary_support = w2;
+  diag.orthogonality_error = delta;
+  diag.rms_axis_residual = rms_residual;
+  diag.estimated = true;
+  emit();
 
   LOG(INFO) << "EstimateAlignmentYaw: primary direction "
             << theta1 / kDegToRad << " deg (support " << w1

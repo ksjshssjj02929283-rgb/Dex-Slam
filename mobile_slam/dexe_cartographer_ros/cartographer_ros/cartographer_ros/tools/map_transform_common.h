@@ -59,9 +59,39 @@ void TransformStaticSubmapNonGrid(
 void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
                           const ::cartographer::transform::Rigid3d& T_inv);
 
+// 在新坐标系中从 trajectory node 重建**整个** global_static_submap：
+// 栅格 + 点云 + 高亮点云 + 线特征，最后 Finish()（含 line / cloud culling）。
+//
+// 为什么必须重建而不能只对旧产物做刚体变换：
+//   - 点云入 ikd-tree 时按栅格分辨率做**轴对齐体素降采样**，刚体变换后
+//     点云仍带着旧坐标系的体素量化，与新栅格 cell 边界系统性错位；
+//   - cloud culling 依据是**当时那张栅格**的占据概率，栅格重建后旧的保留集
+//     失效，且此前被剔除的点已不在数据里，刚体变换救不回来；
+//   - 线特征的关联与拟合同理，是旧系下的结论。
+// 与 MapBuilder::GenerateGlobalStaticSubmap 的步骤 7a/7b/7c 一一对应，
+// 区别只在这里是 proto 级输入（pbstream 已落盘，没有内存位姿图对象）。
+//
+// 已知限制：pbstream 的 TrajectoryNodeData 不存 range_datas，只有
+// filtered_gravity_aligned_point_cloud，因此插栅格时 misses 为空 ——
+// 命中射线沿途的 free space 由 CastRays 重建，但**无回波 / 超量程光束**
+// 带来的 free space 补不回来。这是 pbstream 格式边界，不是实现缺陷。
+//
+// 另注：重建出的 submap 不含 precomputation_grid_stack 缓存（旧缓存属于
+// 旧栅格，本就该失效），首次全局重定位会重建它，是一次性开销。
+//
+// 'pose_graph' 的位姿必须已变换到新坐标系。
+::cartographer::mapping::proto::Submap2D RebuildGlobalStaticSubmapFromNodes(
+    const ::cartographer::mapping::proto::PoseGraph& pose_graph,
+    const std::vector<::cartographer::mapping::proto::SerializedData>& records,
+    const ::cartographer::mapping::proto::AllTrajectoryBuilderOptions&
+        traj_options,
+    const double resolution, const double lidar_range_pad);
+
 // 把所有 trajectory node 的 filtered_gravity_aligned_point_cloud 在新坐标系中
 // 重新插入到一张全新的 ProbabilityGrid（干净、无重影；但 pbstream 不存原始
 // range_data，misses 为空，free space 信息会丢失）。
+// ⚠️ 仅重建栅格，不重建点云 / 线特征 —— 新代码请用
+// RebuildGlobalStaticSubmapFromNodes；本函数保留给只需要栅格的旧调用方。
 ::cartographer::mapping::proto::Grid2D BuildFreshGridFromNodes(
     const ::cartographer::mapping::proto::PoseGraph& pose_graph,
     const std::vector<::cartographer::mapping::proto::SerializedData>& records,

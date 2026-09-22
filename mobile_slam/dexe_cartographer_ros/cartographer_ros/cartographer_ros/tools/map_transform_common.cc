@@ -24,6 +24,7 @@
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
 #include "cartographer/mapping/2d/submap_2d.h"
+#include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
 #include "cartographer/mapping/value_conversion_tables.h"
 #include "cartographer/sensor/compressed_point_cloud.h"
 #include "cartographer/sensor/line_data.h"
@@ -232,6 +233,200 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
   LOG(INFO) << "  Grid rerasterized: copied=" << copied
             << " dropped=" << dropped << " conflict=" << conflict
             << " new_size=" << new_num_x << "x" << new_num_y;
+}
+
+::cartographer::mapping::proto::Submap2D RebuildGlobalStaticSubmapFromNodes(
+    const ::cartographer::mapping::proto::PoseGraph& pose_graph,
+    const std::vector<::cartographer::mapping::proto::SerializedData>& records,
+    const ::cartographer::mapping::proto::AllTrajectoryBuilderOptions&
+        traj_options,
+    const double resolution, const double lidar_range_pad) {
+  namespace cm = ::cartographer::mapping;
+  namespace cs = ::cartographer::sensor;
+
+  // ── 1. 收集 node global pose（已经过变换）──────────────────────────
+  std::map<std::pair<int, int>, ::cartographer::transform::Rigid3d>
+      node_global_poses;
+  for (const auto& traj : pose_graph.trajectory()) {
+    for (const auto& node : traj.node()) {
+      node_global_poses[{traj.trajectory_id(), node.node_index()}] =
+          ::cartographer::transform::ToRigid3(node.pose());
+    }
+  }
+  CHECK(!node_global_poses.empty())
+      << "RebuildGlobalStaticSubmapFromNodes: pose_graph has no nodes";
+
+  // ── 2. bbox：节点位姿凸包 + 激光射程 padding ───────────────────────
+  Eigen::AlignedBox2d bbox;
+  for (const auto& [id, pose] : node_global_poses) {
+    bbox.extend(Eigen::Vector2d(pose.translation().x(),
+                                pose.translation().y()));
+  }
+  const Eigen::Vector2d pad = Eigen::Vector2d::Constant(lidar_range_pad);
+  const Eigen::Vector2d bbox_min = bbox.min() - pad;
+  const Eigen::Vector2d bbox_max = bbox.max() + pad;
+  const int num_x = static_cast<int>(
+      std::ceil((bbox_max.x() - bbox_min.x()) / resolution));
+  const int num_y = static_cast<int>(
+      std::ceil((bbox_max.y() - bbox_min.y()) / resolution));
+
+  // ── 3. 空 Submap2D（grid + 空点云 + 空线地图），origin 取 bbox 右上角 ──
+  //    conv 必须比 submap 活得久：声明在前，析构在后（逆序销毁）。
+  cm::ValueConversionTables conv;
+  const Eigen::Vector2f origin_2d(static_cast<float>(bbox_max.x()),
+                                  static_cast<float>(bbox_max.y()));
+  auto submap = std::make_shared<cm::Submap2D>(
+      origin_2d,
+      std::unique_ptr<cm::Grid2D>(static_cast<cm::Grid2D*>(
+          std::make_unique<cm::ProbabilityGrid>(
+              cm::MapLimits(resolution, bbox_max,
+                            cm::CellLimits(num_x, num_y)),
+              &conv)
+              .release())),
+      &conv, std::make_unique<cs::PointCloud>(),
+      std::make_unique<cs::PointCloud>(), 0, std::map<int, cm::MapLine2D>{});
+
+  // ── 4. 从 traj_options 取 culling / inserter / line matcher 参数 ────
+  //    与 GenerateGlobalStaticSubmap 同源：都用第一条轨迹的参数。
+  cm::proto::ProbabilityGridRangeDataInserterOptions2D pg_opts;
+  bool used_default_opts = true;
+  bool has_submaps_opts = false;
+  cm::proto::SubmapsOptions2D submaps_opts;
+  ::cartographer::mapping::scan_matching::proto::LineMatcherOptions
+      line_matcher_opts;
+  if (!traj_options.options_with_sensor_ids().empty()) {
+    const auto& tb2d = traj_options.options_with_sensor_ids(0)
+                           .trajectory_builder_options()
+                           .trajectory_builder_2d_options();
+    submaps_opts = tb2d.submaps_options();
+    line_matcher_opts = tb2d.line_matcher_options();
+    has_submaps_opts = true;
+    const auto& rdi_opts = submaps_opts.range_data_inserter_options();
+    if (rdi_opts.range_data_inserter_type() ==
+        cm::proto::RangeDataInserterOptions::PROBABILITY_GRID_INSERTER_2D) {
+      pg_opts = rdi_opts.probability_grid_range_data_inserter_options_2d();
+      used_default_opts = false;
+    }
+  }
+  if (used_default_opts) {
+    pg_opts.set_hit_probability(0.65);
+    pg_opts.set_miss_probability(0.48);
+    pg_opts.set_insert_free_space(true);
+    LOG(WARNING) << "RebuildGlobalStaticSubmapFromNodes: traj_options has no "
+                    "PROBABILITY_GRID_INSERTER_2D, using defaults "
+                    "(hit=0.65, miss=0.48)";
+  }
+  if (has_submaps_opts) {
+    submap->SetCloudCullingProb(submaps_opts.cloud_culling_prob());
+    submap->SetLineCullingParam(submaps_opts.min_line_length(),
+                                submaps_opts.max_line_length(),
+                                submaps_opts.line_culling_obs());
+  } else {
+    LOG(WARNING) << "RebuildGlobalStaticSubmapFromNodes: no submaps_options, "
+                    "cloud/line culling uses Submap2D defaults";
+  }
+  auto inserter =
+      std::make_unique<cm::ProbabilityGridRangeDataInserter2D>(pg_opts);
+  // 离线后处理：跳过已饱和 free 格子的 miss 射线更新（数学等价，省大量无效计算）
+  inserter->SetSkipSaturatedFreeCells(true);
+  cm::scan_matching::LineMatcher2D line_matcher(line_matcher_opts);
+
+  // ── 5. 逐 node 重建三类地图（对应 GenerateGlobalStaticSubmap 7a/7b/7c）──
+  size_t inserted = 0, skipped_no_pose = 0, skipped_empty_cloud = 0;
+  size_t nodes_with_lines = 0, nodes_with_highlight = 0;
+  for (const auto& rec : records) {
+    if (!rec.has_node()) continue;
+    const auto& node_proto = rec.node();
+    const auto it = node_global_poses.find(
+        {node_proto.node_id().trajectory_id(),
+         node_proto.node_id().node_index()});
+    if (it == node_global_poses.end()) {
+      ++skipped_no_pose;
+      continue;
+    }
+    const auto& global_pose = it->second;
+    const auto& node_data = node_proto.node_data();
+    if (!node_data.has_filtered_gravity_aligned_point_cloud()) {
+      ++skipped_empty_cloud;
+      continue;
+    }
+
+    const cs::CompressedPointCloud compressed(
+        node_data.filtered_gravity_aligned_point_cloud());
+    const auto cloud_local = compressed.Decompress();
+    if (cloud_local.empty()) {
+      ++skipped_empty_cloud;
+      continue;
+    }
+    const auto cloud_global =
+        cs::TransformPointCloud(cloud_local, global_pose.cast<float>());
+
+    // 7a 栅格：synthetic range data（misses 为空，见头文件已知限制）
+    cs::RangeData range_data;
+    range_data.origin = global_pose.translation().cast<float>();
+    range_data.returns = cloud_global;
+    range_data.misses = cs::PointCloud{};
+    submap->InsertRangeData(range_data, inserter.get());
+
+    // 7b 点云：在**新系**重新体素降采样 + 后续按新栅格 culling
+    cs::PointCloud highlight_global;
+    if (node_data.has_highlight_point_cloud()) {
+      const cs::CompressedPointCloud compressed_hl(
+          node_data.highlight_point_cloud());
+      const auto hl_local = compressed_hl.Decompress();
+      if (!hl_local.empty()) {
+        highlight_global =
+            cs::TransformPointCloud(hl_local, global_pose.cast<float>());
+        ++nodes_with_highlight;
+      }
+    }
+    submap->InsertCloudData(cloud_global, highlight_global);
+
+    // 7c 线特征：在**新系**重新关联 + 重拟合
+    if (node_data.lines_size() > 0) {
+      std::vector<cs::LineData> lines;
+      lines.reserve(node_data.lines_size());
+      for (const auto& line_proto : node_data.lines()) {
+        lines.push_back(cs::FromProto(line_proto));
+      }
+      const auto global_pose_2d =
+          ::cartographer::transform::Project2D(global_pose);
+      std::map<int, std::vector<cs::LineData>> tracked;
+      line_matcher.TrackLineFromMap(global_pose_2d, lines,
+                                    *submap->line_map_2d_list(), tracked);
+      std::map<int, std::vector<cs::LineData>> tracked_global;
+      for (const auto& entry : tracked) {
+        for (const auto& line : entry.second) {
+          tracked_global[entry.first].push_back(
+              cs::TransformLineData(global_pose_2d, line));
+        }
+      }
+      if (!tracked_global.empty()) {
+        submap->InsertLineData(tracked_global);
+        ++nodes_with_lines;
+      }
+    }
+    ++inserted;
+  }
+
+  // ── 6. Finish：固化 ikd-tree + LineDataCulling ─────────────────────
+  submap->Finish();
+
+  const auto* line_map = submap->line_map_2d_list();
+  const auto* cloud_ptr = submap->cloud();
+  const auto* highlight_ptr = submap->highlight_cloud();
+  LOG(INFO) << "RebuildGlobalStaticSubmapFromNodes: " << inserted
+            << " nodes inserted (" << skipped_no_pose << " no pose, "
+            << skipped_empty_cloud << " empty cloud, " << nodes_with_lines
+            << " with lines, " << nodes_with_highlight << " with highlight), "
+            << "grid " << num_x << "x" << num_y << " @ res=" << resolution
+            << "m, cloud " << (cloud_ptr ? cloud_ptr->size() : 0) << " pts, "
+            << "highlight " << (highlight_ptr ? highlight_ptr->size() : 0)
+            << " pts, lines " << (line_map ? line_map->size() : 0);
+
+  // include_grid_data=true：grid / cloud / highlight_cloud / line_map_2d_list
+  // 全部序列化。precomputation_grid_stack 未构建，自然不写入（旧缓存属旧栅格）。
+  return submap->ToProto(/*include_grid_data=*/true).submap_2d();
 }
 
 ::cartographer::mapping::proto::Grid2D BuildFreshGridFromNodes(
