@@ -224,8 +224,10 @@ private:
       error_code_ = MS::E_NONE;
     }
     progress_ = 0.0f;
-    // A new mapping session always owns a clean map directory. This removes
-    // stale slam/assets/versions data before any trajectory is started.
+    // A new mapping session always owns a clean map directory. Existing
+    // slam/assets/versions data is archived to <map_folder>/.map_trash/
+    // instead of being deleted: map assets take hours to author by hand,
+    // and a mistaken overwrite=true used to wipe them irrecoverably.
     const MapDirectoryResetResult reset_result =
         ResetMapDirectory(FLAGS_map_folder, map_name_);
     if (!reset_result.success) {
@@ -242,9 +244,19 @@ private:
       return;
     }
     if (reset_result.replaced_existing) {
-      LOG(WARNING) << "Recreated existing map directory '"
-                   << reset_result.map_directory.string() << "' (removed "
-                   << reset_result.removed_entries << " entries).";
+      if (!reset_result.trashed_directory.empty()) {
+        LOG(WARNING) << "Recreated existing map directory '"
+                     << reset_result.map_directory.string()
+                     << "'; previous content (slam + assets + versions) "
+                        "archived to '"
+                     << reset_result.trashed_directory.string()
+                     << "'. map_manager rotates that trash by count and size.";
+      } else {
+        LOG(WARNING) << "Recreated existing map directory '"
+                     << reset_result.map_directory.string() << "' (removed "
+                     << reset_result.removed_entries
+                     << " entries, NOT archived).";
+      }
     } else {
       LOG(INFO) << "Created map directory '"
                 << reset_result.map_directory.string() << "'.";
