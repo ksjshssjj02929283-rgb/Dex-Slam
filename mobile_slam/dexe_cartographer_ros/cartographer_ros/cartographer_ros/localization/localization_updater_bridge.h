@@ -204,6 +204,7 @@ class LocalizationUpdaterBridge {
            std::shared_ptr<const LocalTrajectoryData::LocalSlamData>>
     local_slam_data_ GUARDED_BY(mutex_);
   std::unique_ptr<::cartographer::localization::LocalizationUpdater> localization_updater_;
+  std::string loaded_created_at_;   // 已加载地图 map.yaml 的 created_at，更新保存时沿用（旧图无键则保存时取当前时间）
   tf2_ros::Buffer* const tf_buffer_;  // 继续外部传入
 
   std::unordered_map<std::string /* landmark ID */, int> landmark_to_index_;

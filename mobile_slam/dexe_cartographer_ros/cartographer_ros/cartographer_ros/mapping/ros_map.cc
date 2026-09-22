@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <ctime>
+#include <fstream>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -52,11 +54,22 @@ void WritePgm(const ::cartographer::io::Image& image, const double resolution,
   }
 }
 
+// 本地时间 ISO 8601（秒级，无时区后缀），如 2026-09-14T16:30:00
+std::string LocalTimeIso8601() {
+  const std::time_t now = std::time(nullptr);
+  std::tm tm_local{};
+  localtime_r(&now, &tm_local);
+  char buf[32];
+  std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm_local);
+  return buf;
+}
+
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
                double occ_thresh, double free_thresh,
-               const GridMapStats* stats)
+               const GridMapStats* stats,
+               const std::string& created_at)
 {
   // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
   // 这样无论地图目录位于何处（staging / 正式 / backup / 被整体移动），
@@ -86,7 +99,22 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
         "total_area_m2: ", stats->TotalAreaM2(), "\n",
         "effective_area_m2: ", stats->EffectiveAreaM2(), "\n");
   }
+  // 地图创建时刻，机器人本地时间 ISO 8601、无时区后缀；map_manager get_maps 以 MapInfo.created_at 透传给上层。
+  // 新建图取当前时间；定位侧更新保存（save_map）传入已加载地图的原值，创建时刻不随更新漂移
+  absl::StrAppend(&output, "created_at: ", created_at.empty() ? LocalTimeIso8601() : created_at, "\n");
   file_writer->Write(output.data(), output.size());
+}
+
+std::string ReadCreatedAtFromYaml(const std::string& yaml_path) {
+  std::ifstream in(yaml_path);
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.rfind("created_at:", 0) != 0) continue;
+    std::string v = line.substr(std::string("created_at:").size());
+    const size_t b = v.find_first_not_of(" \t'\""), e = v.find_last_not_of(" \t\r'\"");
+    return (b == std::string::npos) ? "" : v.substr(b, e - b + 1);
+  }
+  return "";
 }
 
 void WritePng(const ::cartographer::io::Image& image, 

@@ -49,7 +49,11 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
                double occ_thresh, double free_thresh,
-               const GridMapStats* stats = nullptr);
+               const GridMapStats* stats = nullptr,
+               const std::string& created_at = "");   // 空 = 当前本地时间（新建图）；更新已有地图时传入原值沿用
+
+// 读取已有 map.yaml 的 created_at（文件不存在 / 无键 → 空串）
+std::string ReadCreatedAtFromYaml(const std::string& yaml_path);
 
 void WritePng(const ::cartographer::io::Image& image,
               const std::string file_name,
