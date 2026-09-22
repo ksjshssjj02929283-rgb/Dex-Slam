@@ -23,8 +23,11 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
-#include "nav_interfaces/srv/set_map_name.hpp"
+#include <atomic>
+#include <mutex>
+#include "nav_interfaces/srv/start_mapping.hpp"
 #include "nav_interfaces/msg/mapping_state.hpp"
+
 
 #include "cartographer/mapping/map_builder.h"
 #include "cartographer_ros/mapping/map_directory.h"
@@ -86,33 +89,32 @@ class MappingNode : public rclcpp::Node
 {
 public:
   explicit MappingNode()
-  : rclcpp::Node("mapping_node")
+  : rclcpp::Node("mapping")
   {
     // Publisher
-    // ~/state：结构化建图状态（唯一状态出口，FQN /mapping_node/state；状态仅经 topic 发布）
+    // ~/state：结构化建图状态（唯一状态出口，FQN /mapping/state；状态仅经 topic 发布）
     state_pub_ = this->create_publisher<nav_interfaces::msg::MappingState>("~/state", 10);
 
-    start_mapping_srv_ = this->create_service<std_srvs::srv::Trigger>(
+    // 建图控制服务放独立回调组：finish 期间阻塞较久，不能拖住默认组里的状态定时器
+    ops_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    start_mapping_srv_ = this->create_service<nav_interfaces::srv::StartMapping>(
       "~/start_mapping",
-      std::bind(&MappingNode::StartMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
+      std::bind(&MappingNode::StartMappingCallback, this, std::placeholders::_1, std::placeholders::_2),
+      rmw_qos_profile_services_default, ops_group_);
 
     finish_mapping_srv_ = this->create_service<std_srvs::srv::Trigger>(
       "~/finish_mapping",
-      std::bind(&MappingNode::FinishMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
+      std::bind(&MappingNode::FinishMappingCallback, this, std::placeholders::_1, std::placeholders::_2),
+      rmw_qos_profile_services_default, ops_group_);
 
     cancel_mapping_srv_ = this->create_service<std_srvs::srv::Trigger>(
       "~/cancel_mapping",
-      std::bind(&MappingNode::CancelMappingCallback, this, std::placeholders::_1, std::placeholders::_2));
+      std::bind(&MappingNode::CancelMappingCallback, this, std::placeholders::_1, std::placeholders::_2),
+      rmw_qos_profile_services_default, ops_group_);
 
-    save_map_srv_ = this->create_service<std_srvs::srv::Trigger>(
-      "~/save_map",
-      std::bind(&MappingNode::SaveMapCallback, this, std::placeholders::_1, std::placeholders::_2));
-
-    set_map_name_srv_ = this->create_service<nav_interfaces::srv::SetMapName>(
-      "~/set_map_name",
-      std::bind(&MappingNode::SetMapName, this, std::placeholders::_1, std::placeholders::_2));
-
-    // 建图状态仅经 ~/state(topic) 发布，不提供查询 service
+    // 建图状态仅经 ~/state(topic) 发布，不提供查询 service；
+    // 原 ~/set_map_name 已并入 start_mapping 请求，原 ~/save_map 与 finish_mapping 同构已删除
 
     // Clients for show map control (使用全路径，等价于 ROS1 版本)
     start_show_map_client_ = this->create_client<std_srvs::srv::Trigger>(
@@ -136,8 +138,9 @@ public:
 private:
   // ---- Service Callbacks (ROS2 签名) ----
   // 构建结构化建图状态（~/state topic 发布用）
-  nav_interfaces::msg::MappingState BuildMappingState() const {
+  nav_interfaces::msg::MappingState BuildMappingState() {
     nav_interfaces::msg::MappingState s;
+    s.header.stamp = this->now();
     if (is_saving_) {
       s.status = nav_interfaces::msg::MappingState::SAVING;
     } else if (is_mapping_) {
@@ -145,36 +148,82 @@ private:
     } else {
       s.status = nav_interfaces::msg::MappingState::IDLE;
     }
+    s.progress = progress_.load();
+    std::lock_guard<std::mutex> lock(state_mutex_);
     s.map_name = map_name_;
+    s.map_path = map_path_;
+    s.stage = stage_;
+    s.error_code = error_code_;
     return s;
   }
 
-  void StartMappingCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
-                            std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  // 统一填写返回字段（各对外 srv 响应内联 success / error_code / message）
+  template <typename Response>
+  static void FillResult(Response* r, bool success, int32_t code, const std::string& message) {
+    r->success = success;
+    r->error_code = code;
+    r->message = message;
+  }
+
+  void SetStage(const std::string& stage) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    stage_ = stage;
+  }
+
+  void SetErrorCode(int32_t code) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    error_code_ = code;
+  }
+
+
+
+  void StartMappingCallback(const std::shared_ptr<nav_interfaces::srv::StartMapping::Request> req,
+                            std::shared_ptr<nav_interfaces::srv::StartMapping::Response> res)
   {
+    using MS = nav_interfaces::msg::MappingState;
+    if (is_saving_) {
+      LOG(ERROR) << "Map saving is in progress; start_mapping rejected.";
+      FillResult(res.get(), false, MS::E_MAP_SAVING, "Map saving in progress; wait for ~/state to become IDLE");
+      return;
+    }
+    using MS = nav_interfaces::msg::MappingState;
     if (is_mapping_) {
       LOG(ERROR) << "Mapping node is already running.";
-      res->success = false;
-      res->message = "Already running";
+      FillResult(res.get(), false, MS::E_MAP_ALREADY_RUNNING, "Mapping already running");
       return;
     }
-
-    if (FLAGS_map_folder.empty() || map_name_.empty()) {
-      LOG(ERROR) << "Need to specify --map_folder and --map_name.";
-      res->success = false;
-      res->message = "Missing map_folder or map_name";
+    if (FLAGS_map_folder.empty()) {
+      LOG(ERROR) << "Need to specify --map_folder.";
+      FillResult(res.get(), false, MS::E_MAP_FOLDER_MISSING, "map_folder is not configured");
       return;
     }
-
-    std::string map_name_error;
-    if (!ValidateMapName(map_name_, &map_name_error)) {
-      LOG(ERROR) << "Invalid map name '" << map_name_ << "': "
-                 << map_name_error;
-      res->success = false;
-      res->message = "Invalid map_name: " + map_name_error;
+    std::string name_error;
+    if (!ValidateMapName(req->map_name, &name_error)) {
+      LOG(ERROR) << "Invalid map name '" << req->map_name << "': " << name_error;
+      FillResult(res.get(), false, MS::E_MAP_NAME_INVALID, "Invalid map_name: " + name_error);
       return;
     }
-
+    if (!EnsureDirectoryExists(FLAGS_map_folder)) {
+      FillResult(res.get(), false, MS::E_MAP_FOLDER_MISSING,
+                 "map_folder does not exist and cannot be created: " + FLAGS_map_folder);
+      return;
+    }
+    const std::filesystem::path map_directory =
+        std::filesystem::path(FLAGS_map_folder) / req->map_name;
+    if (std::filesystem::exists(map_directory) && !req->overwrite) {
+      LOG(ERROR) << "Map '" << req->map_name << "' already exists and overwrite is false.";
+      FillResult(res.get(), false, MS::E_MAP_NAME_EXISTS,
+                 "Map already exists; set overwrite=true to recreate: " + req->map_name);
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      map_name_ = req->map_name;
+      map_path_ = FLAGS_map_folder + "/" + req->map_name + "/slam";
+      stage_.clear();
+      error_code_ = MS::E_NONE;
+    }
+    progress_ = 0.0f;
     // A new mapping session always owns a clean map directory. This removes
     // stale slam/assets/versions data before any trajectory is started.
     const MapDirectoryResetResult reset_result =
@@ -183,9 +232,13 @@ private:
       LOG(ERROR) << "Failed to reset map directory '"
                  << reset_result.map_directory.string()
                  << "': " << reset_result.error_message;
-      res->success = false;
-      res->message = "Failed to reset map directory: " +
-                     reset_result.error_message;
+      FillResult(res.get(), false, MS::E_MAP_DIR_RESET_FAILED,
+                 "Failed to reset map directory: " + reset_result.error_message);
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        map_name_.clear();
+        map_path_.clear();
+      }
       return;
     }
     if (reset_result.replaced_existing) {
@@ -231,131 +284,74 @@ private:
     trajectories_finished_ = false;  // 重置标志
 
     StartShowMap();
-
-    res->success = true;
-    res->message = "OK";
+    FillResult(res.get(), true, MS::E_NONE, "OK");
   }
 
+  // finish 为触发动作：本回调同步执行收尾管线，期间经 ~/state 上报 progress/stage。
+  // 状态定时器在节点默认回调组，与本服务所在的 ops_group_ 由 MultiThreadedExecutor 并行调度，
+  // 因此 SAVING 期间 ~/state 照常以 5 Hz 发布；调用方无需等待本响应，盯 ~/state 即可。
   void FinishMappingCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
                              std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
-    if (!is_mapping_) {
-      // 即使没有在建图，也清除map_name，相当于重置
-      if (!map_name_.empty()) {
-        LOG(INFO) << "Mapping node is not running, but clearing map name: " << map_name_;
-        map_name_.clear();
-        res->success = true;
-        res->message = "Map name cleared, ready for new mapping";
-      } else {
-        LOG(INFO) << "Mapping node is not running and no map name set.";
-        res->success = true;
-        res->message = "Already idle";
-      }
+    if (is_saving_) {
+      res->success = false;
+      res->message = "Finish already in progress; watch ~/state";
       return;
     }
-    
-    is_saving_ = true;  // 进入保存/收尾阶段（~/state 报 SAVING）
-    // 完成所有轨迹并进行最终优化（只执行一次）
-    if (!trajectories_finished_) {
-      LOG(INFO) << "Finishing all trajectories and running final optimization...";
-      mapping_node_->FinishAllTrajectories();
-      mapping_node_->RunFinalOptimization();
-      trajectories_finished_ = true;
-      LOG(INFO) << "Trajectories finished and optimized.";
-    } else {
-      LOG(INFO) << "Trajectories already finished, skipping optimization.";
-    }
-
-    if (node_options_->save_tracked_pose) {
-      mapping_node_->SaveOptimizedPoses(int(0));
-    }
-
-    // 保存 pbstream 文件
-    const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/slam/map.pbstream";
-    if (!state_filename.empty()) {
-      mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
-      LOG(INFO) << "State saved to '" << state_filename << "'.";
-    }
-
-    // 保存地图文件（带校验）
-    const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/slam/map";
-    bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
-    
-    if (!save_success) {
-      LOG(ERROR) << "Failed to save map files for " << map_filestream 
-                 << ". You can call finish_mapping again to retry.";
+    if (!is_mapping_) {
       res->success = false;
-      res->message = "Failed to save map files. Please check logs and call finish_mapping again to retry.";
-      is_saving_ = false;  // 保存失败，退出保存态（仍在建图）
-      return;  // 保存失败，不重置节点，保持 is_mapping_ = true 和 trajectories_finished_ = true
+      res->message = "Mapping not running";
+      return;
     }
-    
-    LOG(INFO) << "Map saved successfully. Resetting mapping node.";
-    
-    // 保存成功后重置建图节点和标志
-    ResetMappingNode();
-
+    std::string map_path;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      map_path = map_path_;
+    }
+    if (!RunFinishPipeline()) {
+      res->success = false;
+      res->message =
+          "Failed to save map files; see ~/state error_code and call finish_mapping again to retry";
+      return;
+    }
     res->success = true;
-    res->message = "OK";
+    res->message = "Map saved to " + map_path;
   }
 
   void CancelMappingCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
                              std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
-    if (!is_mapping_) {
-      // 即使没有在建图，也清除map_name，相当于重置
-      if (!map_name_.empty()) {
-        LOG(INFO) << "Mapping node is not running, but clearing map name: " << map_name_;
-        map_name_.clear();
-        res->success = true;
-        res->message = "Map name cleared, ready for new mapping";
-      } else {
-        LOG(INFO) << "Mapping node is not running and no map name set.";
-        res->success = true;
-        res->message = "Already idle";
-      }
+    if (is_saving_) {
+      res->success = false;
+      res->message = "Cannot cancel while saving; wait for ~/state to become IDLE";
       return;
     }
-    
+    if (!is_mapping_) {
+      // 未在建图：清除残留地图名/路径，等价于重置（幂等）
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      const bool had_name = !map_name_.empty();
+      map_name_.clear();
+      map_path_.clear();
+      res->success = true;
+      res->message = had_name ? "Map name cleared, ready for new mapping" : "Already idle";
+      return;
+    }
+    progress_ = 0.0f;
+    SetStage("");
+    SetErrorCode(nav_interfaces::msg::MappingState::E_NONE);
     LOG(INFO) << "Cancelling mapping without saving. Resetting mapping node.";
-    
     // 停止显示地图
     StopShowMap();
-    
     // 直接重置建图节点，不保存任何数据
     ResetMappingNode();
-
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      map_name_.clear();
+      map_path_.clear();
+    }
     res->success = true;
     res->message = "Mapping cancelled successfully";
   }
-
-  void SaveMapCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
-                       std::shared_ptr<std_srvs::srv::Trigger::Response> res)
-  {
-    if (!is_mapping_) {
-      LOG(INFO) << "Mapping node is not running.";
-      res->success = false;
-      res->message = "Mapping not running";
-      return;
-    }
-    
-    // 先停止显示地图
-    StopShowMap();
-    
-    // 执行完整的结束流程
-    FinishMapping();
-    
-    // 检查是否成功（通过 is_mapping_ 状态判断）
-    if (is_mapping_) {
-      // 如果 is_mapping_ 仍为 true，说明 FinishMapping 中的保存失败了
-      res->success = false;
-      res->message = "Failed to save map files. Please check logs.";
-    } else {
-      res->success = true;
-      res->message = "OK";
-    }
-  }
-
   // ---- Helpers ----
   bool EnsureDirectoryExists(const std::string& path) {
     try {
@@ -418,8 +414,6 @@ private:
     trajectory_options_.reset();
     tf_listener_.reset();
     tf_buffer_.reset();
-
-    map_name_.clear();
     is_mapping_ = false;
     is_saving_ = false;
     trajectories_finished_ = false;  // 重置标志
@@ -427,77 +421,81 @@ private:
     LOG(INFO) << "Mapping node reset completed.";
   }
 
-  void FinishMapping() {
+  // 收尾管线：结束轨迹 → 全局优化 → 写 pbstream（逐 node 进度 0~90）→ 写栅格/yaml/pcd → 100。
+  // 失败时保持建图态（可重试），返回 false。
+  bool RunFinishPipeline() {
+    using MS = nav_interfaces::msg::MappingState;
+    std::string map_name;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      map_name = map_name_;
+      error_code_ = MS::E_NONE;
+    }
     is_saving_ = true;  // 进入保存/收尾阶段（~/state 报 SAVING）
-    // 结束优化与保存
-    mapping_node_->FinishAllTrajectories();
-    mapping_node_->RunFinalOptimization();
-
+    progress_ = 0.0f;
+    // 完成所有轨迹并进行最终优化（只执行一次）
+    SetStage("FINISHING_TRAJECTORIES");
+    if (!trajectories_finished_) {
+      LOG(INFO) << "Finishing all trajectories and running final optimization...";
+      mapping_node_->FinishAllTrajectories();
+      SetStage("OPTIMIZING");
+      mapping_node_->RunFinalOptimization();
+      trajectories_finished_ = true;
+      LOG(INFO) << "Trajectories finished and optimized.";
+    } else {
+      LOG(INFO) << "Trajectories already finished, skipping optimization.";
+    }
     if (node_options_->save_tracked_pose) {
       mapping_node_->SaveOptimizedPoses(int(0));
     }
-
-    const std::string state_filename = FLAGS_map_folder + "/" + map_name_ + "/slam/map.pbstream";
-    if (!state_filename.empty()) {
-      mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
-      LOG(INFO) << "State saved to '" << state_filename << "'.";
-    }
-
-    const std::string map_filestream = FLAGS_map_folder + "/" + map_name_ + "/slam/map";
-    bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
-    
+    // 写 pbstream：内部逐 node 生成全局静态子图，进度按 node 数映射到 0~90
+    SetStage("SERIALIZING");
+    mapping_node_->SetSaveProgressCallback([this](size_t done, size_t total) {
+      progress_ = total == 0 ? 0.0f : 90.0f * static_cast<float>(done) / static_cast<float>(total);
+    });
+    const std::string slam_dir = FLAGS_map_folder + "/" + map_name + "/slam";
+    const std::string state_filename = slam_dir + "/map.pbstream";
+    mapping_node_->SerializeState(state_filename, true /* include_unfinished_submaps */);
+    mapping_node_->SetSaveProgressCallback(nullptr);
+    progress_ = 90.0f;
+    LOG(INFO) << "State saved to '" << state_filename << "'.";
+    // 写栅格/yaml/pcd（带校验；yaml 内含面积统计）
+    SetStage("WRITING_GRID");
+    const std::string map_filestream = slam_dir + "/map";
+    const bool save_success = mapping_node_->SaveMap(map_filestream, FLAGS_resolution);
     if (!save_success) {
-      LOG(ERROR) << "Failed to save map files in FinishMapping()";
-      is_saving_ = false;  // 保存失败，退出保存态
-      return;
+      LOG(ERROR) << "Failed to save map files for " << map_filestream
+                 << ". Call finish_mapping again to retry.";
+      is_saving_ = false;  // 保存失败，退出保存态（仍在建图，可重试）
+      SetStage("");
+      SetErrorCode(MS::E_MAP_SAVE_FAILED);
+      return false;
     }
-    
-    LOG(INFO) << "Map saved successfully in FinishMapping(). Resetting mapping node.";
-    
-    // 保存成功后重置建图节点
+    LOG(INFO) << "Map saved successfully. Resetting mapping node.";
     ResetMappingNode();
+    progress_ = 100.0f;
+    SetStage("DONE");
+    return true;
   }
-
-  void SetMapName(const std::shared_ptr<nav_interfaces::srv::SetMapName::Request> req,
-                  std::shared_ptr<nav_interfaces::srv::SetMapName::Response> res)
-  {
-    if (FLAGS_map_folder.empty()) {
-      LOG(ERROR) << "Need to specify --map_folder and --map_name.";
-      res->success = false;
-      return;
-    }
-
-    std::string map_name_error;
-    if (!ValidateMapName(req->map_name, &map_name_error)) {
-      LOG(ERROR) << "Invalid map name '" << req->map_name << "': "
-                 << map_name_error;
-      res->success = false;
-      return;
-    }
-    if (!EnsureDirectoryExists(FLAGS_map_folder)) {
-      res->success = false;
-      return;
-    }
-
-    map_name_ = req->map_name;
-    const std::filesystem::path map_directory =
-        std::filesystem::path(FLAGS_map_folder) / map_name_;
-    RCLCPP_INFO(this->get_logger(),
-                "Set map name to %s; directory will be recreated when mapping starts",
-                map_directory.c_str());
-    res->success = true;
+  // 析构时兜底保存（不关心结果）
+  void FinishMapping() {
+    RunFinishPipeline();
   }
-
   void Publish() {
     // ~/state：结构化建图状态（唯一状态出口，仅 topic）
     state_pub_->publish(BuildMappingState());
   }
 private:
   // 状态
-  std::string map_name_;
-  bool is_mapping_{false};
-  bool is_saving_{false};               // 正在保存/收尾建图（~/state 报 SAVING）
-  bool trajectories_finished_{false};  // 标记轨迹是否已完成和优化
+  std::string map_name_;                       // 受 state_mutex_ 保护
+  std::string map_path_;                       // 受 state_mutex_ 保护
+  std::string stage_;                          // 受 state_mutex_ 保护
+  int32_t error_code_{0};                      // 受 state_mutex_ 保护
+  std::mutex state_mutex_;
+  std::atomic<float> progress_{0.0f};          // 0~100，定时器与保存线程并发读写
+  std::atomic<bool> is_mapping_{false};
+  std::atomic<bool> is_saving_{false};         // 正在保存/收尾建图（~/state 报 SAVING）
+  std::atomic<bool> trajectories_finished_{false};  // 标记轨迹是否已完成和优化
 
   // Cartographer 持有
   std::unique_ptr<cartographer_ros::Node> mapping_node_;
@@ -508,11 +506,10 @@ private:
   rclcpp::TimerBase::SharedPtr publish_timer_;
   rclcpp::Publisher<nav_interfaces::msg::MappingState>::SharedPtr state_pub_;
 
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_mapping_srv_;
+  rclcpp::CallbackGroup::SharedPtr ops_group_;
+  rclcpp::Service<nav_interfaces::srv::StartMapping>::SharedPtr start_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_mapping_srv_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_map_srv_;
-  rclcpp::Service<nav_interfaces::srv::SetMapName>::SharedPtr set_map_name_srv_;
 
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_show_map_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stop_show_map_client_;

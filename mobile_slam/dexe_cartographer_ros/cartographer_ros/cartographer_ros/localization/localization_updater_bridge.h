@@ -105,6 +105,8 @@ class LocalizationUpdaterBridge {
   std::optional<::cartographer::localization::LocalizationState> GetLocalizationState() const;
   // ScanMatch 后的地图重合率 [0,1]，作为定位置信度 score
   double GetLocalizationConfidence() const;
+  // 匹配质量分档（见 cartographer MatchLevel：取自一致性检查 + 漂移门控）
+  ::cartographer::localization::MatchLevel GetMatchLevel() const;
 
   // 重置地图原点：以当前机器人在地图中的定位位姿作为新原点，
   // 将 pose graph 中所有数据变换到新坐标系，然后保存新的地图文件和 pbstream。
@@ -202,6 +204,7 @@ class LocalizationUpdaterBridge {
            std::shared_ptr<const LocalTrajectoryData::LocalSlamData>>
     local_slam_data_ GUARDED_BY(mutex_);
   std::unique_ptr<::cartographer::localization::LocalizationUpdater> localization_updater_;
+  std::string loaded_created_at_;   // 已加载地图 map.yaml 的 created_at，更新保存时沿用（旧图无键则保存时取当前时间）
   tf2_ros::Buffer* const tf_buffer_;  // 继续外部传入
 
   std::unordered_map<std::string /* landmark ID */, int> landmark_to_index_;

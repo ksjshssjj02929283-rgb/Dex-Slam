@@ -358,7 +358,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mapping_node/scan_matched_points2
+        Value: /mapping/scan_matched_points2
       Use Fixed Frame: true
       Use rainbow: false
       Value: true
@@ -368,7 +368,7 @@ Visualization Manager:
       High Resolution: true
       Low Resolution: false
       Name: SubmapsDisplay
-      Submap query service: /mapping_node/submap_query
+      Submap query service: /mapping/submap_query
       Submaps:
         All: true
         All Submap Pose Markers: true
@@ -389,7 +389,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mapping_node/submap_list
+        Value: /mapping/submap_list
       Tracking frame: map
       Value: true
     - Class: rviz_default_plugins/MarkerArray
@@ -402,7 +402,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mapping_node/trajectory_node_list
+        Value: /mapping/trajectory_node_list
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
@@ -419,7 +419,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mapping_node/constraint_list
+        Value: /mapping/constraint_list
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
@@ -431,7 +431,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mapping_node/landmark_poses_list
+        Value: /mapping/landmark_poses_list
       Value: true
     - Angle Tolerance: 0.10000000149011612
       Class: rviz_default_plugins/Odometry
@@ -504,7 +504,7 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /mapping_node/local_cloud_map
+            Value: /mapping/local_cloud_map
           Use Fixed Frame: true
           Use rainbow: true
           Value: true
@@ -518,7 +518,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /mapping_node/local_feature_map
+            Value: /mapping/local_feature_map
           Value: true
         - Class: rviz_default_plugins/MarkerArray
           Enabled: true
@@ -530,7 +530,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /mapping_node/matched_feature
+            Value: /mapping/matched_feature
           Value: true
       Enabled: false
       Name: FeatureMap

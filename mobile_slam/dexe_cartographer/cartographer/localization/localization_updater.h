@@ -59,6 +59,8 @@ public:
   std::optional<LocalizationState> GetLocalizationState();
   // ScanMatch 后的地图重合率 [0,1]，作为定位置信度 score（来自 ConsistencyChecker）
   double GetLocalizationConfidence();
+  // 匹配质量分档（一致性检查 + 漂移门控的裁决结果，非 confidence 比阈值）
+  MatchLevel GetMatchLevel();
 
   int AddTrajectoryBuilder(
       const std::set<SensorId> &expected_sensor_ids,

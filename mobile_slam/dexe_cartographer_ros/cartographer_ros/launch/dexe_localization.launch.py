@@ -87,7 +87,7 @@ def generate_launch_description():
     localization_node = Node(
         package='cartographer_ros',
         executable='localization_node',
-        name='localization_node',
+        name='localization',
         output='screen',
         respawn=False,
         parameters=[

@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
 
   auto occupancy_node =
       std::make_shared<cartographer_ros::Node>(0.05, 0.05);
-  auto mapping_node = std::make_shared<rclcpp::Node>("mapping_node");
+  auto mapping_node = std::make_shared<rclcpp::Node>("mapping");
   auto observer_node =
       std::make_shared<rclcpp::Node>("occupancy_grid_interface_test");
 
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     const bool map_observed =
         WaitUntil([&map_count]() { return map_count.load() > 0; }, 3s);
     if (!query_observed || !map_observed) {
-      std::cerr << "FAILED: /mapping_node/submap_list did not produce /map; "
+      std::cerr << "FAILED: /mapping/submap_list did not produce /map; "
                 << "query_count=" << query_count.load()
                 << " map_count=" << map_count.load() << std::endl;
       passed = false;

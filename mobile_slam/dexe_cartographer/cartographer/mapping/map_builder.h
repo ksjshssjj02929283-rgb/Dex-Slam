@@ -17,6 +17,7 @@
 #ifndef CARTOGRAPHER_MAPPING_MAP_BUILDER_H_
 #define CARTOGRAPHER_MAPPING_MAP_BUILDER_H_
 
+#include <functional>
 #include <memory>
 
 #include "cartographer/common/thread_pool.h"
@@ -110,6 +111,10 @@ class MapBuilder : public MapBuilderInterface {
   std::shared_ptr<Submap2D> GenerateGlobalStaticSubmap(double resolution);
 
   // 返回已缓存的全局静态 Submap（SerializeStateToFile 后可用），否则返回 nullptr
+  void SetProgressCallback(std::function<void(size_t, size_t)> callback) override {
+    progress_callback_ = std::move(callback);
+  }
+
   std::shared_ptr<Submap2D> GetGlobalStaticSubmap() const override {
     return global_static_submap_;
   }
@@ -138,6 +143,8 @@ class MapBuilder : public MapBuilderInterface {
   
   // Global static submap generated from all trajectory nodes
   std::shared_ptr<Submap2D> global_static_submap_;
+  // 逐 node 处理进度回调（可为空）
+  std::function<void(size_t, size_t)> progress_callback_;
   
   // Conversion tables for probability grid - must be persistent for the lifetime
   // of global_static_submap_

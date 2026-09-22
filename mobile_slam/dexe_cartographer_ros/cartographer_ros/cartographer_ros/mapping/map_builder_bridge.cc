@@ -507,6 +507,9 @@ bool MapBuilderBridge::SaveGridMapFromRange(
   intensity_data.reserve(width * height);
   alpha_data.reserve(width * height);
   
+  // 面积统计：total 取输出图像外框；effective 在噪点滤除后的最终图上按 free_thresh 数自由像素
+  GridMapStats local_stats;
+  local_stats.resolution = resolution;
   for (int i = 0; i < height; ++i) {
     for (int j = 0; j < width; ++j) {
       const Eigen::Array2i cell_index(j, i);
@@ -569,6 +572,8 @@ bool MapBuilderBridge::SaveGridMapFromRange(
   
   // 转换为Image并保存
   ::cartographer::io::Image image(std::move(result.surface));
+  // 总面积按最终输出图像（含画布 padding）计，与 map.png 宽×高×res² 一致
+  local_stats.total_cells = static_cast<uint32_t>(image.width()) * static_cast<uint32_t>(image.height());
   
   // 调试输出：记录关键参数
   // LOG(INFO) << "SaveGridMapFromRange - Image size: " << image.width() << "x" << image.height()
@@ -598,18 +603,30 @@ bool MapBuilderBridge::SaveGridMapFromRange(
                                       node_options_.mapping_free_thresh);
 
   // 2. 生成 navigation map 作为默认输出 map.png
+  cv::Mat filtered_map;
   WriteNavigationMap(origin_mat,
                      map_filename + ".png",
                      node_options_.navigation_map_filter_mode,
                      node_options_.save_debug_map,
-                     map_dir);
+                     map_dir,
+                     &filtered_map);
+  // 有效面积 = 最终保存图中的自由像素：与 map_server 的判定一致（occupancy = (255-p)/255 < free_thresh）
+  const int free_pixel_thresh =
+      static_cast<int>(255.0 * (1.0 - node_options_.mapping_free_thresh));
+  local_stats.free_cells = filtered_map.empty()
+      ? 0u
+      : static_cast<uint32_t>(cv::countNonZero(filtered_map > free_pixel_thresh));
 
   // 3. 写入 map.yaml（引用 navigation map = map.png）
   cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
   WriteYaml(resolution, map_origin,
             map_filename, &yaml_writer,
             node_options_.mapping_occ_thresh,
-            node_options_.mapping_free_thresh);
+            node_options_.mapping_free_thresh,
+            &local_stats);
+  LOG(INFO) << "Map area: total " << local_stats.TotalAreaM2() << " m2, effective (free) "
+            << local_stats.EffectiveAreaM2() << " m2 ("
+            << local_stats.free_cells << "/" << local_stats.total_cells << " free pixels)";
 
   // 4. 只有需要保存原始地图时，才将 origin_mat 写入磁盘
   if (node_options_.save_origin_map) {

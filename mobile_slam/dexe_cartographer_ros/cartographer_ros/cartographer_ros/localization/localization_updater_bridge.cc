@@ -146,6 +146,11 @@ void LocalizationUpdaterBridge::LoadState(const std::string& state_filename,
       << "The file containing the state to be loaded must be a "
          ".pbstream file.";
   LOG(INFO) << "Loading saved state '" << state_filename << "'...";
+  {
+    const size_t slash = state_filename.find_last_of('/');
+    const std::string dir = (slash == std::string::npos) ? "." : state_filename.substr(0, slash);
+    loaded_created_at_ = ReadCreatedAtFromYaml(dir + "/map.yaml");   // 更新保存沿用创建时刻
+  }
   cartographer::io::ProtoStreamReader stream(state_filename);
   localization_updater_->LoadState(&stream, load_frozen_state);
 }
@@ -169,6 +174,11 @@ LocalizationUpdaterBridge::GetLocalizationState() const
 double LocalizationUpdaterBridge::GetLocalizationConfidence() const
 {
   return localization_updater_->GetLocalizationConfidence();
+}
+
+::cartographer::localization::MatchLevel LocalizationUpdaterBridge::GetMatchLevel() const
+{
+  return localization_updater_->GetMatchLevel();
 }
 
 bool LocalizationUpdaterBridge::ResetMapOrigin(
@@ -416,7 +426,8 @@ static bool RenderSubmapToFiles(
     const bool save_origin_map,
     const std::string& navigation_map_filter_mode,
     const bool save_debug_map,
-    const bool save_map_pcd) {
+    const bool save_map_pcd,
+    const std::string& created_at) {   // 已加载地图的 created_at，空 = 取当前时间
   const cartographer::mapping::Grid2D* grid = submap->grid();
   if (!grid) {
     LOG(ERROR) << "RenderSubmapToFiles: Grid is null";
@@ -508,7 +519,7 @@ static bool RenderSubmapToFiles(
 
   // 3. 写入 map.yaml（引用 navigation map = map.png）
   cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
-  WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh, free_thresh);
+  WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh, free_thresh, nullptr, created_at);
 
   LOG(INFO) << "RenderSubmapToFiles: saved " << map_filename << ".png/.yaml (navigation map)"
             << " (" << image.width() << "x" << image.height() << " pixels)";
@@ -558,7 +569,8 @@ bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
                              node_options_.save_origin_map,
                              node_options_.navigation_map_filter_mode,
                              node_options_.save_debug_map,
-                             node_options_.save_map_pcd);
+                             node_options_.save_map_pcd,
+                             loaded_created_at_);
 }
 
 // ---------------------------------------------------------------------------
@@ -656,7 +668,7 @@ bool LocalizationUpdaterBridge::SaveMapFromPoseGraph(
 
   cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
   WriteYaml(resolution, map_origin, map_filename, &yaml_writer,
-            occ_thresh, free_thresh);
+            occ_thresh, free_thresh, nullptr, loaded_created_at_);
 
   if (node_options_.save_origin_map) {
     const std::string origin_png = map_filename + "_origin.png";
@@ -781,7 +793,9 @@ LocalizationUpdaterBridge::GetLineMap(int& marker_id)
   if (g_line_map == nullptr) {
     return {};
   }
-  const auto line_map_msg = CreateLineMapMsg(rclcpp::Clock().now(),
+  // 全局线特征图是静态的，用零时间戳（RViz 取最新 TF）；取 system clock 的 now()
+  // 会忽略 use_sim_time，bag 回放时 Marker 会因为 TF 查不到而被丢弃。
+  const auto line_map_msg = CreateLineMapMsg(rclcpp::Time(),
                                              node_options_.map_frame,
                                              marker_id, g_line_map, COLOR::black);
 
