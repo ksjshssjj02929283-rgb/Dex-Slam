@@ -31,7 +31,10 @@
 #include "Eigen/Geometry"
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/submap_2d.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "cartographer/mapping/id.h"
+#include "cartographer/mapping/proto/scan_matching/ceres_scan_matcher_options_2d.pb.h"
+#include "cartographer/mapping/proto/scan_matching/line_matcher_options.pb.h"
 #include "cartographer/mapping/proto/serialization.pb.h"
 #include "cartographer/mapping/value_conversion_tables.h"
 #include "cartographer/sensor/line_data.h"
@@ -140,6 +143,20 @@ struct FindTransformOptions {
   int bbs_num_threads = 4;
   double bbs_timeout_ms = 2000.0;
   bool bbs_angular_branching = true;
+
+  // ── 匹配器参数：来自 lua 的 POSE_INITIALIZER_2D ──────────────────────
+  // 本函数做的事（对 global_static_submap 做全局重定位）与定位节点的
+  // PoseInitializer 完全同构，**必须用同一份配置**，否则定位侧这些年调过的
+  // 参数（Ceres 权重量级、improved line cost、huber 尺度…）不会传导到离线工具，
+  // 两边会静默跑成两套算法。
+  // has_matcher_options=false 时回退到内置默认值 —— 只为兼容未传 lua 的调用方，
+  // 并会打 WARNING；正常路径都应该由调用方从 lua 填好。
+  bool has_matcher_options = false;
+  ::cartographer::mapping::scan_matching::proto::CeresScanMatcherOptions2D
+      ceres_options;
+  ::cartographer::mapping::scan_matching::proto::LineMatcherOptions
+      line_matcher_options;
+  int branch_and_bound_depth = 7;
 };
 
 struct FindTransformResult {
@@ -156,7 +173,19 @@ struct FindTransformResult {
   double elapsed_seconds = 0.0;
   bool converged = false;
   std::string stop_reason;  // converged / max_frames / max_iterations / budget
+  // 内点相对最终 delta_T 的残差 RMS —— 「这次匹配值不值得信」的定量依据。
+  // 只有 success 时有意义；inliers==0 时为 0。
+  double rms_translation_m = 0.0;
+  double rms_yaw_rad = 0.0;
+  // success 但未收敛（stop_reason != "converged"）：内点数够、T 可用，但
+  // delta_T 还没稳定下来。与 success 分开表达，让调用方自己决定是否接受，
+  // 而不是把「够了」和「稳了」混成一个布尔。
+  bool degraded = false;
 };
+
+// 栅格中已知（已被观测过）格子的面积（m²）= 已知格子数 × resolution²。
+// 用于比较两张图的实际覆盖范围；比包围盒面积稳健（U 形场地包围盒会虚高）。
+double EstimateKnownAreaM2(const ::cartographer::mapping::Grid2D& grid);
 
 // 在目标地图 `data_a` 上对源地图关键帧 `frames_b`（按时间戳排序）求
 // T_src_in_tgt。三阶段：BatchFCSM 全局初对齐（最远点采样 K 帧）→
@@ -213,17 +242,44 @@ struct RewriteOptions {
   bool save_debug_map = false;
   // 是否额外输出 map.pcd / map_highlight.pcd（来自变换后的全局点云）。
   bool save_map_pcd = false;
+  // 产物自检时估算结构化对齐残余用的参数。应与建图节点的
+  // reset_map_origin_* （lua）保持同一份，否则「工具报的残余」与「建图报的残余」
+  // 不可比。调用方不填则用结构体默认值。
+  ::cartographer::mapping::StructureAlignmentOptions align_options;
+  // 写进 map.yaml 的 created_at（内容采集时刻）。替换语义下内容整体来自 src，
+  // 所以调用方应传 **src 的** created_at，而不是目标图的、更不是"现在"
+  // （"现在"由 map.yaml 的 mtime 表达）。留空则不写该键。
+  std::string created_at;
+};
+
+// 重写后的产物自检量。变换本身没有"对不对"的内建判据，只能靠产物侧的
+// 可观测量交叉验证，故在重建完成、写盘之前就地采集。
+struct RewriteStats {
+  // 重建后的全局栅格尺寸与点云规模（对照替换前可看出产物是否合理）。
+  int grid_num_x_cells = 0;
+  int grid_num_y_cells = 0;
+  int cloud_points = 0;
+  int line_count = 0;
+  // 产物的结构化对齐残余（对重建后的线特征跑一次 EstimateAlignmentYaw）。
+  // 这是 DEC-013 定的「替换后只做检查、不做对齐」：残余大说明 target 坐标系
+  // 本身没对齐（或替换引入的 yaw 误差把它推大了），由人决定是否单独补一次 align。
+  bool align_evaluated = false;
+  double align_residual_yaw_rad = 0.0;
+  // 重算后的地图面积（同时已写进 map.yaml）。地图重新生成 ⇒ 地图信息必须重算，
+  // 否则 map_manager 的 get_maps 会读到旧值或 0。
+  double total_area_m2 = 0.0;
+  double effective_area_m2 = 0.0;
 };
 
 // 对已加载的地图 `data` 施加 T_old_to_new（旧系 → 新系），重建全局栅格，
 // 重新渲染，并把结果写到：
 //   - output_pbstream ：合并/替换后的 map.pbstream（先写 .tmp 再 rename，原子）
 //   - output_filestem ：map.png / map.yaml（以及可选 .pcd）的文件名前缀
-// 会移动消费 `data`。
+// 会移动消费 `data`。`stats` 可为 nullptr。
 void TransformAndRewriteMap(
     MapData data, const ::cartographer::transform::Rigid3d& T_old_to_new,
     const std::string& output_pbstream, const std::string& output_filestem,
-    const RewriteOptions& opts);
+    const RewriteOptions& opts, RewriteStats* stats = nullptr);
 
 // ──────────────────────────────────────────────────
 // map.yaml 配置读取
@@ -246,8 +302,13 @@ MapYamlConfig ReadMapYamlConfig(const std::string& yaml_path);
 // 路径解析
 // ──────────────────────────────────────────────────
 
-// 传入名称或路径：先查 <maps_root>/<name_or_path>，再直接当作路径查。
-// maps_root 留空则用 ~/.dexe/data/maps。找不到则 LOG(FATAL)。
+// 传入名称或路径，解析出**含 map.pbstream 的那一级目录**。
+// 依次尝试四种组合（分层布局优先，与 align_map_tool 的探测口径一致）：
+//   <maps_root>/<name>/slam/  →  <maps_root>/<name>/  →
+//   <name>/slam/             →  <name>/
+// 分层布局（<map>/slam/ + <map>/assets/ + <map>/versions/）下，传地图名即可，
+// 不必手写到 slam/ 那一级。maps_root 留空则用 ~/.dexe/data/maps。
+// 四种都没有 map.pbstream 时 LOG(FATAL) 并列出尝试过的路径。
 std::string ResolveMapDir(const std::string& name_or_path,
                           const std::string& maps_root = "");
 

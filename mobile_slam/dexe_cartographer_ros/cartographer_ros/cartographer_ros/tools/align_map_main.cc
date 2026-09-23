@@ -50,7 +50,10 @@
 #include "cartographer/mapping/proto/submap.pb.h"
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
+#include <ament_index_cpp/get_package_share_directory.hpp>
+
 #include "cartographer_ros/mapping/ros_map.h"
+#include "cartographer_ros/options/mapping_node_options.h"
 #include "cartographer_ros/tools/map_transform_common.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
@@ -75,13 +78,23 @@ DEFINE_bool(rebuild_grid_from_nodes, true,
             "--norebuild_grid_from_nodes = 重栅格化原 grid（保留概率值与 "
             "free space，观感最接近保存时）");
 
-// 结构对齐参数（默认值与 dexe_slam_2d.lua 的 reset_map_origin_* 一致）
-DEFINE_double(min_line_length, 0.3, "结构线段最小长度（米）");
-DEFINE_int32(max_candidate_lines, 20, "按长度降序取前 N 条候选线段");
+// 结构对齐参数：默认**从 lua 的 reset_map_origin_* 读**，与建图节点
+// （Node::ResetMapOriginToAlignStructure → CreateStructureAlignmentOptions）
+// 同源。下面这些 flag 只在显式指定时覆盖 lua —— 否则 flag 的默认值会静默盖掉
+// 配置文件，两条路径又会各走各的。
+DEFINE_string(configuration_directory, "",
+              "lua 配置目录，留空则自动解析 cartographer_ros 的 "
+              "configuration_files");
+DEFINE_string(configuration_basename, "dexe_slam_2d.lua",
+              "lua 配置文件名，从中读取 reset_map_origin_* 估角参数");
+DEFINE_double(min_line_length, 0.3, "结构线段最小长度（米）；显式指定才覆盖 lua");
+DEFINE_int32(max_candidate_lines, 20,
+             "按长度降序取前 N 条候选线段；显式指定才覆盖 lua");
 DEFINE_double(orthogonality_tolerance_deg, 10.0,
-              "正交容差（度）：次方向须落在主方向 +90° ± 该容差内");
+              "正交容差（度）：次方向须落在主方向 +90° ± 该容差内；"
+              "显式指定才覆盖 lua");
 DEFINE_double(min_secondary_support_ratio, 0.1,
-              "次方向支撑量 / 主方向支撑量 的最小比值");
+              "次方向支撑量 / 主方向支撑量 的最小比值；显式指定才覆盖 lua");
 
 // 渲染参数：默认 0 = 沿用原 map.yaml 中的值（缺 yaml 时回退括号内默认）
 DEFINE_double(resolution, 0.0, "输出地图分辨率（米/格），0 = 沿用原 yaml（0.05）");
@@ -155,6 +168,81 @@ void ReadYamlDefaults(const std::string& yaml_file, double* resolution,
 // 字段与 nav_interfaces/srv/AlignMap.srv 的响应一一对应，编排侧直接映射。
 // ⚠️ 必须在任何 LOG(FATAL) 之前调用：FATAL 会 abort，std::endl 先 flush 才保得住。
 void PrintResultLine(
+    bool ok, const std::string& reason,
+    const ::cartographer::mapping::StructureAlignmentDiagnostics& diag,
+    double yaw_rad, bool applied, double residual_rad);
+
+// 重算后的地图面积，随结果行带出供编排方使用（写盘发生在 PrintResultLine 之前，
+// 未走到写盘的失败路径保持 0）。
+double g_total_area_m2 = 0.0;
+double g_effective_area_m2 = 0.0;
+
+// 估角参数来源：lua 的 reset_map_origin_*（与建图节点 CreateStructureAlignmentOptions
+// 同一条路径），命令行 flag 仅在显式指定时覆盖。
+// 这样「建图时对齐」与「离线工具对齐」用的是同一组判据，不会因为有人只改了 lua
+// 就让两边估出不同的角。
+::cartographer::mapping::StructureAlignmentOptions LoadAlignmentOptions() {
+  ::cartographer::mapping::StructureAlignmentOptions opts;
+  std::string config_dir = FLAGS_configuration_directory;
+  if (config_dir.empty()) {
+    try {
+      config_dir = ament_index_cpp::get_package_share_directory(
+                       "cartographer_ros") +
+                   "/configuration_files";
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Cannot auto-resolve cartographer_ros share dir: "
+                 << e.what();
+      config_dir.clear();
+    }
+  }
+  // ⚠️ ConfigurationFileResolver 找不到文件走 LOG(FATAL) 不抛异常，try/catch
+  // 拦不住且来不及打结果行 —— 必须先自己确认文件可读。
+  const std::string full = config_dir.empty()
+                               ? std::string()
+                               : config_dir + "/" +
+                                     FLAGS_configuration_basename;
+  if (full.empty() || access(full.c_str(), R_OK) != 0) {
+    PrintResultLine(false, "lua_config_not_found", {}, 0.0, false, 0.0);
+    LOG(FATAL) << "Alignment thresholds must come from the same lua config the "
+                  "mapping node uses (reset_map_origin_*). Not readable: "
+               << (full.empty() ? "<unresolved>" : full)
+               << ". Pass --configuration_directory / "
+                  "--configuration_basename.";
+  }
+  const auto node_options = ::cartographer_ros::LoadMappingOptions(
+      config_dir, FLAGS_configuration_basename);
+  opts = ::cartographer_ros::CreateStructureAlignmentOptions(
+      std::get<0>(node_options));
+  const std::string source = full;
+  // flag 只在显式指定时覆盖 —— 用 gflags 的 is_default 区分「用户给了」和
+  // 「只是默认值」，避免默认值静默盖掉 lua。
+  const auto override_if_set = [&](const char* name, auto&& apply) {
+    if (!google::GetCommandLineFlagInfoOrDie(name).is_default) {
+      apply();
+      LOG(INFO) << "Alignment option overridden by flag: --" << name;
+    }
+  };
+  override_if_set("min_line_length",
+                  [&] { opts.min_line_length = FLAGS_min_line_length; });
+  override_if_set("max_candidate_lines",
+                  [&] { opts.max_candidate_lines = FLAGS_max_candidate_lines; });
+  override_if_set("orthogonality_tolerance_deg", [&] {
+    opts.orthogonality_tolerance_deg = FLAGS_orthogonality_tolerance_deg;
+  });
+  override_if_set("min_secondary_support_ratio", [&] {
+    opts.min_secondary_support_ratio = FLAGS_min_secondary_support_ratio;
+  });
+  LOG(INFO) << "Alignment params source: " << source
+            << " | min_line_length=" << opts.min_line_length
+            << " max_candidate_lines=" << opts.max_candidate_lines
+            << " orthogonality_tolerance_deg="
+            << opts.orthogonality_tolerance_deg
+            << " min_secondary_support_ratio="
+            << opts.min_secondary_support_ratio;
+  return opts;
+}
+
+void PrintResultLine(
     const bool ok, const std::string& reason,
     const ::cartographer::mapping::StructureAlignmentDiagnostics& diag,
     const double yaw_rad, const bool applied, const double residual_rad) {
@@ -171,6 +259,8 @@ void PrintResultLine(
             << ",\"candidate_lines\":" << diag.candidate_lines
             << ",\"applied\":" << applied
             << ",\"residual_yaw_deg\":" << residual_rad * kRadToDeg
+            << ",\"total_area_m2\":" << g_total_area_m2
+            << ",\"effective_area_m2\":" << g_effective_area_m2
             << "}" << std::endl;
 }
 
@@ -267,11 +357,8 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   const ::cartographer::mapping::LineMap2DList line_map =
       mt::LineMap2DListFromProto(static_submap_proto->line_map_2d_list());
 
-  ::cartographer::mapping::StructureAlignmentOptions align_opts;
-  align_opts.min_line_length = FLAGS_min_line_length;
-  align_opts.max_candidate_lines = FLAGS_max_candidate_lines;
-  align_opts.orthogonality_tolerance_deg = FLAGS_orthogonality_tolerance_deg;
-  align_opts.min_secondary_support_ratio = FLAGS_min_secondary_support_ratio;
+  const ::cartographer::mapping::StructureAlignmentOptions align_opts =
+      LoadAlignmentOptions();
 
   ::cartographer::mapping::StructureAlignmentDiagnostics diag;
   const auto yaw_opt =
@@ -442,15 +529,36 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
                                &origin_mat, &map_origin, &render_resolution);
 
   const std::string map_dir = fs::path(map_filestem).parent_path().string();
+  // 地图重新生成了，地图信息也要一起重算：面积是 map_manager get_maps 对外暴露的
+  // 字段，不重算就会退回 0。口径与建图侧 SaveGridMap 一致 —— effective 必须数
+  // **滤波后最终图**的自由像素，所以要把 filtered_out 接出来。
+  cv::Mat filtered_mat;
   WriteNavigationMap(origin_mat, map_filestem + ".png",
                      FLAGS_navigation_map_filter_mode, FLAGS_save_debug_map,
-                     map_dir);
+                     map_dir, &filtered_mat);
 
-  {
-    ::cartographer::io::StreamFileWriter yaml_writer(map_filestem + ".yaml");
-    WriteYaml(render_resolution, map_origin, map_filestem, &yaml_writer,
-              occ_thresh, free_thresh);
+  const std::string yaml_path = map_filestem + ".yaml";
+  const GridMapStats map_stats = ComputeGridMapStats(
+      origin_mat, filtered_mat, render_resolution, free_thresh);
+  // 全量重写 yaml 会丢掉建图侧写过、本工具不认识的键；宁可吵也别静默丢。
+  for (const auto& key : FindDroppedYamlKeys(yaml_path, true)) {
+    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
+                 << "' — this tool regenerates map.yaml from scratch and does "
+                    "not know this key.";
   }
+  // 对齐只是把整张图转了个角，内容没换 ⇒ created_at（内容采集时刻）原样保留。
+  const std::string created_at = ReadMapCreatedAt(yaml_path);
+  {
+    ::cartographer::io::StreamFileWriter yaml_writer(yaml_path);
+    WriteYaml(render_resolution, map_origin, map_filestem, &yaml_writer,
+              occ_thresh, free_thresh, &map_stats, created_at);
+  }
+  LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
+            << " m2, effective (free) " << map_stats.EffectiveAreaM2()
+            << " m2 (" << map_stats.free_cells << "/" << map_stats.total_cells
+            << " free pixels)";
+  g_total_area_m2 = map_stats.TotalAreaM2();
+  g_effective_area_m2 = map_stats.EffectiveAreaM2();
 
   // 原目录存在 *_origin.png（已备份）或显式要求时，同步输出未过滤图
   if (FLAGS_save_origin_map || fs::exists(map_filestem + "_origin.png")) {

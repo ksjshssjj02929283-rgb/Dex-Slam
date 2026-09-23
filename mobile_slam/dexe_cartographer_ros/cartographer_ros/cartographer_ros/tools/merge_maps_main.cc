@@ -255,16 +255,24 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
       data_a.global_submap->grid();
   CHECK(global_grid != nullptr) << "global_static_submap has no grid";
 
-  // global_submap 的 local_pose：submap 局部坐标系 → global A 坐标系
-  // 通常为 Identity（global submap 直接在 global frame 下建立）
-  const ::cartographer::transform::Rigid2d global_submap_pose_2d(
-      data_a.global_submap->local_pose().translation().head<2>(),
-      ::cartographer::transform::GetYaw(data_a.global_submap->local_pose()));
-
-  LOG(INFO) << "global_static_submap local_pose: ("
-            << global_submap_pose_2d.translation().x() << ", "
-            << global_submap_pose_2d.translation().y()
-            << " yaw=" << global_submap_pose_2d.rotation().angle() << ")";
+  // ⚠️ global_static_submap 的 local_pose **不是**「submap 局部系 → global A 系」
+  // 的变换，不得参与位姿运算。该 submap 的栅格本身就建立在全局系上
+  // （MapLimits.max 取首节点的全局位姿，插入的 range data 也是全局坐标），
+  // 所以 FCSM / Ceres 的输入输出都已经在全局系；local_pose 只是与
+  // limits().max() 相等的记账值。定位侧的全局重定位
+  // （localization/internal/2d/pose_initializer_2d.cc）同样不引用该字段。
+  //
+  // 此处原先假设它「通常为 Identity」并把它乘进了匹配结果 —— 该假设不成立：
+  // 建图直出的图它等于首节点全局 XY（接近 0 但非 0），而从 node 重建过
+  // global_static_submap 的图（align / replace 产物）它等于点云包围盒角点，
+  // 可达几十米。乘进去会让 T_src_in_tgt 整体平移同样的量。
+  // 这里只打日志用于排查，不参与计算。
+  const auto& tgt_static_local_pose = data_a.global_submap->local_pose();
+  LOG(INFO) << "global_static_submap local_pose (diagnostic only, not used in "
+               "pose math): ("
+            << tgt_static_local_pose.translation().x() << ", "
+            << tgt_static_local_pose.translation().y() << " yaw="
+            << ::cartographer::transform::GetYaw(tgt_static_local_pose) << ")";
 
   // ─── 构建 FCSM（单个，基于全局 grid）───
   ::cartographer::mapping::scan_matching::proto::FastCorrelativeScanMatcherOptions2D
@@ -311,7 +319,7 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
 
   // ─── 连续帧追踪 ───
   struct ConsecutiveFrame {
-    ::cartographer::transform::Rigid2d pose_in_submap;  // FCSM 返回（submap 局部坐标系）
+    ::cartographer::transform::Rigid2d pose_in_A;  // FCSM 返回（已在 global A 坐标系）
     ::cartographer::transform::Rigid2d node_pose_in_B;
     ::cartographer::sensor::PointCloud point_cloud;
     std::vector<::cartographer::sensor::LineData> line_data_list;  // gravity-aligned 线特征
@@ -335,9 +343,10 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
 
     // ─── FCSM 全图搜索 ───
     float score = 0.0f;
-    ::cartographer::transform::Rigid2d pose_in_submap;
+    // 匹配器输出直接就在 global A 坐标系（栅格即全局系），命名如实反映。
+    ::cartographer::transform::Rigid2d pose_in_A;
     const bool matched =
-        fcsm.MatchFullSubmap(pc_2d, min_score, &score, &pose_in_submap);
+        fcsm.MatchFullSubmap(pc_2d, min_score, &score, &pose_in_A);
 
     LOG(INFO) << "[node " << node_count << "/" << node_clouds_b.size()
               << "] FCSM score=" << score
@@ -358,7 +367,7 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
         node_entry.global_pose_b.translation().head<2>(),
         ::cartographer::transform::GetYaw(node_entry.global_pose_b));
 
-    consecutive.push_back({pose_in_submap, node_pose_in_B, pc_2d,
+    consecutive.push_back({pose_in_A, node_pose_in_B, pc_2d,
                            node_entry.line_data_list});
 
     if (static_cast<int>(consecutive.size()) < consecutive_needed) continue;
@@ -374,38 +383,32 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
       ::cartographer::transform::Rigid2d ceres_pose;
       ceres::Solver::Summary ceres_summary;
 
-      // pose 转换到 global A 坐标系（用于线特征匹配）
-      const ::cartographer::transform::Rigid2d pose_in_A =
-          global_submap_pose_2d * frame.pose_in_submap;
-
       // 线特征追踪：将节点的 gravity-aligned 线特征对齐到 global_line_map
+      // frame.pose_in_A 已在 global A 系，直接使用
       std::map<int, std::vector<::cartographer::sensor::LineData>> tracked_lane_data;
       if (has_line_map && !frame.line_data_list.empty()) {
-        line_matcher.TrackLineFromMap(pose_in_A, frame.line_data_list,
+        line_matcher.TrackLineFromMap(frame.pose_in_A, frame.line_data_list,
                                      *global_line_map, tracked_lane_data);
       }
 
       // Ceres 精配准：优先使用 grid + 线特征 + ikdtree，fallback 到仅 grid
       if (has_ikdtree && global_line_map) {
-        ceres_matcher.Match(frame.pose_in_submap.translation(),
-                            frame.pose_in_submap, frame.point_cloud,
+        ceres_matcher.Match(frame.pose_in_A.translation(),
+                            frame.pose_in_A, frame.point_cloud,
                             tracked_lane_data,
                             *global_grid, *global_line_map,
                             *global_cloud_ikdtree,
                             &ceres_pose, &ceres_summary);
       } else {
-        ceres_matcher.Match(frame.pose_in_submap.translation(),
-                            frame.pose_in_submap, frame.point_cloud,
+        ceres_matcher.Match(frame.pose_in_A.translation(),
+                            frame.pose_in_A, frame.point_cloud,
                             *global_grid, &ceres_pose, &ceres_summary);
       }
 
-      // Ceres 结果（submap 局部坐标系）→ global A 坐标系
-      const ::cartographer::transform::Rigid2d ceres_pose_in_A =
-          global_submap_pose_2d * ceres_pose;
-
-      // T_src_in_tgt（2D）= pose_in_A * node_pose_in_B^-1
+      // T_src_in_tgt（2D）= (node 在 A 系的位姿) * node_pose_in_B^-1
+      // ceres_pose 已在 global A 系（栅格即全局系）
       const ::cartographer::transform::Rigid2d T_2d =
-          ceres_pose_in_A * frame.node_pose_in_B.inverse();
+          ceres_pose * frame.node_pose_in_B.inverse();
 
       sum_trans.x() += T_2d.translation().x();
       sum_trans.y() += T_2d.translation().y();
@@ -632,9 +635,36 @@ void Run(const std::string& pbstream_a,
   const std::string yaml_file = filestem_out + ".yaml";
   ::cartographer::io::StreamFileWriter png_writer(png_file);
   WritePng(image, png_writer.GetFilename(), occ_thresh, free_thresh);
+
+  // 地图重新生成了，地图信息也要一起重算（面积是 map_manager get_maps 的字段，
+  // 不重算就会退回 0）。
+  // ⚠️ 口径警告：本工具**不走 WriteNavigationMap**（直接 WritePng，没有导航噪点
+  // 滤除），而 align / replace / reset_origin 与建图侧的 effective_area 都是数
+  // **滤波后最终图**的自由像素。所以这里算出的 effective 与那三者不可直接比较。
+  // 统一 merge 的 png 口径属 merge 自身的已知缺陷，不在本次范围内一并改。
+  const cv::Mat merged_mat = GeneratePngMat(image, occ_thresh, free_thresh);
+  const GridMapStats map_stats =
+      ComputeGridMapStats(merged_mat, merged_mat, resolution, free_thresh);
+  LOG(WARNING) << "merge_maps writes an UNFILTERED png (no navigation noise "
+                  "removal), so effective_area_m2 here is computed on the raw "
+                  "image and is NOT comparable with align/replace/mapping.";
+  for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
+    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
+                 << "' — this tool regenerates map.yaml from scratch and does "
+                    "not know this key.";
+  }
+  // 合并保留 target 的 created_at（内容采集时刻）—— target 是坐标系宿主，
+  // 合并是在它上面追加 source 的轨迹，不是换掉它的内容。
+  // pbstream_a 形如 <dir>/map.pbstream，同目录的 map.yaml 即 target 的。
+  const std::string tgt_yaml =
+      pbstream_a.substr(0, pbstream_a.find_last_of('.')) + ".yaml";
+  const std::string created_at = ReadMapCreatedAt(tgt_yaml);
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
   WriteYaml(resolution, origin, png_writer.GetFilename(), &yaml_writer,
-            occ_thresh, free_thresh);
+            occ_thresh, free_thresh, &map_stats, created_at);
+  LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
+            << " m2, effective (free, unfiltered) "
+            << map_stats.EffectiveAreaM2() << " m2";
 
   LOG(INFO) << "Merged map image written to: " << filestem_out << ".png/.yaml";
   LOG(INFO) << "Map size: " << image.width() << "x" << image.height() << " pixels";

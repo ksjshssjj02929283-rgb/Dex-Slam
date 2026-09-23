@@ -246,12 +246,27 @@ void Run(const std::string& pbstream_file,
                   : ".";
   }
 
+  // 地图重新生成了，地图信息也要一起重算（面积是 map_manager get_maps 的字段）。
+  // 口径与建图侧 SaveGridMap 一致：effective 数**滤波后最终图**的自由像素。
+  cv::Mat filtered_mat;
   WriteNavigationMap(origin_mat, png_file,
-                     navigation_map_filter_mode, save_debug_map, map_dir);
+                     navigation_map_filter_mode, save_debug_map, map_dir,
+                     &filtered_mat);
 
+  const GridMapStats map_stats = ComputeGridMapStats(
+      origin_mat, filtered_mat, render_resolution, free_thresh);
+  for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
+    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
+                 << "' — this tool regenerates map.yaml from scratch and does "
+                    "not know this key.";
+  }
+  // 只改坐标系原点，内容没换 ⇒ created_at（内容采集时刻）原样保留。
+  const std::string created_at = ReadMapCreatedAt(yaml_file);
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
   WriteYaml(render_resolution, map_origin, map_filestem, &yaml_writer,
-            occ_thresh, free_thresh);
+            occ_thresh, free_thresh, &map_stats, created_at);
+  LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
+            << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
   if (save_origin_map) {
     const std::string origin_png = map_filestem + "_origin.png";

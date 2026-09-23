@@ -35,6 +35,7 @@
 #include "cartographer/mapping/2d/map_limits.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "cartographer/mapping/2d/submap_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/batch_fast_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/ceres_scan_matcher_2d.h"
@@ -511,14 +512,21 @@ FindTransformResult FindTransformBinA(
       data_a.global_submap->grid();
   CHECK(global_grid != nullptr) << "global_static_submap has no grid";
 
-  const ::cartographer::transform::Rigid2d global_submap_pose_2d(
-      data_a.global_submap->local_pose().translation().head<2>(),
-      ::cartographer::transform::GetYaw(data_a.global_submap->local_pose()));
-
-  LOG(INFO) << "global_static_submap local_pose: ("
-            << global_submap_pose_2d.translation().x() << ", "
-            << global_submap_pose_2d.translation().y()
-            << " yaw=" << global_submap_pose_2d.rotation().angle() << ")";
+  // ⚠️ global_static_submap 的 local_pose **不是**「submap 系 → 全局系」的变换，
+  // 不得参与任何位姿运算。理由：
+  //   - 该 submap 的栅格本身就建立在全局系上（MapLimits.max 取首节点的全局位姿，
+  //     插入的 range data 也是全局坐标），所以匹配器（FCSM / Ceres）的输入输出
+  //     都已经在全局系；local_pose 只是与 limits().max() 相等的记账值。
+  //   - 定位侧的全局重定位（localization/internal/2d/pose_initializer_2d.cc）
+  //     同样不引用该字段，匹配器输出直接当作机器人的全局位姿。
+  // 普通 submap 的 local_pose 语义不同（配合 submap 相对位姿使用），不要照搬。
+  // 这里只打日志用于排查，不参与计算。
+  const auto& tgt_static_local_pose = data_a.global_submap->local_pose();
+  LOG(INFO) << "global_static_submap local_pose (diagnostic only, not used in "
+               "pose math): ("
+            << tgt_static_local_pose.translation().x() << ", "
+            << tgt_static_local_pose.translation().y() << " yaw="
+            << ::cartographer::transform::GetYaw(tgt_static_local_pose) << ")";
 
   if (frames_b.empty()) {
     LOG(ERROR) << "FindTransformBinA: no frames to match";
@@ -527,27 +535,73 @@ FindTransformResult FindTransformBinA(
     return result;
   }
 
-  // ── 匹配器准备（Ceres / LineMatcher 参数与原实现一致）──
+  // ── 匹配器准备 ──
+  // 参数优先来自调用方从 lua 的 POSE_INITIALIZER_2D 读到的配置（见
+  // FindTransformOptions 注释）。本函数与定位节点的 PoseInitializer 做同一件事，
+  // 参数必须同源，否则两边会静默跑成两套算法。
+  // 下面这组内置默认仅在调用方未提供 lua 时生效，是历史遗留值，**与生产配置
+  // 差 1~2 个数量级**（例如 translation_weight 0.1 vs 20），且不含
+  // use_improved_line_cost / huber 尺度，所以走这条路会打 WARNING。
+  constexpr double kGlobalLinearSearchWindow = 300.0;  // m，等价全图搜索
+  constexpr int kFallbackBranchAndBoundDepth = 7;
+
   ::cartographer::mapping::scan_matching::proto::CeresScanMatcherOptions2D
       ceres_options;
-  ceres_options.set_occupied_space_weight(1.0);
-  ceres_options.set_translation_weight(0.1);
-  ceres_options.set_rotation_weight(0.1);
-  ceres_options.set_line_weight(1.0);
-  ceres_options.set_point_weight(1.0);
-  ceres_options.mutable_ceres_solver_options()->set_max_num_iterations(20);
-  ceres_options.mutable_ceres_solver_options()->set_num_threads(4);
-  ::cartographer::mapping::scan_matching::CeresScanMatcher2D ceres_matcher(
-      ceres_options);
-
   ::cartographer::mapping::scan_matching::proto::LineMatcherOptions
       line_matcher_options;
-  line_matcher_options.set_line_delta_theta_threshold(0.2);
-  line_matcher_options.set_line_delta_tra_elongation_threshold(0.5);
-  line_matcher_options.set_min_delta_tra_parallel(0.5);
-  line_matcher_options.set_max_match_distance(30.0);
+  int branch_and_bound_depth = kFallbackBranchAndBoundDepth;
+  if (opts.has_matcher_options) {
+    ceres_options = opts.ceres_options;
+    line_matcher_options = opts.line_matcher_options;
+    branch_and_bound_depth = opts.branch_and_bound_depth;
+    LOG(INFO) << "Matcher params source: lua (POSE_INITIALIZER_2D)";
+  } else {
+    ceres_options.set_occupied_space_weight(1.0);
+    ceres_options.set_translation_weight(0.1);
+    ceres_options.set_rotation_weight(0.1);
+    ceres_options.set_line_weight(1.0);
+    ceres_options.set_point_weight(1.0);
+    ceres_options.mutable_ceres_solver_options()->set_max_num_iterations(20);
+    ceres_options.mutable_ceres_solver_options()->set_num_threads(4);
+    line_matcher_options.set_line_delta_theta_threshold(0.2);
+    line_matcher_options.set_line_delta_tra_elongation_threshold(0.5);
+    line_matcher_options.set_min_delta_tra_parallel(0.5);
+    line_matcher_options.set_max_match_distance(30.0);
+    LOG(WARNING) << "Matcher params source: BUILT-IN FALLBACK (no lua "
+                    "configuration supplied). These differ from the production "
+                    "localization config by 1-2 orders of magnitude and lack "
+                    "improved line cost — pass --configuration_directory / "
+                    "--configuration_basename to use the real config.";
+  }
+  ::cartographer::mapping::scan_matching::CeresScanMatcher2D ceres_matcher(
+      ceres_options);
   ::cartographer::mapping::scan_matching::LineMatcher2D line_matcher(
       line_matcher_options);
+
+  const int kBranchAndBoundDepth = branch_and_bound_depth;
+  LOG(INFO) << "Matcher config | ceres: occ="
+            << ceres_options.occupied_space_weight()
+            << " trans=" << ceres_options.translation_weight()
+            << " rot=" << ceres_options.rotation_weight()
+            << " line=" << ceres_options.line_weight()
+            << " point=" << ceres_options.point_weight()
+            << " corr_dist=" << ceres_options.max_correspondence_distance()
+            << " improved_line=" << ceres_options.use_improved_line_cost()
+            << " iters="
+            << ceres_options.ceres_solver_options().max_num_iterations()
+            << " threads="
+            << ceres_options.ceres_solver_options().num_threads()
+            << " | line: dtheta="
+            << line_matcher_options.line_delta_theta_threshold()
+            << " delong="
+            << line_matcher_options.line_delta_tra_elongation_threshold()
+            << " dparallel=" << line_matcher_options.min_delta_tra_parallel()
+            << " dmax=" << line_matcher_options.max_match_distance()
+            << " | stageB: linear=" << kGlobalLinearSearchWindow
+            << "m angular=pi depth=" << kBranchAndBoundDepth
+            << " | stageC: linear=" << opts.local_linear_window
+            << "m angular=" << opts.local_angular_window
+            << "rad depth=" << kBranchAndBoundDepth;
 
   const ::cartographer::mapping::LineMap2DList* global_line_map =
       data_a.global_submap->line_map_2d_list();
@@ -562,19 +616,19 @@ FindTransformResult FindTransformBinA(
   struct RefineResult {
     bool ok = false;
     bool ceres_ok = false;  // Ceres 收敛（此时 ceres_pose 才有意义）
-    ::cartographer::transform::Rigid2d ceres_pose;  // submap 系
+    ::cartographer::transform::Rigid2d ceres_pose;  // target 地图全局系
     float refine_score = 0.f;
     std::string reject_reason;
   };
   // 全部观测到的 refine 分数（过/不过门都记），供失败时数据化提示。
   std::vector<float> observed_refine;
+  // 'pose_in_A'：待精化的节点位姿，**已在 target 地图全局系**（匹配器的直接输出，
+  // 不需要也不允许再乘 global_static_submap 的 local_pose，理由见上方注释）。
   auto refine_frame =
-      [&](const ::cartographer::transform::Rigid2d& pose_in_submap,
+      [&](const ::cartographer::transform::Rigid2d& pose_in_A,
           const ::cartographer::sensor::PointCloud& pc_2d,
           const std::vector<::cartographer::sensor::LineData>& lines) {
         RefineResult rr;
-        const ::cartographer::transform::Rigid2d pose_in_A =
-            global_submap_pose_2d * pose_in_submap;
 
         std::map<int, std::vector<::cartographer::sensor::LineData>>
             tracked_lane_data;
@@ -585,12 +639,12 @@ FindTransformResult FindTransformBinA(
 
         ceres::Solver::Summary summary;
         if (has_ikdtree && global_line_map) {
-          ceres_matcher.Match(pose_in_submap.translation(), pose_in_submap,
+          ceres_matcher.Match(pose_in_A.translation(), pose_in_A,
                               pc_2d, tracked_lane_data, *global_grid,
                               *global_line_map, *global_cloud_ikdtree,
                               &rr.ceres_pose, &summary);
         } else {
-          ceres_matcher.Match(pose_in_submap.translation(), pose_in_submap,
+          ceres_matcher.Match(pose_in_A.translation(), pose_in_A,
                               pc_2d, *global_grid, &rr.ceres_pose, &summary);
         }
 
@@ -602,10 +656,8 @@ FindTransformResult FindTransformBinA(
         }
         rr.ceres_ok = true;
 
-        const ::cartographer::transform::Rigid2d ceres_pose_in_A =
-            global_submap_pose_2d * rr.ceres_pose;
         const auto [scored, refine_score] =
-            ScorePoseAgainstGrid(ceres_pose_in_A, pc_2d, *global_grid);
+            ScorePoseAgainstGrid(rr.ceres_pose, pc_2d, *global_grid);
         if (scored) observed_refine.push_back(refine_score);
         rr.refine_score = scored ? refine_score : 1.f;
         if (scored && refine_score < opts.refine_min_score) {
@@ -627,9 +679,9 @@ FindTransformResult FindTransformBinA(
   // ── Stage B：BatchFCSM 全局初对齐 ──
   ::cartographer::mapping::scan_matching::proto::
       FastCorrelativeScanMatcherOptions2D global_options;
-  global_options.set_linear_search_window(300.0);
+  global_options.set_linear_search_window(kGlobalLinearSearchWindow);
   global_options.set_angular_search_window(M_PI);
-  global_options.set_branch_and_bound_depth(7);
+  global_options.set_branch_and_bound_depth(kBranchAndBoundDepth);
   auto precomputation_stack =
       data_a.global_submap->GetOrBuildPrecomputationGridStack(global_options);
   ::cartographer::mapping::scan_matching::BatchFastCorrelativeScanMatcher2D
@@ -721,10 +773,11 @@ FindTransformResult FindTransformBinA(
     }
 
     float score = 0.f;
-    ::cartographer::transform::Rigid2d pose_in_submap;
+    // 匹配器输出直接就在 target 地图全局系（栅格即全局系），命名如实反映。
+    ::cartographer::transform::Rigid2d pose_in_A;
     ::cartographer::mapping::scan_matching::BatchMatchStats stats;
     const bool matched = batch_matcher.MatchFullSubmap(
-        pc_2d, static_cast<float>(opts.min_score), &score, &pose_in_submap,
+        pc_2d, static_cast<float>(opts.min_score), &score, &pose_in_A,
         &stats);
     LOG(INFO) << "[StageB] frame " << frame.trajectory_id << ":"
               << frame.node_index << " BBS score=" << score << " t="
@@ -738,7 +791,7 @@ FindTransformResult FindTransformBinA(
     consumed[fi] = 1;
 
     const auto rr =
-        refine_frame(pose_in_submap, pc_2d, frame.line_data_list);
+        refine_frame(pose_in_A, pc_2d, frame.line_data_list);
     if (!rr.ok) {
       ++result.rejected_l2;
       LOG(INFO) << "  frame " << frame.trajectory_id << ":" << frame.node_index
@@ -748,7 +801,7 @@ FindTransformResult FindTransformBinA(
             frame.global_pose_b.translation().head<2>(),
             ::cartographer::transform::GetYaw(frame.global_pose_b));
         const ::cartographer::transform::Rigid2d T_rej =
-            global_submap_pose_2d * rr.ceres_pose * node_pose_in_B.inverse();
+            rr.ceres_pose * node_pose_in_B.inverse();
         LOG(INFO) << "    rejected T=(" << T_rej.translation().x() << ", "
                   << T_rej.translation().y()
                   << " yaw=" << T_rej.rotation().angle() << ")";
@@ -758,8 +811,9 @@ FindTransformResult FindTransformBinA(
     const ::cartographer::transform::Rigid2d node_pose_in_B(
         frame.global_pose_b.translation().head<2>(),
         ::cartographer::transform::GetYaw(frame.global_pose_b));
+    // T_src_in_tgt = (node 在 tgt 全局系的位姿) * (node 在 src 系位姿)⁻¹
     const ::cartographer::transform::Rigid2d T =
-        global_submap_pose_2d * rr.ceres_pose * node_pose_in_B.inverse();
+        rr.ceres_pose * node_pose_in_B.inverse();
     pool.push_back({T, score, rr.refine_score});
     ++result.global_matched;
     delta_T = aggregate_pool();
@@ -789,7 +843,7 @@ FindTransformResult FindTransformBinA(
       FastCorrelativeScanMatcherOptions2D local_options;
   local_options.set_linear_search_window(opts.local_linear_window);
   local_options.set_angular_search_window(opts.local_angular_window);
-  local_options.set_branch_and_bound_depth(7);
+  local_options.set_branch_and_bound_depth(kBranchAndBoundDepth);
   ::cartographer::mapping::scan_matching::FastCorrelativeScanMatcher2D
       local_fcsm(*global_grid, local_options);
   LOG(INFO) << "Built local FCSM (window " << opts.local_linear_window
@@ -836,10 +890,12 @@ FindTransformResult FindTransformBinA(
           delta_T * node_pose_in_B;
 
       float score = 0.f;
-      ::cartographer::transform::Rigid2d pose_in_submap;
+      // 同 Stage B：local_fcsm 的初值与输出都在 target 地图全局系，
+      // 因此 pose_pred = delta_T * node_pose_in_B 可以直接喂进来。
+      ::cartographer::transform::Rigid2d pose_in_A;
       const bool matched = local_fcsm.Match(
           pose_pred, pc_2d, static_cast<float>(opts.local_min_score), &score,
-          &pose_in_submap);
+          &pose_in_A);
       if (!matched) {
         ++result.rejected_l1;
         LOG(INFO) << "[StageC] frame " << frame.trajectory_id << ":"
@@ -849,7 +905,7 @@ FindTransformResult FindTransformBinA(
       }
 
       const auto rr =
-          refine_frame(pose_in_submap, pc_2d, frame.line_data_list);
+          refine_frame(pose_in_A, pc_2d, frame.line_data_list);
       if (!rr.ok) {
         ++result.rejected_l2;
         LOG(INFO) << "[StageC] frame " << frame.trajectory_id << ":"
@@ -857,7 +913,7 @@ FindTransformResult FindTransformBinA(
         continue;
       }
       const ::cartographer::transform::Rigid2d T =
-          global_submap_pose_2d * rr.ceres_pose * node_pose_in_B.inverse();
+          rr.ceres_pose * node_pose_in_B.inverse();
       pool.push_back({T, score, rr.refine_score});
       ++result.local_matched;
     }
@@ -912,6 +968,29 @@ FindTransformResult FindTransformBinA(
                       0.0),
       Eigen::AngleAxisd(delta_T.rotation().angle(), Eigen::Vector3d::UnitZ()));
   result.success = result.inliers >= opts.min_success_frames;
+  // 内点相对最终 delta_T 的离散度：内点数只说明「有多少帧同意」，
+  // 残差 RMS 才说明「它们同意得有多紧」。两者一起才够判断可信度。
+  if (result.inliers > 0 && inlier_mask.size() == pool.size()) {
+    double sum_sq_t = 0.0, sum_sq_yaw = 0.0;
+    int n = 0;
+    for (size_t i = 0; i < pool.size(); ++i) {
+      if (!inlier_mask[i]) continue;
+      const double dt =
+          (pool[i].T.translation() - delta_T.translation()).norm();
+      const double dyaw = std::abs(::cartographer::common::NormalizeAngleDifference(
+          pool[i].T.rotation().angle() - delta_T.rotation().angle()));
+      sum_sq_t += dt * dt;
+      sum_sq_yaw += dyaw * dyaw;
+      ++n;
+    }
+    if (n > 0) {
+      result.rms_translation_m = std::sqrt(sum_sq_t / n);
+      result.rms_yaw_rad = std::sqrt(sum_sq_yaw / n);
+    }
+  }
+  // 「够了」与「稳了」分开表达：内点数达标即 success（T 可用），但未收敛时
+  // delta_T 还在动，标 degraded 交给调用方决定是否接受。
+  result.degraded = result.success && !result.converged;
   result.elapsed_seconds = elapsed_s();
 
   LOG(INFO) << "FindTransform summary: success=" << result.success
@@ -924,8 +1003,18 @@ FindTransformResult FindTransformBinA(
             << result.rejected_l1 << "/" << result.rejected_l2 << "/"
             << result.rejected_l3 << " iterations=" << result.iterations
             << " converged=" << result.converged
-            << " stop_reason=" << result.stop_reason << " elapsed_ms="
+            << " stop_reason=" << result.stop_reason
+            << " inlier_rms_xy=" << result.rms_translation_m << "m"
+            << " inlier_rms_yaw=" << result.rms_yaw_rad << "rad"
+            << " elapsed_ms="
             << static_cast<int>(result.elapsed_seconds * 1000);
+  if (result.degraded) {
+    LOG(WARNING) << "FindTransformBinA: enough inliers but NOT converged "
+                    "(stop_reason=" << result.stop_reason
+                 << "). T_src_in_tgt is usable but not settled — consider "
+                    "raising --match_budget_seconds / --max_iterations, or "
+                    "review the result before applying it.";
+  }
   if (!result.success) {
     LOG(ERROR) << "FindTransformBinA: only " << result.inliers
                << " inlier frames (< " << opts.min_success_frames
@@ -1291,7 +1380,7 @@ void WriteSinglePcd(const ::cartographer::mapping::proto::PointCloudData& proto_
 void TransformAndRewriteMap(
     MapData data, const ::cartographer::transform::Rigid3d& T_old_to_new,
     const std::string& output_pbstream, const std::string& output_filestem,
-    const RewriteOptions& opts) {
+    const RewriteOptions& opts, RewriteStats* stats) {
   auto& pose_graph = data.pose_graph;
   auto& traj_options = data.traj_options;
   auto& all_records = data.all_records;
@@ -1382,6 +1471,39 @@ void TransformAndRewriteMap(
     RerasterizeGridProto(static_submap_proto->mutable_grid(), T_old_to_new);
   }
 
+  // Step 3b: 产物自检。变换本身没有内建的"对不对"判据，只能靠产物侧可观测量
+  // 交叉验证；在写盘前就地采集，失败也不阻断（判断权交调用方）。
+  if (stats != nullptr) {
+    if (static_submap_proto->has_grid()) {
+      const auto& cl = static_submap_proto->grid().limits().cell_limits();
+      stats->grid_num_x_cells = cl.num_x_cells();
+      stats->grid_num_y_cells = cl.num_y_cells();
+    }
+    stats->cloud_points = static_submap_proto->cloud().points_size();
+    stats->line_count =
+        static_submap_proto->line_map_2d_list().line_map_data_size();
+    // DEC-013：替换后只做「对齐度检查」，不做对齐。残余大说明 target 坐标系
+    // 本身未对齐（或替换引入的 yaw 误差把它推大了），由人决定是否单独补 align。
+    if (stats->line_count > 0) {
+      const auto line_map = ::cartographer_ros::map_transform::
+          LineMap2DListFromProto(static_submap_proto->line_map_2d_list());
+      const auto residual = ::cartographer::mapping::EstimateAlignmentYaw(
+          line_map, opts.align_options);
+      if (residual.has_value()) {
+        stats->align_evaluated = true;
+        stats->align_residual_yaw_rad = *residual;
+      }
+    }
+    LOG(INFO) << "Rewrite self-check: grid " << stats->grid_num_x_cells << "x"
+              << stats->grid_num_y_cells << ", cloud "
+              << stats->cloud_points << " pts, lines " << stats->line_count
+              << ", structure-alignment residual "
+              << (stats->align_evaluated
+                      ? std::to_string(stats->align_residual_yaw_rad * 180.0 /
+                                       M_PI) + " deg"
+                      : std::string("n/a"));
+  }
+
   // Step 4: 渲染。
   cv::Mat origin_mat;
   Eigen::Vector2d map_origin;
@@ -1399,11 +1521,32 @@ void TransformAndRewriteMap(
   }
   const std::string png_file = output_filestem + ".png";
   const std::string yaml_file = output_filestem + ".yaml";
+  // 地图重新生成了，地图信息也必须一起重算：面积是 map_manager get_maps 对外
+  // 暴露的字段，沿用旧 yaml 或干脆不写都会让上层读到过期/0 值。
+  // 口径与建图侧 SaveGridMap 一致 —— effective 必须数**滤波后最终图**的自由像素，
+  // 所以这里要把 filtered_out 接出来。
+  cv::Mat filtered_mat;
   WriteNavigationMap(origin_mat, png_file, opts.navigation_map_filter_mode,
-                     opts.save_debug_map, map_dir);
+                     opts.save_debug_map, map_dir, &filtered_mat);
+  const GridMapStats map_stats = ComputeGridMapStats(
+      origin_mat, filtered_mat, render_resolution, opts.free_thresh);
+  // 全量重写 yaml 会丢掉建图侧写过、本工具不认识的键；宁可吵也别静默丢。
+  for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
+    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
+                 << "' — this tool regenerates map.yaml from scratch and does "
+                    "not know this key.";
+  }
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
   WriteYaml(render_resolution, map_origin, output_filestem, &yaml_writer,
-            opts.occ_thresh, opts.free_thresh);
+            opts.occ_thresh, opts.free_thresh, &map_stats, opts.created_at);
+  LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
+            << " m2, effective (free) " << map_stats.EffectiveAreaM2()
+            << " m2 (" << map_stats.free_cells << "/" << map_stats.total_cells
+            << " free pixels)";
+  if (stats != nullptr) {
+    stats->total_area_m2 = map_stats.TotalAreaM2();
+    stats->effective_area_m2 = map_stats.EffectiveAreaM2();
+  }
   if (opts.save_origin_map) {
     cv::imwrite(output_filestem + "_origin.png", origin_mat);
     LOG(INFO) << "Saved origin map to: " << output_filestem << "_origin.png";
@@ -1515,25 +1658,40 @@ std::string ResolveMapDir(const std::string& name_or_path,
     CHECK(home != nullptr) << "HOME env not set";
     root = std::string(home) + "/.dexe/data/maps";
   }
-  const std::string default_path = root + "/" + name_or_path;
-  const std::string direct_path = name_or_path;
-
-  const bool default_ok =
-      (access((default_path + "/map.pbstream").c_str(), F_OK) == 0);
-  const bool direct_ok =
-      (access((direct_path + "/map.pbstream").c_str(), F_OK) == 0);
-
-  if (default_ok) {
-    LOG(INFO) << "Resolved to default maps path: " << default_path;
-    return default_path;
-  } else if (direct_ok) {
-    LOG(INFO) << "Resolved to direct path: " << direct_path;
-    return direct_path;
+  // 分层布局（<map>/slam/ 放底图，assets/ 与 versions/ 与之平级）优先，
+  // 再回退旧扁平布局。四种组合按此顺序尝试，与 align_map_tool 的探测口径一致。
+  const std::vector<std::string> candidates = {
+      root + "/" + name_or_path + "/slam",
+      root + "/" + name_or_path,
+      name_or_path + "/slam",
+      name_or_path,
+  };
+  for (const auto& dir : candidates) {
+    if (access((dir + "/map.pbstream").c_str(), F_OK) == 0) {
+      LOG(INFO) << "Resolved map dir: " << dir;
+      return dir;
+    }
   }
-  LOG(FATAL) << "Map not found for: " << name_or_path << "\n"
-             << "  Tried: " << default_path << "\n"
-             << "  Tried: " << direct_path;
+  std::string tried;
+  for (const auto& dir : candidates) tried += "\n  Tried: " + dir;
+  LOG(FATAL) << "Map not found for: " << name_or_path << tried;
   return "";  // unreachable
+}
+
+double EstimateKnownAreaM2(const ::cartographer::mapping::Grid2D& grid) {
+  Eigen::Array2i offset;
+  ::cartographer::mapping::CellLimits cell_limits;
+  grid.ComputeCroppedLimits(&offset, &cell_limits);
+  int known = 0;
+  for (int y = 0; y < cell_limits.num_y_cells; ++y) {
+    for (int x = 0; x < cell_limits.num_x_cells; ++x) {
+      if (grid.IsKnown(Eigen::Array2i(offset.y() + y, offset.x() + x))) {
+        ++known;
+      }
+    }
+  }
+  const double res = grid.limits().resolution();
+  return known * res * res;
 }
 
 }  // namespace map_ops
