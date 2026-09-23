@@ -122,11 +122,38 @@ AlignmentStats EvaluateStructureAlignment(
   const mapping::LineMap2DList line_map(proto.latest_local_id(),
                                         std::move(line_map_data));
 
-  // 默认阈值即可：保存来的线地图已做过 culling，此处仅做结构方向估计。
+  // 用结构体默认阈值：保存来的线地图已做过 culling，此处仅做结构方向估计。
+  // 这几个值会随 stats 一起打出来（见 AlignmentStats 注释：判据必须可见）。
   const mapping::StructureAlignmentOptions options;
-  const auto yaw = mapping::EstimateAlignmentYaw(line_map, options);
-  if (!yaw.has_value()) return AlignmentStats{};
-  return AlignmentStats{true, std::abs(*yaw) * 180.0 / M_PI};
+  constexpr double kRadToDeg = 180.0 / M_PI;
+  AlignmentStats stats;
+  stats.min_line_length = options.min_line_length;
+  stats.max_candidate_lines = options.max_candidate_lines;
+  stats.orthogonality_tolerance_deg = options.orthogonality_tolerance_deg;
+  stats.min_secondary_support_ratio = options.min_secondary_support_ratio;
+
+  mapping::StructureAlignmentDiagnostics diag;
+  const auto yaw = mapping::EstimateAlignmentYaw(line_map, options, &diag);
+  if (!yaw.has_value()) return stats;  // evaluated 保持 false，但判据已填
+  stats.evaluated = true;
+  stats.residual_yaw_deg = std::abs(*yaw) * kRadToDeg;
+  stats.orthogonality_error_deg = std::abs(diag.orthogonality_error) * kRadToDeg;
+  stats.rms_axis_residual_deg = diag.rms_axis_residual * kRadToDeg;
+  return stats;
+}
+
+AlignmentGrade GradeAlignment(const AlignmentStats& stats,
+                              const double tolerance_deg) {
+  if (!stats.evaluated) return AlignmentGrade::kNotEvaluable;
+  if (stats.residual_yaw_deg > kNotAlignedDeg) return AlignmentGrade::kNotAligned;
+  if (stats.residual_yaw_deg <= tolerance_deg) return AlignmentGrade::kPass;
+  // |δ|/2 是等支撑时的物理下界；加上 tolerance 作为估计噪声的容差。
+  const double achievable_bound =
+      0.5 * stats.orthogonality_error_deg + tolerance_deg;
+  if (stats.residual_yaw_deg <= achievable_bound) {
+    return AlignmentGrade::kPassLimited;
+  }
+  return AlignmentGrade::kWarn;
 }
 
 }  // namespace pbstream_check_internal
@@ -142,6 +169,21 @@ using pbstream_check_internal::kDefaultMinLineLength;
 using pbstream_check_internal::kMinLineInliers;
 using pbstream_check_internal::LineStats;
 using pbstream_check_internal::ResolveCriteria;
+
+using pbstream_check_internal::AlignmentGrade;
+using pbstream_check_internal::GradeAlignment;
+using pbstream_check_internal::kNotAlignedDeg;
+
+const char* AlignmentGradeName(AlignmentGrade grade) {
+  switch (grade) {
+    case AlignmentGrade::kNotEvaluable: return "NOT_EVALUABLE";
+    case AlignmentGrade::kNotAligned:   return "NOT_ALIGNED";
+    case AlignmentGrade::kPass:         return "PASS";
+    case AlignmentGrade::kPassLimited:  return "PASS_LIMITED";
+    case AlignmentGrade::kWarn:         return "WARN";
+  }
+  return "?";
+}
 
 enum class Level { kPass, kWarn, kFail };
 
@@ -253,7 +295,19 @@ void WriteJson(const std::string& path, const std::string& pbstream_filename,
   out << std::boolalpha
       << "    \"alignment\": {\"evaluated\": " << gs.alignment.evaluated
       << ", \"residual_yaw_deg\": " << gs.alignment.residual_yaw_deg
-      << ", \"tolerance_deg\": " << FLAGS_align_tolerance_deg << "}\n";
+      << ", \"tolerance_deg\": " << FLAGS_align_tolerance_deg
+      << ", \"orthogonality_error_deg\": "
+      << gs.alignment.orthogonality_error_deg
+      << ", \"rms_axis_residual_deg\": " << gs.alignment.rms_axis_residual_deg
+      << ", \"grade\": \"" << AlignmentGradeName(GradeAlignment(
+                                  gs.alignment, FLAGS_align_tolerance_deg))
+      << "\", \"criteria\": {\"min_line_length\": "
+      << gs.alignment.min_line_length << ", \"max_candidate_lines\": "
+      << gs.alignment.max_candidate_lines
+      << ", \"orthogonality_tolerance_deg\": "
+      << gs.alignment.orthogonality_tolerance_deg
+      << ", \"min_secondary_support_ratio\": "
+      << gs.alignment.min_secondary_support_ratio << "}}\n";
   out << "  },\n";
   out << "  \"checks\": [\n";
   for (size_t i = 0; i < checks.size(); ++i) {
@@ -467,24 +521,67 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
     if (!gs.has_line_field || gs.lines.count == 0) {
       add(Level::kWarn, "ALIGN-01",
           "no line features; structural alignment not evaluable");
-    } else if (!gs.alignment.evaluated) {
-      add(Level::kWarn, "ALIGN-01",
-          "lines present but no reliable orthogonal structure; structural "
-          "alignment not evaluable");
-    } else if (gs.alignment.residual_yaw_deg <= FLAGS_align_tolerance_deg) {
-      std::ostringstream os;
-      os << "map aligned to structure (residual rotation " << std::fixed
-         << std::setprecision(2) << gs.alignment.residual_yaw_deg
-         << " deg <= " << FLAGS_align_tolerance_deg << " deg)";
-      add(Level::kPass, "ALIGN-01", os.str());
     } else {
+      // 判据一并打出：本工具用结构体默认阈值，而建图节点走 lua 的
+      // reset_map_origin_*。今天一致，将来 lua 显式写了就会分叉 ——
+      // 把尺子摆在数字旁边，分叉时一眼可辨（见 AlignmentStats 注释）。
+      std::ostringstream criteria;
+      criteria << "criteria: min_line_length=" << gs.alignment.min_line_length
+               << "m, max_candidate_lines=" << gs.alignment.max_candidate_lines
+               << ", orthogonality_tolerance=" << std::fixed
+               << std::setprecision(1)
+               << gs.alignment.orthogonality_tolerance_deg
+               << " deg, min_secondary_support_ratio="
+               << std::setprecision(2)
+               << gs.alignment.min_secondary_support_ratio;
       std::ostringstream os;
-      os << "map NOT aligned to structure: residual rotation " << std::fixed
-         << std::setprecision(2) << gs.alignment.residual_yaw_deg
-         << " deg > " << FLAGS_align_tolerance_deg << " deg";
-      add(Level::kWarn, "ALIGN-01", os.str(),
-          "re-save with reset_map_origin_to_align_structure = true to align "
-          "the map to the structural environment");
+      os << std::fixed << std::setprecision(2);
+      switch (GradeAlignment(gs.alignment, FLAGS_align_tolerance_deg)) {
+        case AlignmentGrade::kNotEvaluable:
+          add(Level::kWarn, "ALIGN-01",
+              "lines present but no reliable orthogonal structure; structural "
+              "alignment not evaluable",
+              criteria.str());
+          break;
+        case AlignmentGrade::kPass:
+          os << "PASS: map aligned to structure (residual "
+             << gs.alignment.residual_yaw_deg << " deg <= "
+             << FLAGS_align_tolerance_deg << " deg)";
+          add(Level::kPass, "ALIGN-01", os.str(), criteria.str());
+          break;
+        case AlignmentGrade::kPassLimited:
+          // 已达算法最优：残余角受地图自身两族墙不正交（δ）限制，物理上不可能
+          // 更小。此前这种情况与「对齐质量差」在报告里长得一模一样。
+          os << "PASS-LIMITED: alignment is at the algorithmic optimum for this "
+                "map. Residual " << gs.alignment.residual_yaw_deg
+             << " deg exceeds tolerance " << FLAGS_align_tolerance_deg
+             << " deg, but the map's two wall families are off-orthogonal by "
+             << gs.alignment.orthogonality_error_deg
+             << " deg, so the residual cannot go below "
+             << 0.5 * gs.alignment.orthogonality_error_deg << " deg";
+          add(Level::kPass, "ALIGN-01", os.str(),
+              "not an alignment-quality problem; the map itself is not "
+              "orthogonal (pose graph drift). " + criteria.str());
+          break;
+        case AlignmentGrade::kNotAligned:
+          os << "NOT ALIGNED: residual rotation "
+             << gs.alignment.residual_yaw_deg << " deg > " << kNotAlignedDeg
+             << " deg — the map looks like it was never aligned";
+          add(Level::kWarn, "ALIGN-01", os.str(),
+              "re-save with reset_map_origin_to_align_structure = true, or run "
+              "align_map_tool on the saved map. " + criteria.str());
+          break;
+        case AlignmentGrade::kWarn:
+          os << "WARN: residual rotation " << gs.alignment.residual_yaw_deg
+             << " deg > tolerance " << FLAGS_align_tolerance_deg
+             << " deg and is NOT explained by the map's orthogonality error ("
+             << gs.alignment.orthogonality_error_deg
+             << " deg) — alignment quality is insufficient";
+          add(Level::kWarn, "ALIGN-01", os.str(),
+              "alignment ran but did not converge well; check line feature "
+              "quality. " + criteria.str());
+          break;
+      }
     }
 
     // 全局定位金字塔缓存

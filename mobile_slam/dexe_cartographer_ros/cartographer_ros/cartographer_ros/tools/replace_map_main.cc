@@ -87,6 +87,12 @@ DEFINE_string(configuration_directory, "",
 DEFINE_string(configuration_basename, "dexe_localization_2d.lua",
               "lua 配置文件名，从中读取 POSE_INITIALIZER_2D 的匹配器参数");
 DEFINE_string(output_dir, "", "输出目录（可选，默认覆盖 target 地图目录）");
+// 替换的诱因往往正是「场地变了」，而求变换又依赖未变结构有足够 overlap ——
+// 匹配质量随场地变化程度单调下降。所以「先看变换值不值得信，再决定要不要写盘」
+// 是刚需而非锦上添花：dry_run 只跑匹配，把 T / 内点数 / 残差打进结果行后退出，
+// 不备份、不写任何文件。
+DEFINE_bool(dry_run, false,
+            "只求变换并输出 [REPLACE_RESULT]，不备份、不修改任何文件");
 DEFINE_string(
     transform_mode, "auto",
     "变换获取方式：auto=全局匹配自动求；manual=用 --src_in_tgt_* 手动给定");
@@ -486,6 +492,17 @@ void Run(const std::string& dir_tgt, const std::string& dir_src,
   g_result.x = T_src_in_tgt.translation().x();
   g_result.y = T_src_in_tgt.translation().y();
   g_result.yaw_rad = ::cartographer::transform::GetYaw(T_src_in_tgt);
+
+  // dry_run 在此收工：变换已求出并进结果行，但**一个文件都没碰过**
+  // （备份在 Step 3、写盘在 Step 4，都在下面）。编排方据此决定是否真执行。
+  if (FLAGS_dry_run) {
+    g_result.ok = true;
+    g_result.reason = "dry_run";
+    g_result.applied = false;
+    LOG(INFO) << "--dry_run: transform computed, no file was modified.";
+    PrintResultLine();
+    return;
+  }
 
   // Step 2: 确定地图保存/使用参数。这些都属于"SLAM 保存/使用地图"的配置，
   // 内容来自 src，未显式指定时默认继承 src 地图（可用对应 --flag 手动覆盖）。

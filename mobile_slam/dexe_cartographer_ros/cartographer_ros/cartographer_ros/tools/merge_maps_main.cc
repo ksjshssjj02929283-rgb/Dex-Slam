@@ -49,6 +49,7 @@
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
 #include "cartographer_ros/mapping/ros_map.h"
+#include "cartographer_ros/tools/map_transform_common.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include <rclcpp/rclcpp.hpp>
@@ -61,6 +62,9 @@ DEFINE_int32(min_votes, 10, "连续 scan match 成功帧数达到 N 后触发 Ce
 DEFINE_double(resolution, 0.05, "输出地图分辨率（米/格）");
 DEFINE_double(occ_thresh, 0.65, "占用阈值");
 DEFINE_double(free_thresh, 0.196, "空闲阈值");
+DEFINE_string(navigation_map_filter_mode, "normal",
+              "导航图噪点滤除模式（与建图节点同名参数一致）");
+DEFINE_bool(save_debug_map, false, "是否保存噪声过滤的中间调试图");
 
 namespace cartographer_ros {
 namespace {
@@ -546,6 +550,35 @@ void Run(const std::string& pbstream_a,
     merged_records.push_back(std::move(new_rec));
   }
 
+  // Step 4b: 重建合并后的 global_static_submap。
+  // 修掉三个缺陷（此前 Step 4 把**两份** global_static_submap 原样写进输出，
+  // 且 B 那份连 T_B_in_A 都没施加 —— 产物里躺着一份旧坐标系的全局栅格，而全局
+  // 重定位正是靠它）：
+  //   ① 丢弃两份旧的，只留一份从合并后 node 重建的；
+  //   ② 栅格 / 点云 / 线特征全部在合并后的系里重建（与 align / replace 同管线，
+  //      DEC-003），不再是「只渲染不重建」；
+  //   ③ 渲染改走 RenderSingleStaticSubmap + WriteNavigationMap，面积口径从此
+  //      与其余工具及建图侧一致。
+  {
+    std::vector<::cartographer::mapping::proto::SerializedData> cleaned;
+    cleaned.reserve(merged_records.size());
+    int dropped = 0;
+    for (auto& rec : merged_records) {
+      if (rec.has_global_static_submap()) { ++dropped; continue; }
+      cleaned.push_back(std::move(rec));
+    }
+    merged_records = std::move(cleaned);
+    LOG(INFO) << "Dropped " << dropped
+              << " stale global_static_submap record(s); rebuilding one from "
+                 "the merged trajectory nodes";
+    ::cartographer::mapping::proto::SerializedData rebuilt;
+    *rebuilt.mutable_global_static_submap() =
+        ::cartographer_ros::map_transform::RebuildGlobalStaticSubmapFromNodes(
+            merged_pg, merged_records, data_a.traj_options, resolution,
+            /*lidar_range_pad=*/30.0);
+    merged_records.push_back(std::move(rebuilt));
+  }
+
   // Step 5: 写入合并后的 pbstream
   const std::string out_pbstream = filestem_out + ".pbstream";
   const std::string tmp_pbstream = out_pbstream + ".tmp";
@@ -557,8 +590,28 @@ void Run(const std::string& pbstream_a,
     *pg_data.mutable_pose_graph() = merged_pg;
     writer.WriteProto(pg_data);
 
+    // 轨迹数与 options 条数必须一致：ProtoStreamDeserializer 对此有硬 CHECK，
+    // 而定位侧 LoadState 走的就是它。此前直接照抄 target 的 traj_options
+    // （只有 1 条）而 pose_graph 有 2 条轨迹 ⇒ **合并出来的地图定位加载不了**，
+    // 连 cartographer_pbstream check 都会 CHECK 失败。
+    // merge 自己的 LoadMap 手动读前三个字段绕过了该 CHECK，所以这个缺陷一直
+    // 只在工具内部被掩盖着。
+    ::cartographer::mapping::proto::AllTrajectoryBuilderOptions merged_opts =
+        data_a.traj_options;
+    const int num_trajectories = merged_pg.trajectory_size();
+    CHECK_GT(merged_opts.options_with_sensor_ids_size(), 0)
+        << "target map has no trajectory builder options";
+    while (merged_opts.options_with_sensor_ids_size() < num_trajectories) {
+      // 两张图实践中用同一套建图配置；options 只影响续建 / 重建，复制末条即可。
+      *merged_opts.add_options_with_sensor_ids() =
+          merged_opts.options_with_sensor_ids(
+              merged_opts.options_with_sensor_ids_size() - 1);
+    }
+    LOG(INFO) << "trajectory_builder_options padded to "
+              << merged_opts.options_with_sensor_ids_size() << " entries for "
+              << num_trajectories << " trajectories";
     ::cartographer::mapping::proto::SerializedData opts_data;
-    *opts_data.mutable_all_trajectory_builder_options() = data_a.traj_options;
+    *opts_data.mutable_all_trajectory_builder_options() = merged_opts;
     writer.WriteProto(opts_data);
 
     for (const auto& rec : merged_records) {
@@ -570,84 +623,43 @@ void Run(const std::string& pbstream_a,
       << "Failed to rename tmp pbstream";
   LOG(INFO) << "Merged pbstream written to: " << out_pbstream;
 
-  // Step 6: 重新渲染合并后的 map.png + map.yaml
-  // 重新构建所有 submap_slices（mapA + mapB）
-  // SubmapSlice 不可拷贝，需直接 FillSubmapSlice 填充
-  std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice> merged_slices;
-  ::cartographer::mapping::ValueConversionTables merged_conv;
-
-  // 填充 mapA 的 slices
-  for (const auto& rec : data_a.all_records) {
-    if (!rec.has_submap()) continue;
-    const auto& submap_proto = rec.submap();
-    const ::cartographer::mapping::SubmapId id_a{
-        submap_proto.submap_id().trajectory_id(),
-        submap_proto.submap_id().submap_index()};
-    ::cartographer::transform::Rigid3d gpose_a =
-        ::cartographer::transform::Rigid3d::Identity();
-    for (const auto& traj : merged_pg.trajectory()) {
-      if (traj.trajectory_id() != id_a.trajectory_id) continue;
-      for (const auto& sm : traj.submap()) {
-        if (sm.submap_index() == id_a.submap_index) {
-          gpose_a = ::cartographer::transform::ToRigid3(sm.pose());
-          break;
-        }
-      }
+  // Step 6: 渲染合并后的 map.png + map.yaml。
+  // 走与 align / replace / 建图侧同一条管线：渲染重建出的单个
+  // global_static_submap，再经 WriteNavigationMap 做导航噪点滤除。
+  // 此前是把 mapA / mapB 两套 submap slice 画到一起（PaintSubmapSlices +
+  // WritePng），既没重建、也没滤波，面积口径与其余工具不可比。
+  const auto* rebuilt_submap = [&]() -> const ::cartographer::mapping::proto::Submap2D* {
+    for (const auto& rec : merged_records) {
+      if (rec.has_global_static_submap()) return &rec.global_static_submap();
     }
-    ::cartographer::io::FillSubmapSlice(
-        gpose_a, submap_proto, &merged_slices[id_a], &merged_conv);
-  }
+    return nullptr;
+  }();
+  CHECK(rebuilt_submap != nullptr)
+      << "internal error: rebuilt global_static_submap missing";
 
-  for (const auto& rec : data_b.all_records) {
-    if (!rec.has_submap()) continue;
-    const auto& submap_proto = rec.submap();
-    const ::cartographer::mapping::SubmapId id{
-        traj_b_id, submap_proto.submap_id().submap_index()};
-
-    // 找新的 global pose（已施加 T_B_in_A）
-    ::cartographer::transform::Rigid3d new_global_pose;
-    bool found = false;
-    for (const auto& traj : merged_pg.trajectory()) {
-      if (traj.trajectory_id() != traj_b_id) continue;
-      for (const auto& sm : traj.submap()) {
-        if (sm.submap_index() == id.submap_index) {
-          new_global_pose = ::cartographer::transform::ToRigid3(sm.pose());
-          found = true;
-          break;
-        }
-      }
-      if (found) break;
-    }
-    if (!found) continue;
-
-    // 用新 global pose 填充 slice
-    ::cartographer::io::FillSubmapSlice(
-        new_global_pose, submap_proto, &merged_slices[id], &merged_conv);
-  }
-
-  auto result = ::cartographer::io::PaintSubmapSlices(merged_slices, resolution);
-  ::cartographer::io::Image image(std::move(result.surface));
-  const Eigen::Vector2d origin(
-      -result.origin.x() * resolution,
-      (result.origin.y() - image.height()) * resolution);
+  cv::Mat origin_mat;
+  Eigen::Vector2d origin;
+  double render_resolution = resolution;
+  ::cartographer_ros::map_transform::RenderSingleStaticSubmap(
+      *rebuilt_submap, occ_thresh, free_thresh, &origin_mat, &origin,
+      &render_resolution);
 
   const std::string png_file = filestem_out + ".png";
   const std::string yaml_file = filestem_out + ".yaml";
-  ::cartographer::io::StreamFileWriter png_writer(png_file);
-  WritePng(image, png_writer.GetFilename(), occ_thresh, free_thresh);
-
-  // 地图重新生成了，地图信息也要一起重算（面积是 map_manager get_maps 的字段，
-  // 不重算就会退回 0）。
-  // ⚠️ 口径警告：本工具**不走 WriteNavigationMap**（直接 WritePng，没有导航噪点
-  // 滤除），而 align / replace / reset_origin 与建图侧的 effective_area 都是数
-  // **滤波后最终图**的自由像素。所以这里算出的 effective 与那三者不可直接比较。
-  // 统一 merge 的 png 口径属 merge 自身的已知缺陷，不在本次范围内一并改。
-  const cv::Mat merged_mat = GeneratePngMat(image, occ_thresh, free_thresh);
-  const GridMapStats map_stats =
-      ComputeGridMapStats(merged_mat, merged_mat, resolution, free_thresh);
-  LOG(WARNING) << "merge_maps writes an UNFILTERED png (no navigation noise "
-                  "removal), so effective_area_m2 here is computed on the raw "
-                  "image and is NOT comparable with align/replace/mapping.";
+  std::string map_dir;
+  {
+    const size_t last_slash = filestem_out.find_last_of('/');
+    map_dir = (last_slash != std::string::npos)
+                  ? filestem_out.substr(0, last_slash)
+                  : ".";
+  }
+  // 与 align / replace / 建图侧同一条出图路径：导航噪点滤除后再写 png，
+  // 于是 effective_area 数的是**滤波后最终图**的自由像素，口径终于可比。
+  cv::Mat filtered_mat;
+  WriteNavigationMap(origin_mat, png_file, FLAGS_navigation_map_filter_mode,
+                     FLAGS_save_debug_map, map_dir, &filtered_mat);
+  const GridMapStats map_stats = ComputeGridMapStats(
+      origin_mat, filtered_mat, render_resolution, free_thresh);
   for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
     LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
                  << "' — this tool regenerates map.yaml from scratch and does "
@@ -660,14 +672,14 @@ void Run(const std::string& pbstream_a,
       pbstream_a.substr(0, pbstream_a.find_last_of('.')) + ".yaml";
   const std::string created_at = ReadMapCreatedAt(tgt_yaml);
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
-  WriteYaml(resolution, origin, png_writer.GetFilename(), &yaml_writer,
+  WriteYaml(render_resolution, origin, filestem_out, &yaml_writer,
             occ_thresh, free_thresh, &map_stats, created_at);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
-            << " m2, effective (free, unfiltered) "
-            << map_stats.EffectiveAreaM2() << " m2";
+            << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
   LOG(INFO) << "Merged map image written to: " << filestem_out << ".png/.yaml";
-  LOG(INFO) << "Map size: " << image.width() << "x" << image.height() << " pixels";
+  LOG(INFO) << "Map size: " << origin_mat.cols << "x" << origin_mat.rows
+            << " pixels";
   LOG(INFO) << "Map origin: (" << origin.x() << ", " << origin.y() << ")";
   LOG(INFO) << "Done. source map files are preserved at original location.";
 }

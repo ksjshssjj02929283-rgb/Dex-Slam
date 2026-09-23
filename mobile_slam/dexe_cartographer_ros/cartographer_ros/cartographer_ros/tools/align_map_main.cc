@@ -20,9 +20,8 @@
  *      （--dry_run 只打印角度，不修改任何文件）
  *   2. 备份原地图文件到 <slam>/backups/backup_<时间戳>/（子文件保持原名）
  *   3. 对 pose graph / global_static_submap / trajectory_data 施加旋转
- *   4. 重建栅格（默认从 trajectory node 点云重建干净栅格；
- *      --norebuild_grid_from_nodes 改为重栅格化原 grid）并重渲染
- *      map.png + map.yaml
+ *   4. 从 trajectory node 点云**完全重建**栅格 / 点云 / 线特征（无退路开关：
+ *      重栅格化旧 grid 会产出内部不自洽的地图）并重渲染 map.png + map.yaml
  *   5. 变换 map.pcd / map_highlight.pcd（若存在）
  *   6. 原子写回 map.pbstream，并对变换后的线特征复检残余角
  *
@@ -72,11 +71,6 @@ DEFINE_string(pbstream_filename, "", "pbstream 文件路径（可选，覆盖目
 DEFINE_string(map_filestem, "", "输出文件名 stem（可选，默认为 <slam目录>/map）");
 
 DEFINE_bool(dry_run, false, "只估计并打印对齐角，不修改任何文件");
-DEFINE_bool(rebuild_grid_from_nodes, true,
-            "栅格重建策略：true（默认）= 从 trajectory node 点云重建干净栅格"
-            "（与 reset_map_origin_tool 一致，但 misses 为空、free space 丢失）；"
-            "--norebuild_grid_from_nodes = 重栅格化原 grid（保留概率值与 "
-            "free space，观感最接近保存时）");
 
 // 结构对齐参数：默认**从 lua 的 reset_map_origin_* 读**，与建图节点
 // （Node::ResetMapOriginToAlignStructure → CreateStructureAlignmentOptions）
@@ -492,34 +486,20 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   for (const auto& traj : pose_graph.trajectory()) {
     if (traj.node_size() > 0) { has_nodes = true; break; }
   }
-  if (FLAGS_rebuild_grid_from_nodes) {
-    CHECK(has_nodes)
-        << "--rebuild_grid_from_nodes requires trajectory nodes in pose graph";
+  // 恒定完全重建：不再提供「重栅格化旧 grid」的退路。
+  // 退路的唯一好处是保住 miss 射线的 free space，代价却是点云 / 线特征只能做
+  // 刚体变换，仍带旧系体素量化与旧栅格的 culling 结论 —— 产物内部不自洽
+  // （DEC-003）。留一个会产出不自洽地图的开关，不如不留。
+  if (has_nodes) {
     // padding 30m，覆盖典型激光最大距离（与 reset_map_origin_tool 一致）
     *static_submap_proto = mt::RebuildGlobalStaticSubmapFromNodes(
         pose_graph, all_records, traj_options, resolution,
         /*lidar_range_pad=*/30.0);
-  } else if (static_submap_proto->has_grid()) {
-    // --norebuild_grid_from_nodes：保留原栅格概率（含 miss 射线的 free space），
-    // 代价是点云 / 线特征只能跟着做刚体变换，仍带旧系体素量化与旧栅格 culling
-    // 结论。观感最接近保存时，但产物内部不如重建自洽。
-    LOG(WARNING) << "--norebuild_grid_from_nodes: rerasterizing the old grid "
-                    "and rigid-transforming cloud/lines. Point cloud keeps the "
-                    "OLD frame's voxel quantization and culling decisions; "
-                    "prefer the default rebuild unless you need free space.";
-    mt::TransformStaticSubmapNonGrid(static_submap_proto, T_inv);
-    mt::RerasterizeGridProto(static_submap_proto->mutable_grid(), T_inv);
-  } else if (has_nodes) {
-    LOG(WARNING) << "global_static_submap has no grid; falling back to "
-                    "rebuilding from node clouds";
-    *static_submap_proto = mt::RebuildGlobalStaticSubmapFromNodes(
-        pose_graph, all_records, traj_options, resolution,
-        /*lidar_range_pad=*/30.0);
   } else {
-    PrintResultLine(false, "no_grid_and_no_nodes", diag, new_yaw, false, new_yaw);
-    LOG(FATAL) << "global_static_submap has no grid and pose graph has no "
-                  "nodes; cannot rebuild. Backups are kept in "
-                  "backups/, no output file has been written yet.";
+    PrintResultLine(false, "no_nodes_to_rebuild", diag, new_yaw, false, new_yaw);
+    LOG(FATAL) << "pose graph has no trajectory nodes; cannot rebuild the map. "
+                  "Backups are kept in backups/, no output file has been "
+                  "written yet.";
   }
   // === Step 9: 重渲染 map.png + map.yaml（与 node 端 SaveMap 一致）===
   cv::Mat origin_mat;
