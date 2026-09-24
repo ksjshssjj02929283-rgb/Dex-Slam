@@ -29,6 +29,7 @@
 
 #include <google/protobuf/repeated_field.h>
 
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/mapping/2d/line_map_2d.h"
@@ -246,7 +247,8 @@ struct GlobalSubmapStats {
 };
 
 void WriteJson(const std::string& path, const std::string& pbstream_filename,
-               uint32_t format_version, const std::map<std::string, int>& counts,
+               uint32_t format_version, const std::string& data_version,
+               const std::map<std::string, int>& counts,
                int trajectory_nodes, int trajectory_submaps,
                const GlobalSubmapStats& gs, const CullingCriteria& criteria,
                bool criteria_from_pbstream,
@@ -261,6 +263,7 @@ void WriteJson(const std::string& path, const std::string& pbstream_filename,
   out << "{\n";
   out << "  \"file\": \"" << JsonEscape(pbstream_filename) << "\",\n";
   out << "  \"format_version\": " << format_version << ",\n";
+  out << "  \"data_version\": \"" << JsonEscape(data_version) << "\",\n";
   out << "  \"trajectory\": {\"nodes\": " << trajectory_nodes
       << ", \"submaps\": " << trajectory_submaps << "},\n";
   out << "  \"serialized_data_counts\": {";
@@ -342,6 +345,7 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
   io::ProtoStreamReader reader(pbstream_filename);
   io::ProtoStreamDeserializer deserializer(&reader);
   const uint32_t format_version = deserializer.header().format_version();
+  const std::string data_version = deserializer.header().data_version();
 
   bool criteria_from_pbstream = false;
   const CullingCriteria criteria = ResolveCriteria(
@@ -377,11 +381,19 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
   int nodes_with_range_data = 0;
   int64_t range_data_points = 0;
   int64_t range_data_bytes = 0;
+  int nodes_with_highlight = 0;
+  int64_t highlight_points = 0;
   SerializedData proto;
   while (deserializer.ReadNextSerializedData(&proto)) {
     auto it = data_case_to_name.find(proto.data_case());
     if (it == data_case_to_name.end()) continue;
     ++counts[it->second];
+    if (proto.data_case() == SerializedData::kNode &&
+        proto.node().node_data().highlight_point_cloud().num_points() > 0) {
+      ++nodes_with_highlight;
+      highlight_points +=
+          proto.node().node_data().highlight_point_cloud().num_points();
+    }
     if (proto.data_case() == SerializedData::kNode &&
         proto.node().node_data().range_datas_size() > 0) {
       ++nodes_with_range_data;
@@ -443,21 +455,28 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
     add(Level::kFail, "STRUCT-01", "no trajectory node in pbstream");
   }
 
-  // 持久化 range data（不影响定位可用性，只影响离线重建能否无损，故只 WARN）
+  // 持久化 range data（不影响定位可用性，只影响离线重建能否无损，故只 WARN）。
+  // 离线工具按 data_version 决定重建方式（io/pbstream_version.h），这里据此判定。
   {
     const int total_nodes = counts["node"];
     std::ostringstream os;
-    os << "persisted range data on " << nodes_with_range_data << "/"
+    os << "data_version " << PbstreamDataVersionLabel(data_version)
+       << ", persisted range data on " << nodes_with_range_data << "/"
        << total_nodes << " nodes (" << range_data_points << " pts, ~"
        << range_data_bytes / 1024 << " KB compressed in memory)";
-    if (total_nodes > 0 && nodes_with_range_data == total_nodes) {
+    if (!PbstreamDataVersionHasRangeData(data_version)) {
+      add(Level::kWarn, "RANGE-01", os.str() + ": legacy map",
+          "offline align/replace/merge rebuild from the filtered cloud as "
+          "before; free space from no-return beams is lost. Re-map with a "
+          "current build to fix");
+    } else if (total_nodes > 0 && nodes_with_range_data == total_nodes) {
       add(Level::kPass, "RANGE-01",
           os.str() + ": offline rebuild reproduces the mapping grid");
     } else {
-      add(Level::kWarn, "RANGE-01", os.str(),
-          "offline align/replace/merge will synthesize range data from the "
-          "filtered cloud for the rest; free space from no-return beams is "
-          "lost. Re-map with a current build to fix");
+      add(Level::kWarn, "RANGE-01",
+          os.str() + ": inconsistent with the data version",
+          "nodes without range data will be synthesized from the filtered "
+          "cloud; the file was likely produced by a mixed toolchain");
     }
   }
 
@@ -647,6 +666,10 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
   // ---------------- 输出 ----------------
   std::cout << "\n[COUNT]  trajectory_nodes = " << trajectory_nodes
             << "   submaps = " << trajectory_submaps << "\n";
+  std::cout << "[COUNT]  data_version = "
+            << PbstreamDataVersionLabel(data_version) << "\n";
+  std::cout << "[COUNT]  node highlight clouds = " << nodes_with_highlight
+            << " nodes, " << highlight_points << " pts\n";
   std::cout << "[COUNT]  serialized:";
   for (const auto& entry : counts) {
     std::cout << "  " << entry.first << "=" << entry.second;
@@ -689,7 +712,8 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
             << warnings << " warning(s))\n\n";
 
   if (!json_path.empty()) {
-    WriteJson(json_path, pbstream_filename, format_version, counts,
+    WriteJson(json_path, pbstream_filename, format_version, data_version,
+              counts,
               trajectory_nodes, trajectory_submaps, gs, criteria,
               criteria_from_pbstream, checks, verdict, exit_code);
   }

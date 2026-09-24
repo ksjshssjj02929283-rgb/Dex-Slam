@@ -494,7 +494,7 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
     // padding 30m，覆盖典型激光最大距离（与 reset_map_origin_tool 一致）
     *static_submap_proto = mt::RebuildGlobalStaticSubmapFromNodes(
         pose_graph, all_records, traj_options, resolution,
-        /*lidar_range_pad=*/30.0);
+        /*lidar_range_pad=*/30.0, contents.header.data_version());
   } else {
     PrintResultLine(false, "no_nodes_to_rebuild", diag, new_yaw, false, new_yaw);
     LOG(FATAL) << "pose graph has no trajectory nodes; cannot rebuild the map. "
@@ -531,7 +531,8 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   {
     ::cartographer::io::StreamFileWriter yaml_writer(yaml_path);
     WriteYaml(render_resolution, map_origin, map_filestem, &yaml_writer,
-              occ_thresh, free_thresh, &map_stats, created_at);
+              occ_thresh, free_thresh, contents.header.data_version(),
+              &map_stats, created_at);
   }
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2()

@@ -72,7 +72,8 @@ void Run(const std::string& pbstream_filename, const std::string& map_filestem,
       (result.origin.y() - image.height()) * resolution);
   // 4. 保存yaml文件
   ::cartographer::io::StreamFileWriter yaml_writer(map_filestem + ".yaml");
-  WriteYaml(resolution, origin, pgm_writer.GetFilename(), &yaml_writer, 0.65, 0.196);
+  WriteYaml(resolution, origin, pgm_writer.GetFilename(), &yaml_writer, 0.65, 0.196,
+            deserializer.header().data_version());
 }
 
 }  // namespace

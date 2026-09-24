@@ -43,6 +43,11 @@ proto::TrajectoryNodeData ToProto(const TrajectoryNode::Data& constant_data) {
   // 直接使用合并后的点云进行序列化
   *proto.mutable_filtered_gravity_aligned_point_cloud() =
     sensor::CompressedPointCloud(constant_data.filtered_gravity_aligned_point_cloud).ToProto();
+  // 字段 10：高亮点云。FromProto 一直在读它，但此前这里从未写入，加载回来的
+  // 节点高亮点云恒为空 —— 离线重建（对齐 / 替换 / 合并）的 highlight_cloud
+  // 因此是空的。
+  *proto.mutable_highlight_point_cloud() =
+    sensor::CompressedPointCloud(constant_data.highlight_point_cloud).ToProto();
   for (const auto & lines : constant_data.lines) {
     for (int i = 0; i < static_cast<int>(lines.second.size()); i++) {
       auto * item = proto.add_lines();

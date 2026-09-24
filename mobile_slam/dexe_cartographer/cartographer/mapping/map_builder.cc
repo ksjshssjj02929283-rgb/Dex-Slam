@@ -22,6 +22,7 @@
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
 #include "cartographer/io/internal/mapping_state_serialization.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/serialization_format_migration.h"
@@ -264,7 +265,8 @@ void MapBuilder::SerializeState(bool include_unfinished_submaps,
   }
   
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, data_version_,
+                    global_static_submap_);
 }
 
 bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
@@ -293,7 +295,8 @@ bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
   
   io::ProtoStreamWriter writer(filename);
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, data_version_,
+                    global_static_submap_);
   return (writer.Close());
 }
 
@@ -643,6 +646,13 @@ std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resoluti
 std::map<int, int> MapBuilder::LoadState(
     io::ProtoStreamReaderInterface* const reader, bool load_frozen_state) {
   io::ProtoStreamDeserializer deserializer(reader);
+  data_version_ = io::MinPbstreamDataVersion(
+      data_version_, deserializer.header().data_version());
+  LOG(INFO) << "Loaded pbstream data_version: "
+            << io::PbstreamDataVersionLabel(
+                   deserializer.header().data_version())
+            << " -> will save as "
+            << io::PbstreamDataVersionLabel(data_version_);
 
   // Create a copy of the pose_graph_proto, such that we can re-write the
   // trajectory ids.

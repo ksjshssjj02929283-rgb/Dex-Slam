@@ -71,10 +71,11 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
 // 与 MapBuilder::GenerateGlobalStaticSubmap 的步骤 7a/7b/7c 一一对应，
 // 区别只在这里是 proto 级输入（pbstream 已落盘，没有内存位姿图对象）。
 //
-// 已知限制：pbstream 的 TrajectoryNodeData 不存 range_datas，只有
-// filtered_gravity_aligned_point_cloud，因此插栅格时 misses 为空 ——
-// 命中射线沿途的 free space 由 CastRays 重建，但**无回波 / 超量程光束**
-// 带来的 free space 补不回来。这是 pbstream 格式边界，不是实现缺陷。
+// 栅格的输入由地图数据版本 data_version（SerializationHeader.data_version）决定：
+//   - >= 0.3.0：用持久化的去畸变原始 range data，与建图输出逐 cell 一致；
+//   - 旧图（空）：沿用原来的做法，由 filtered_gravity_aligned_point_cloud
+//     合成 range data。misses 为空，无回波 / 超量程光束带来的 free space
+//     补不回来，重建后有效面积会比原图小。
 //
 // 另注：重建出的 submap 不含 precomputation_grid_stack 缓存（旧缓存属于
 // 旧栅格，本就该失效），首次全局重定位会重建它，是一次性开销。
@@ -85,11 +86,12 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
     const std::vector<::cartographer::mapping::proto::SerializedData>& records,
     const ::cartographer::mapping::proto::AllTrajectoryBuilderOptions&
         traj_options,
-    const double resolution, const double lidar_range_pad);
+    const double resolution, const double lidar_range_pad,
+    const std::string& data_version);
 
-// 把所有 trajectory node 的 filtered_gravity_aligned_point_cloud 在新坐标系中
-// 重新插入到一张全新的 ProbabilityGrid（干净、无重影；但 pbstream 不存原始
-// range_data，misses 为空，free space 信息会丢失）。
+// 把所有 trajectory node 在新坐标系中重新插入到一张全新的 ProbabilityGrid
+// （干净、无重影）。栅格输入按 data_version 选择，规则同
+// RebuildGlobalStaticSubmapFromNodes。
 // ⚠️ 仅重建栅格，不重建点云 / 线特征 —— 新代码请用
 // RebuildGlobalStaticSubmapFromNodes；本函数保留给只需要栅格的旧调用方。
 ::cartographer::mapping::proto::Grid2D BuildFreshGridFromNodes(
@@ -97,7 +99,8 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
     const std::vector<::cartographer::mapping::proto::SerializedData>& records,
     const ::cartographer::mapping::proto::AllTrajectoryBuilderOptions&
         traj_options,
-    const double resolution, const double lidar_range_pad);
+    const double resolution, const double lidar_range_pad,
+    const std::string& data_version);
 
 // 用单个变换后的 global_static_submap 渲染地图（与
 // MapBuilderBridge::SaveGridMapFromRange 一致）。

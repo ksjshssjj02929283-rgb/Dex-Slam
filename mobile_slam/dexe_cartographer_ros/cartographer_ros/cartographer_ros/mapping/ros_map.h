@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "Eigen/Core"
+#include "absl/types/optional.h"
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
 #include "cartographer/io/file_writer.h"
@@ -73,11 +74,20 @@ std::vector<std::string> FindDroppedYamlKeys(const std::string& existing_yaml_pa
                                              bool with_area_stats);
 
 // Write the corresponding yaml into 'file_writer'.
+// 'data_version'：与这份 yaml 一起写出的 pbstream 的数据版本
+// （SerializationHeader.data_version），写成 yaml 键 data_version，
+// map_manager 读它告诉上层这张图的 pbstream 存了哪些数据：
+//   - "0.3.0" 等 → 原样写入；
+//   - ""（旧版 pbstream）→ 写 "legacy"；
+//   - absl::nullopt（这份 yaml 不对应 pbstream，如 assets_writer）→ 不写该键。
+// 必须由调用方显式给出：各写入方写出的 pbstream 版本不同（替换取 source、
+// 定位回写沿用加载图），漏给就编译失败，而不是悄悄写错。
 // 'created_at' 空 = 当前本地时间（新建图）；更新已有地图时传入原值沿用（见 ReadMapCreatedAt）。
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
                double occ_thresh, double free_thresh,
+               const absl::optional<std::string>& data_version,
                const GridMapStats* stats = nullptr,
                const std::string& created_at = "");
 

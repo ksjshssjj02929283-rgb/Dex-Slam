@@ -55,9 +55,11 @@ std::vector<int> GetValidTrajectoryIds(
   return valid_trajectories;
 }
 
-mapping::proto::SerializationHeader CreateHeader() {
+mapping::proto::SerializationHeader CreateHeader(
+    const std::string& data_version) {
   mapping::proto::SerializationHeader header;
   header.set_format_version(kMappingStateSerializationFormatVersion);
+  header.set_data_version(data_version);
   return header;
 }
 
@@ -232,8 +234,9 @@ void WritePbStream(
     const std::vector<mapping::proto::TrajectoryBuilderOptionsWithSensorIds>&
         trajectory_builder_options,
     ProtoStreamWriterInterface* const writer, bool include_unfinished_submaps,
+    const std::string& data_version,
     std::shared_ptr<mapping::Submap2D> global_static_submap) {
-  writer->WriteProto(CreateHeader());
+  writer->WriteProto(CreateHeader(data_version));
   writer->WriteProto(
       SerializePoseGraph(pose_graph, include_unfinished_submaps));
   writer->WriteProto(SerializeTrajectoryBuilderOptions(

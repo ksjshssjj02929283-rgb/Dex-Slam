@@ -637,6 +637,7 @@ bool MapBuilderBridge::SaveGridMapFromRange(
             map_filename, &yaml_writer,
             node_options_.mapping_occ_thresh,
             node_options_.mapping_free_thresh,
+            map_builder_->GetPbstreamDataVersion(),
             &local_stats);
   LOG(INFO) << "Map area: total " << local_stats.TotalAreaM2() << " m2, effective (free) "
             << local_stats.EffectiveAreaM2() << " m2 ("
@@ -870,7 +871,8 @@ bool MapBuilderBridge::SaveGridMap(
   WriteYaml(resolution, origin,
             map_filename, &yaml_writer,
             node_options_.mapping_occ_thresh,
-            node_options_.mapping_free_thresh);
+            node_options_.mapping_free_thresh,
+            map_builder_->GetPbstreamDataVersion());
   LOG(INFO) << "Saving Grid Map Success." << std::endl;
 
   return true;

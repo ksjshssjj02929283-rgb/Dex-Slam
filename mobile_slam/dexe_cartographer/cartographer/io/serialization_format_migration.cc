@@ -207,8 +207,10 @@ void MigrateStreamVersion1ToVersion2(
       mapping::FromProto(pose_graph_proto.constraint()));
   CHECK(input->eof());
 
+  // 迁移只改记录布局，不补数据：数据版本原样沿用输入。
   WritePbStream(pose_graph, trajectory_builder_options, output,
-                include_unfinished_submaps);
+                include_unfinished_submaps,
+                deserializer.header().data_version());
 }
 
 mapping::MapById<mapping::SubmapId, mapping::proto::Submap>

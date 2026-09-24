@@ -177,7 +177,7 @@ void Run(const std::string& pbstream_file,
       // padding 30m，覆盖典型激光最大距离；可后续暴露成 flag
       *static_submap_proto->mutable_grid() = mt::BuildFreshGridFromNodes(
           pose_graph, all_records, traj_options, resolution,
-          /*lidar_range_pad=*/30.0);
+          /*lidar_range_pad=*/30.0, contents.header.data_version());
     } else if (static_submap_proto->has_grid()) {
       LOG(WARNING) << "pose_graph has no nodes; falling back to "
                       "rerasterize existing global_static_submap.grid";
@@ -264,7 +264,8 @@ void Run(const std::string& pbstream_file,
   const std::string created_at = ReadMapCreatedAt(yaml_file);
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
   WriteYaml(render_resolution, map_origin, map_filestem, &yaml_writer,
-            occ_thresh, free_thresh, &map_stats, created_at);
+            occ_thresh, free_thresh, contents.header.data_version(), &map_stats,
+            created_at);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 

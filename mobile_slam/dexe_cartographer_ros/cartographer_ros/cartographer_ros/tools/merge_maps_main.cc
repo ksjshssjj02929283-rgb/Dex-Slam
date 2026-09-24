@@ -33,6 +33,7 @@
 
 #include "cartographer/common/port.h"
 #include "cartographer/io/proto_stream.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
@@ -519,6 +520,22 @@ void Run(const std::string& pbstream_a,
     *merged_pg.add_trajectory() = new_traj;
   }
 
+  // 合并产物的数据版本取两者较低者：只要有一张是旧图，合并后就有一部分节点
+  // 没有原始 range data，不能标成新版本（见 cartographer/io/pbstream_version.h）。
+  ::cartographer::mapping::proto::SerializationHeader merged_header =
+      data_a.header;
+  merged_header.set_data_version(::cartographer::io::MinPbstreamDataVersion(
+      data_a.header.data_version(), data_b.header.data_version()));
+  LOG(INFO) << "data_version: target "
+            << ::cartographer::io::PbstreamDataVersionLabel(
+                   data_a.header.data_version())
+            << ", source "
+            << ::cartographer::io::PbstreamDataVersionLabel(
+                   data_b.header.data_version())
+            << " -> merged "
+            << ::cartographer::io::PbstreamDataVersionLabel(
+                   merged_header.data_version());
+
   // Step 4: 构建合并的 SerializedData 列表（target map 原样保留，source map 改 tid=1）
   std::vector<::cartographer::mapping::proto::SerializedData> merged_records;
   // 先写 target map 的所有记录
@@ -575,7 +592,7 @@ void Run(const std::string& pbstream_a,
     *rebuilt.mutable_global_static_submap() =
         ::cartographer_ros::map_transform::RebuildGlobalStaticSubmapFromNodes(
             merged_pg, merged_records, data_a.traj_options, resolution,
-            /*lidar_range_pad=*/30.0);
+            /*lidar_range_pad=*/30.0, merged_header.data_version());
     merged_records.push_back(std::move(rebuilt));
   }
 
@@ -584,7 +601,7 @@ void Run(const std::string& pbstream_a,
   const std::string tmp_pbstream = out_pbstream + ".tmp";
   {
     ::cartographer::io::ProtoStreamWriter writer(tmp_pbstream);
-    writer.WriteProto(data_a.header);
+    writer.WriteProto(merged_header);
 
     ::cartographer::mapping::proto::SerializedData pg_data;
     *pg_data.mutable_pose_graph() = merged_pg;
@@ -673,7 +690,8 @@ void Run(const std::string& pbstream_a,
   const std::string created_at = ReadMapCreatedAt(tgt_yaml);
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
   WriteYaml(render_resolution, origin, filestem_out, &yaml_writer,
-            occ_thresh, free_thresh, &map_stats, created_at);
+            occ_thresh, free_thresh, merged_header.data_version(), &map_stats,
+            created_at);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 

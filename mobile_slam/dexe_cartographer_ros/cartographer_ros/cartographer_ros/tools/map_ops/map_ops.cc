@@ -1461,7 +1461,8 @@ void TransformAndRewriteMap(
     *static_submap_proto = ::cartographer_ros::map_transform::
         RebuildGlobalStaticSubmapFromNodes(pose_graph, all_records,
                                            traj_options, opts.resolution,
-                                           /*lidar_range_pad=*/30.0);
+                                           /*lidar_range_pad=*/30.0,
+                                           data.header.data_version());
   } else if (static_submap_proto->has_grid()) {
     // 无 node 可重建的退化路径：只能刚体变换 + 重栅格化，产物保留旧系量化。
     LOG(WARNING) << "pose_graph has no nodes; falling back to rigid transform "
@@ -1538,7 +1539,8 @@ void TransformAndRewriteMap(
   }
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
   WriteYaml(render_resolution, map_origin, output_filestem, &yaml_writer,
-            opts.occ_thresh, opts.free_thresh, &map_stats, opts.created_at);
+            opts.occ_thresh, opts.free_thresh, data.header.data_version(),
+            &map_stats, opts.created_at);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2()
             << " m2 (" << map_stats.free_cells << "/" << map_stats.total_cells

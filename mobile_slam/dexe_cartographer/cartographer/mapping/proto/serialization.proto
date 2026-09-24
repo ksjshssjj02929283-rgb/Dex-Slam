@@ -71,6 +71,10 @@ message LocalSlamResultData {
 // version of the format.
 message SerializationHeader {
   uint32 format_version = 1;
+  // 地图数据版本（语义化版本号，如 "0.3.0"），描述 pbstream 里「存了哪些数据」，
+  // 与上面的 format_version（记录布局）是两回事。缺省为空 = 0.3.0 之前保存的
+  // 旧图。各版本含义与比较规则见 cartographer/io/pbstream_version.h。
+  string data_version = 2;
 }
 
 message SerializedData {

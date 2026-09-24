@@ -128,7 +128,9 @@ std::vector<std::string> FindDroppedYamlKeys(
       "resolution", "origin",      "negate",      "occupied_thresh",
       "free_thresh",
       // created_at 由调用方读出后原样回写（ReadMapCreatedAt），不算丢。
-      "created_at"};
+      "created_at",
+      // data_version 由调用方按写出的 pbstream 重新给出，不算丢。
+      "data_version"};
   if (with_area_stats) {
     written.insert("total_area_m2");
     written.insert("effective_area_m2");
@@ -153,6 +155,7 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
                double occ_thresh, double free_thresh,
+               const absl::optional<std::string>& data_version,
                const GridMapStats* stats, const std::string& created_at)
 {
   // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
@@ -186,6 +189,13 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
   // 地图创建时刻，机器人本地时间 ISO 8601、无时区后缀；map_manager get_maps 以 MapInfo.created_at 透传给上层。
   // 新建图取当前时间；定位侧更新保存（save_map）传入已加载地图的原值，创建时刻不随更新漂移
   absl::StrAppend(&output, "created_at: ", created_at.empty() ? LocalTimeIso8601() : created_at, "\n");
+  // 同目录 map.pbstream 的数据版本（语义见 ros_map.h WriteYaml 注释）。
+  if (data_version.has_value()) {
+    absl::StrAppend(&output, "data_version: ",
+                    data_version->empty() ? std::string("legacy")
+                                                   : *data_version,
+                    "\n");
+  }
   file_writer->Write(output.data(), output.size());
 }
 

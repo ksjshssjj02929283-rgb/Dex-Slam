@@ -126,6 +126,10 @@ class MapBuilderInterface {
 
   // 返回已缓存的全局静态 Submap（由 SerializeStateToFile 生成并缓存）。
   // 若尚未生成则返回 nullptr。非 2D 实现（mock/stub）保持默认返回 nullptr 即可。
+  // 本次保存会写入 pbstream 的数据版本（cartographer/io/pbstream_version.h）。
+  // 空 = legacy。建图侧写 map.yaml 时随之记录，供 map_manager 等上层读取。
+  virtual std::string GetPbstreamDataVersion() const { return ""; }
+
   virtual std::shared_ptr<mapping::Submap2D> GetGlobalStaticSubmap() const {
     return nullptr;
   }

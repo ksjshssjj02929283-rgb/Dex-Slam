@@ -427,7 +427,8 @@ static bool RenderSubmapToFiles(
     const std::string& navigation_map_filter_mode,
     const bool save_debug_map,
     const bool save_map_pcd,
-    const std::string& created_at) {   // 已加载地图的 created_at，空 = 取当前时间
+    const std::string& created_at,     // 已加载地图的 created_at，空 = 取当前时间
+    const std::string& data_version) {   // 随之写出的 pbstream 版本（空 = legacy）
   const cartographer::mapping::Grid2D* grid = submap->grid();
   if (!grid) {
     LOG(ERROR) << "RenderSubmapToFiles: Grid is null";
@@ -532,7 +533,7 @@ static bool RenderSubmapToFiles(
   }
   cartographer::io::StreamFileWriter yaml_writer(yaml_path);
   WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh,
-            free_thresh, &map_stats, created_at);
+            free_thresh, data_version, &map_stats, created_at);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
@@ -585,7 +586,8 @@ bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
                              node_options_.navigation_map_filter_mode,
                              node_options_.save_debug_map,
                              node_options_.save_map_pcd,
-                             loaded_created_at_);
+                             loaded_created_at_,
+                             localization_updater_->data_version());
 }
 
 // ---------------------------------------------------------------------------
@@ -693,7 +695,8 @@ bool LocalizationUpdaterBridge::SaveMapFromPoseGraph(
   }
   cartographer::io::StreamFileWriter yaml_writer(yaml_path);
   WriteYaml(resolution, map_origin, map_filename, &yaml_writer,
-            occ_thresh, free_thresh, &map_stats, loaded_created_at_);
+            occ_thresh, free_thresh, localization_updater_->data_version(),
+            &map_stats, loaded_created_at_);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 

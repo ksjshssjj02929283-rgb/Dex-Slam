@@ -17,6 +17,7 @@
 #include <memory>
 #include <utility>
 
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/submap_painter.h"
@@ -237,21 +238,24 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
 
 namespace {
 
-// 取一个 node 用于插栅格的 range data（已变换到新全局系）。与建图侧
-// MapBuilder::GenerateGlobalStaticSubmap 的 7a 逐行对应：
-//   - pbstream 持久化了去畸变真 range data（TrajectoryNodeData 字段 11）：
-//     用它 —— origin 是各雷达安装位置、含 misses，与建图输出逐 cell 一致；
-//   - 没有（该图保存于持久化之前）：由 filtered 点云合成，misses 为空、
-//     origin 取节点位姿，无回波光束扫出的 free space 补不回来。
+// 取一个 node 用于插栅格的 range data（已变换到新全局系）。走哪条路由地图数据
+// 版本决定（cartographer/io/pbstream_version.h），不逐节点猜：
+//   - 版本 >= 0.3.0（use_persisted=true）：用持久化的去畸变真 range data
+//     （TrajectoryNodeData 字段 11）—— origin 是各雷达安装位置、含 misses，
+//     与建图侧 MapBuilder::GenerateGlobalStaticSubmap 7a 逐 cell 一致；
+//   - 旧图（use_persisted=false）：沿用原来的做法，由 filtered 点云合成，
+//     misses 为空、origin 取节点位姿，无回波光束扫出的 free space 补不回来。
+// 新版本图里个别节点缺数据属于数据不一致，同样退回合成，由调用方报错。
 // *used_real 标出走了哪条路，调用方据此统计与告警。
 std::vector<::cartographer::sensor::RangeData> NodeRangeDataInGlobalFrame(
     const ::cartographer::mapping::proto::TrajectoryNodeData& node_data,
     const ::cartographer::transform::Rigid3d& global_pose,
-    const ::cartographer::sensor::PointCloud& cloud_global, bool* used_real) {
+    const ::cartographer::sensor::PointCloud& cloud_global,
+    const bool use_persisted, bool* used_real) {
   namespace cs = ::cartographer::sensor;
   std::vector<cs::RangeData> out;
   const auto pose_f = global_pose.cast<float>();
-  if (node_data.range_datas_size() > 0) {
+  if (use_persisted && node_data.range_datas_size() > 0) {
     *used_real = true;
     out.reserve(node_data.range_datas_size());
     for (const auto& compressed_proto : node_data.range_datas()) {
@@ -294,16 +298,27 @@ Eigen::Vector2d SnapMaxToFirstNodeLattice(const Eigen::Vector2d& raw_max,
           std::ceil((raw_max.y() - first_node.y()) / resolution) * resolution);
 }
 
-void WarnIfSynthetic(const char* who, size_t real, size_t synthetic) {
-  LOG(INFO) << who << ": range data source — " << real
+void LogRangeDataSource(const char* who, const std::string& data_version,
+                        size_t real, size_t synthetic) {
+  namespace cio = ::cartographer::io;
+  LOG(INFO) << who << ": data_version "
+            << cio::PbstreamDataVersionLabel(data_version)
+            << ", range data source — " << real
             << " node(s) with persisted real range data, " << synthetic
             << " synthesized from filtered cloud";
-  if (synthetic > 0) {
-    LOG(WARNING) << who << ": " << synthetic
-                 << " node(s) have no persisted range data (map saved before "
-                    "range data persistence). Their no-return beams' free "
-                    "space cannot be reproduced; the rebuilt grid will have "
+  if (!cio::PbstreamDataVersionHasRangeData(data_version)) {
+    LOG(WARNING) << who << ": pbstream data_version "
+                 << cio::PbstreamDataVersionLabel(data_version)
+                 << " has no persisted range data; rebuilding from the "
+                    "filtered cloud as before. Free space of no-return beams "
+                    "cannot be reproduced, so the rebuilt grid will have "
                     "less free area than the original.";
+  } else if (synthetic > 0) {
+    LOG(ERROR) << who << ": pbstream claims data_version " << data_version
+               << " but " << synthetic
+               << " node(s) have no persisted range data; those nodes were "
+                  "synthesized from the filtered cloud. The file is "
+                  "inconsistent.";
   }
 }
 
@@ -314,7 +329,10 @@ void WarnIfSynthetic(const char* who, size_t real, size_t synthetic) {
     const std::vector<::cartographer::mapping::proto::SerializedData>& records,
     const ::cartographer::mapping::proto::AllTrajectoryBuilderOptions&
         traj_options,
-    const double resolution, const double lidar_range_pad) {
+    const double resolution, const double lidar_range_pad,
+    const std::string& data_version) {
+  const bool use_persisted_range_data =
+      ::cartographer::io::PbstreamDataVersionHasRangeData(data_version);
   namespace cm = ::cartographer::mapping;
   namespace cs = ::cartographer::sensor;
 
@@ -446,10 +464,11 @@ void WarnIfSynthetic(const char* who, size_t real, size_t synthetic) {
     const auto cloud_global =
         cs::TransformPointCloud(cloud_local, global_pose.cast<float>());
 
-    // 7a 栅格：优先持久化的真 range data，无则合成（见 NodeRangeDataInGlobalFrame）
+    // 7a 栅格：按数据版本选真 range data 或合成（见 NodeRangeDataInGlobalFrame）
     bool used_real = false;
     for (const auto& range_data : NodeRangeDataInGlobalFrame(
-             node_data, global_pose, cloud_global, &used_real)) {
+             node_data, global_pose, cloud_global, use_persisted_range_data,
+             &used_real)) {
       submap->InsertRangeData(range_data, inserter.get());
     }
     ++(used_real ? nodes_real_range : nodes_synthetic_range);
@@ -501,8 +520,8 @@ void WarnIfSynthetic(const char* who, size_t real, size_t synthetic) {
   const auto* line_map = submap->line_map_2d_list();
   const auto* cloud_ptr = submap->cloud();
   const auto* highlight_ptr = submap->highlight_cloud();
-  WarnIfSynthetic("RebuildGlobalStaticSubmapFromNodes", nodes_real_range,
-                  nodes_synthetic_range);
+  LogRangeDataSource("RebuildGlobalStaticSubmapFromNodes", data_version,
+                     nodes_real_range, nodes_synthetic_range);
   LOG(INFO) << "RebuildGlobalStaticSubmapFromNodes: " << inserted
             << " nodes inserted (" << skipped_no_pose << " no pose, "
             << skipped_empty_cloud << " empty cloud, " << nodes_with_lines
@@ -522,7 +541,10 @@ void WarnIfSynthetic(const char* who, size_t real, size_t synthetic) {
     const std::vector<::cartographer::mapping::proto::SerializedData>& records,
     const ::cartographer::mapping::proto::AllTrajectoryBuilderOptions&
         traj_options,
-    const double resolution, const double lidar_range_pad) {
+    const double resolution, const double lidar_range_pad,
+    const std::string& data_version) {
+  const bool use_persisted_range_data =
+      ::cartographer::io::PbstreamDataVersionHasRangeData(data_version);
   // 1. 收集 node global pose（已经过变换）
   std::map<std::pair<int, int>, ::cartographer::transform::Rigid3d>
       node_global_poses;
@@ -642,15 +664,16 @@ void WarnIfSynthetic(const char* who, size_t real, size_t synthetic) {
 
     bool used_real = false;
     for (const auto& range_data : NodeRangeDataInGlobalFrame(
-             node_data, global_pose, cloud_global, &used_real)) {
+             node_data, global_pose, cloud_global, use_persisted_range_data,
+             &used_real)) {
       submap->InsertRangeData(range_data, inserter.get());
     }
     ++(used_real ? nodes_real_range : nodes_synthetic_range);
     ++inserted;
   }
   submap->Finish();
-  WarnIfSynthetic("BuildFreshGridFromNodes", nodes_real_range,
-                  nodes_synthetic_range);
+  LogRangeDataSource("BuildFreshGridFromNodes", data_version,
+                     nodes_real_range, nodes_synthetic_range);
 
   LOG(INFO) << "BuildFreshGridFromNodes: " << inserted << " nodes inserted ("
             << skipped_no_pose << " no pose, " << skipped_empty_cloud

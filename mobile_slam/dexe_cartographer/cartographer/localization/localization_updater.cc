@@ -20,6 +20,7 @@
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
 #include "cartographer/io/internal/mapping_state_serialization.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/serialization_format_migration.h"
@@ -383,7 +384,8 @@ void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
   // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存
   EnsureGlobalSubmapPyramid(global_static_submap_);  // 补全局定位地图缓存
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, data_version_,
+                    global_static_submap_);
   
   if (global_static_submap_) {
     LOG(INFO) << "=== Global Static Submap Save Statistics ===";
@@ -470,7 +472,8 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
   EnsureGlobalSubmapPyramid(submap_to_save);
   // 保存时传递选定的 submap
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps, submap_to_save);
+                    include_unfinished_submaps, data_version_,
+                    submap_to_save);
   
   bool success = writer.Close();
   
@@ -722,6 +725,13 @@ std::shared_ptr<mapping::Submap2D> LocalizationUpdater::GenerateGlobalStaticSubm
 std::map<int, int> LocalizationUpdater::LoadState(
     io::ProtoStreamReaderInterface* const reader, bool load_frozen_state) {
   io::ProtoStreamDeserializer deserializer(reader);
+  data_version_ = io::MinPbstreamDataVersion(
+      data_version_, deserializer.header().data_version());
+  LOG(INFO) << "Loaded pbstream data_version: "
+            << io::PbstreamDataVersionLabel(
+                   deserializer.header().data_version())
+            << " -> will save as "
+            << io::PbstreamDataVersionLabel(data_version_);
 
   // Create a copy of the pose_graph_proto, such that we can re-write the
   // trajectory ids.
