@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -371,11 +372,26 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
   };
 
   GlobalSubmapStats gs;
+  // 持久化的去畸变原始 range data（TrajectoryNodeData 字段 11）统计：
+  // 有它，离线对齐 / 替换 / 合并从 node 重建时才能与建图输出逐 cell 一致。
+  int nodes_with_range_data = 0;
+  int64_t range_data_points = 0;
+  int64_t range_data_bytes = 0;
   SerializedData proto;
   while (deserializer.ReadNextSerializedData(&proto)) {
     auto it = data_case_to_name.find(proto.data_case());
     if (it == data_case_to_name.end()) continue;
     ++counts[it->second];
+    if (proto.data_case() == SerializedData::kNode &&
+        proto.node().node_data().range_datas_size() > 0) {
+      ++nodes_with_range_data;
+      for (const auto& rd : proto.node().node_data().range_datas()) {
+        range_data_points += rd.returns().num_points() + rd.misses().num_points();
+        // CompressedPointCloud 每个 int32 即 4 字节（点 + 块头）
+        range_data_bytes +=
+            4 * (rd.returns().point_data_size() + rd.misses().point_data_size());
+      }
+    }
     if (proto.data_case() == SerializedData::kSubmap) {
       if (proto.submap().has_submap_2d()) ++counts["submap_2d"];
       if (proto.submap().has_submap_3d()) ++counts["submap_3d"];
@@ -425,6 +441,24 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
         "trajectory nodes = " + std::to_string(trajectory_nodes));
   } else {
     add(Level::kFail, "STRUCT-01", "no trajectory node in pbstream");
+  }
+
+  // 持久化 range data（不影响定位可用性，只影响离线重建能否无损，故只 WARN）
+  {
+    const int total_nodes = counts["node"];
+    std::ostringstream os;
+    os << "persisted range data on " << nodes_with_range_data << "/"
+       << total_nodes << " nodes (" << range_data_points << " pts, ~"
+       << range_data_bytes / 1024 << " KB compressed in memory)";
+    if (total_nodes > 0 && nodes_with_range_data == total_nodes) {
+      add(Level::kPass, "RANGE-01",
+          os.str() + ": offline rebuild reproduces the mapping grid");
+    } else {
+      add(Level::kWarn, "RANGE-01", os.str(),
+          "offline align/replace/merge will synthesize range data from the "
+          "filtered cloud for the rest; free space from no-return beams is "
+          "lost. Re-map with a current build to fix");
+    }
   }
 
   if (gs.present) {
@@ -626,7 +660,10 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
     std::cout << "           lines       = " << gs.lines.count << " segments\n";
     std::cout << "           pyramid     = " << gs.pyramid_levels
               << " levels\n";
-    std::cout << "           range_data  = " << gs.num_range_data << "\n";
+    // 注意：这是插入全局子图的 range data 次数（Submap2D.num_range_data），
+    // 不是 pbstream 里存了多少扫描数据 —— 后者见 RANGE-01。
+    std::cout << "           inserted_range_data = " << gs.num_range_data
+              << "\n";
   }
   std::cout << "[CRIT ]  culling criteria from "
             << (criteria_from_pbstream ? "pbstream" : "built-in defaults")

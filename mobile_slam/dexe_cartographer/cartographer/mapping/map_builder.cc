@@ -490,10 +490,23 @@ std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resoluti
     if (progress_callback_) {
       progress_callback_(processed_nodes, total_nodes);
     }
-    // 7a. 处理range_datas
+    // 7a. 处理range_datas：建图期的原始数据，或从 pbstream 加载来的压缩数据
+    // （续建场景下节点来自已保存地图，range_datas 为空但压缩数据还在）。
+    std::vector<sensor::RangeData> node_range_datas =
+        GetRangeDatas(*node.data.constant_data);
+    // 建图期 range_datas 是全精度 float，写进 pbstream 的却是 1mm 量化的压缩版。
+    // 若这里用全精度插栅格，离线工具从 pbstream 重建时恰在格线附近的点会落到
+    // 邻格，无法逐 cell 复现本图（实测 0.087% 像素类别不同）。所以这里也用
+    // 量化后的数据 —— 1mm 相对 5cm 格子的影响可忽略，换来的是「保存下来
+    // 的地图可以被精确复现」，任何离线重建的差异都能直接判为缺陷。
     if (!node.data.constant_data->range_datas.empty()) {
+      for (auto& range_data : node_range_datas) {
+        range_data = sensor::Decompress(sensor::Compress(range_data));
+      }
+    }
+    if (!node_range_datas.empty()) {
       nodes_with_real_range_data++;
-      for (const auto& range_data : node.data.constant_data->range_datas) {
+      for (const auto& range_data : node_range_datas) {
         sensor::RangeData global_range_data;
         global_range_data.origin = (node.data.global_pose * 
                                     range_data.origin.cast<double>()).cast<float>();

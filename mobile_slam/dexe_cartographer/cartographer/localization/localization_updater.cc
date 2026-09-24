@@ -627,10 +627,14 @@ std::shared_ptr<mapping::Submap2D> LocalizationUpdater::GenerateGlobalStaticSubm
   int nodes_with_synthetic_range_data = 0;
   
   for (const auto& node : nodes) {
-    // 7a. 插入 range data（栅格地图）
-    if (!node.data.constant_data->range_datas.empty()) {
+    // 7a. 插入 range data（栅格地图）。定位侧的节点都来自 pbstream，range_datas
+    // 为空、真数据以压缩态存在 compressed_range_datas；这里临时解压用完即弃，
+    // 不常驻内存（ResetMapOrigin 重建全局子图时走到这里）。
+    const std::vector<sensor::RangeData> node_range_datas =
+        cmapping::GetRangeDatas(*node.data.constant_data);
+    if (!node_range_datas.empty()) {
       nodes_with_real_range_data++;
-      for (const auto& range_data : node.data.constant_data->range_datas) {
+      for (const auto& range_data : node_range_datas) {
         sensor::RangeData global_range_data;
         global_range_data.origin = (node.data.global_pose *
                                     range_data.origin.cast<double>()).cast<float>();

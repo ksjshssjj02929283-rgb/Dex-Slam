@@ -235,6 +235,80 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
             << " new_size=" << new_num_x << "x" << new_num_y;
 }
 
+namespace {
+
+// 取一个 node 用于插栅格的 range data（已变换到新全局系）。与建图侧
+// MapBuilder::GenerateGlobalStaticSubmap 的 7a 逐行对应：
+//   - pbstream 持久化了去畸变真 range data（TrajectoryNodeData 字段 11）：
+//     用它 —— origin 是各雷达安装位置、含 misses，与建图输出逐 cell 一致；
+//   - 没有（该图保存于持久化之前）：由 filtered 点云合成，misses 为空、
+//     origin 取节点位姿，无回波光束扫出的 free space 补不回来。
+// *used_real 标出走了哪条路，调用方据此统计与告警。
+std::vector<::cartographer::sensor::RangeData> NodeRangeDataInGlobalFrame(
+    const ::cartographer::mapping::proto::TrajectoryNodeData& node_data,
+    const ::cartographer::transform::Rigid3d& global_pose,
+    const ::cartographer::sensor::PointCloud& cloud_global, bool* used_real) {
+  namespace cs = ::cartographer::sensor;
+  std::vector<cs::RangeData> out;
+  const auto pose_f = global_pose.cast<float>();
+  if (node_data.range_datas_size() > 0) {
+    *used_real = true;
+    out.reserve(node_data.range_datas_size());
+    for (const auto& compressed_proto : node_data.range_datas()) {
+      const cs::RangeData local =
+          cs::Decompress(cs::FromProto(compressed_proto));
+      cs::RangeData global;
+      global.origin =
+          (global_pose * local.origin.cast<double>()).cast<float>();
+      global.returns = cs::TransformPointCloud(local.returns, pose_f);
+      global.misses = cs::TransformPointCloud(local.misses, pose_f);
+      out.push_back(std::move(global));
+    }
+    return out;
+  }
+  *used_real = false;
+  cs::RangeData synthetic;
+  synthetic.origin = global_pose.translation().cast<float>();
+  synthetic.returns = cloud_global;
+  out.push_back(std::move(synthetic));
+  return out;
+}
+
+// 栅格格网锚定：返回位于「以首节点全局 XY 为锚、间距 resolution」格网上、且
+// 不小于 raw_max 的 MapLimits.max。
+// 为什么：栅格化的结果取决于格线落在哪里。建图侧
+// MapBuilder::GenerateGlobalStaticSubmap 以首节点全局 XY 作 MapLimits.max，格线
+// = 首节点 - k·res。若工具侧锚在包围盒角点，同一份数据会落在相位错开亚像素的
+// 格网上，逐像素比对差 2% 以上（F↔U 对称互换，是边缘平移而非 free 丢失）。
+// 锚到首节点后：零变换重建与建图输出逐 cell 对齐；有变换时等价于「在新坐标系
+// 下直接建图保存」—— 这就是离线重建该有的语义。
+// first_node 须取 (trajectory_id, node_index) 最小的节点，与建图侧
+// MapById::begin() 同一个。
+Eigen::Vector2d SnapMaxToFirstNodeLattice(const Eigen::Vector2d& raw_max,
+                                          const Eigen::Vector2d& first_node,
+                                          const double resolution) {
+  return Eigen::Vector2d(
+      first_node.x() +
+          std::ceil((raw_max.x() - first_node.x()) / resolution) * resolution,
+      first_node.y() +
+          std::ceil((raw_max.y() - first_node.y()) / resolution) * resolution);
+}
+
+void WarnIfSynthetic(const char* who, size_t real, size_t synthetic) {
+  LOG(INFO) << who << ": range data source — " << real
+            << " node(s) with persisted real range data, " << synthetic
+            << " synthesized from filtered cloud";
+  if (synthetic > 0) {
+    LOG(WARNING) << who << ": " << synthetic
+                 << " node(s) have no persisted range data (map saved before "
+                    "range data persistence). Their no-return beams' free "
+                    "space cannot be reproduced; the rebuilt grid will have "
+                    "less free area than the original.";
+  }
+}
+
+}  // namespace
+
 ::cartographer::mapping::proto::Submap2D RebuildGlobalStaticSubmapFromNodes(
     const ::cartographer::mapping::proto::PoseGraph& pose_graph,
     const std::vector<::cartographer::mapping::proto::SerializedData>& records,
@@ -264,7 +338,17 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
   }
   const Eigen::Vector2d pad = Eigen::Vector2d::Constant(lidar_range_pad);
   const Eigen::Vector2d bbox_min = bbox.min() - pad;
-  const Eigen::Vector2d bbox_max = bbox.max() + pad;
+  // 格网锚到首节点（见 SnapMaxToFirstNodeLattice）；std::map 按
+  // (trajectory_id, node_index) 排序，begin() 即建图侧 MapById::begin()。
+  const Eigen::Vector2d bbox_max = SnapMaxToFirstNodeLattice(
+      bbox.max() + pad,
+      // 与建图侧同样先截断为 float 再回 double（它以 Vector2f 构造 Submap2D 原点）
+      node_global_poses.begin()
+          ->second.translation()
+          .head<2>()
+          .cast<float>()
+          .cast<double>(),
+      resolution);
   const int num_x = static_cast<int>(
       std::ceil((bbox_max.x() - bbox_min.x()) / resolution));
   const int num_y = static_cast<int>(
@@ -333,6 +417,7 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
 
   // ── 5. 逐 node 重建三类地图（对应 GenerateGlobalStaticSubmap 7a/7b/7c）──
   size_t inserted = 0, skipped_no_pose = 0, skipped_empty_cloud = 0;
+  size_t nodes_real_range = 0, nodes_synthetic_range = 0;
   size_t nodes_with_lines = 0, nodes_with_highlight = 0;
   for (const auto& rec : records) {
     if (!rec.has_node()) continue;
@@ -361,12 +446,13 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
     const auto cloud_global =
         cs::TransformPointCloud(cloud_local, global_pose.cast<float>());
 
-    // 7a 栅格：synthetic range data（misses 为空，见头文件已知限制）
-    cs::RangeData range_data;
-    range_data.origin = global_pose.translation().cast<float>();
-    range_data.returns = cloud_global;
-    range_data.misses = cs::PointCloud{};
-    submap->InsertRangeData(range_data, inserter.get());
+    // 7a 栅格：优先持久化的真 range data，无则合成（见 NodeRangeDataInGlobalFrame）
+    bool used_real = false;
+    for (const auto& range_data : NodeRangeDataInGlobalFrame(
+             node_data, global_pose, cloud_global, &used_real)) {
+      submap->InsertRangeData(range_data, inserter.get());
+    }
+    ++(used_real ? nodes_real_range : nodes_synthetic_range);
 
     // 7b 点云：在**新系**重新体素降采样 + 后续按新栅格 culling
     cs::PointCloud highlight_global;
@@ -415,6 +501,8 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
   const auto* line_map = submap->line_map_2d_list();
   const auto* cloud_ptr = submap->cloud();
   const auto* highlight_ptr = submap->highlight_cloud();
+  WarnIfSynthetic("RebuildGlobalStaticSubmapFromNodes", nodes_real_range,
+                  nodes_synthetic_range);
   LOG(INFO) << "RebuildGlobalStaticSubmapFromNodes: " << inserted
             << " nodes inserted (" << skipped_no_pose << " no pose, "
             << skipped_empty_cloud << " empty cloud, " << nodes_with_lines
@@ -455,7 +543,17 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
   }
   const Eigen::Vector2d pad = Eigen::Vector2d::Constant(lidar_range_pad);
   const Eigen::Vector2d bbox_min = bbox.min() - pad;
-  const Eigen::Vector2d bbox_max = bbox.max() + pad;
+  // 格网锚到首节点（见 SnapMaxToFirstNodeLattice）；std::map 按
+  // (trajectory_id, node_index) 排序，begin() 即建图侧 MapById::begin()。
+  const Eigen::Vector2d bbox_max = SnapMaxToFirstNodeLattice(
+      bbox.max() + pad,
+      // 与建图侧同样先截断为 float 再回 double（它以 Vector2f 构造 Submap2D 原点）
+      node_global_poses.begin()
+          ->second.translation()
+          .head<2>()
+          .cast<float>()
+          .cast<double>(),
+      resolution);
   const int num_x = static_cast<int>(
       std::ceil((bbox_max.x() - bbox_min.x()) / resolution));
   const int num_y = static_cast<int>(
@@ -507,9 +605,13 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
   }
   auto inserter = std::make_unique<
       ::cartographer::mapping::ProbabilityGridRangeDataInserter2D>(pg_opts);
+  // 与建图侧 GenerateGlobalStaticSubmap / RebuildGlobalStaticSubmapFromNodes
+  // 一致：跳过已饱和 free 格子的 miss 更新。
+  inserter->SetSkipSaturatedFreeCells(true);
 
   // 5. 逐 Node 取 cloud → 变换到新坐标系 → 用近似 origin 插入 grid
   size_t inserted = 0, skipped_no_pose = 0, skipped_empty_cloud = 0;
+  size_t nodes_real_range = 0, nodes_synthetic_range = 0;
   for (const auto& rec : records) {
     if (!rec.has_node()) continue;
     const auto& node_proto = rec.node();
@@ -538,15 +640,17 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
     const auto cloud_global = ::cartographer::sensor::TransformPointCloud(
         cloud_local, global_pose.cast<float>());
 
-    ::cartographer::sensor::RangeData range_data;
-    range_data.origin = global_pose.translation().cast<float>();
-    range_data.returns = cloud_global;
-    range_data.misses = ::cartographer::sensor::PointCloud{};
-
-    submap->InsertRangeData(range_data, inserter.get());
+    bool used_real = false;
+    for (const auto& range_data : NodeRangeDataInGlobalFrame(
+             node_data, global_pose, cloud_global, &used_real)) {
+      submap->InsertRangeData(range_data, inserter.get());
+    }
+    ++(used_real ? nodes_real_range : nodes_synthetic_range);
     ++inserted;
   }
   submap->Finish();
+  WarnIfSynthetic("BuildFreshGridFromNodes", nodes_real_range,
+                  nodes_synthetic_range);
 
   LOG(INFO) << "BuildFreshGridFromNodes: " << inserted << " nodes inserted ("
             << skipped_no_pose << " no pose, " << skipped_empty_cloud
