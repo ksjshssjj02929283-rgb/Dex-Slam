@@ -1370,7 +1370,19 @@ visualization_msgs::msg::MarkerArray MapBuilderBridge::GetConstraintList(rclcpp:
  * @return SensorBridge* 
  */
 SensorBridge* MapBuilderBridge::sensor_bridge(const int trajectory_id) {
-  return sensor_bridges_.at(trajectory_id).get();
+  // Must stay lock-free: every caller already holds Node::mutex_ (Node owns
+  // MapBuilderBridge), so taking MapBuilderBridge::mutex_ here would be a
+  // nested-lock deadlock hazard. Serialization therefore comes from the caller.
+  const auto it = sensor_bridges_.find(trajectory_id);
+  if (it == sensor_bridges_.end()) {
+    // Non-fatal: a sensor message that was already dequeued by the executor can
+    // arrive after FinishTrajectory() erased this trajectory. Callers must treat
+    // nullptr as "drop this message" instead of crashing the whole process.
+    LOG(WARNING) << "No sensor bridge for trajectory " << trajectory_id
+                 << "; dropping sensor data.";
+    return nullptr;
+  }
+  return it->second.get();
 }
 
 /**

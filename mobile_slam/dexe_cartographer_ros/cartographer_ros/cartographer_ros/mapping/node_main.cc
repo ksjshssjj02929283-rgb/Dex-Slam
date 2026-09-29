@@ -444,6 +444,33 @@ private:
       map_name = map_name_;
       error_code_ = MS::E_NONE;
     }
+    // Exception firewall. Everything below touches the live pose graph, the
+    // submap list and the filesystem; an escaping exception would unwind into
+    // the service callback and end in std::terminate() -> SIGABRT, discarding
+    // the entire in-memory map that this very call is trying to write out.
+    // Convert it into the same "failed, retryable" outcome the explicit
+    // save-failure branch produces, so a retry can still recover the map.
+    try {
+      return RunFinishPipelineUnlocked(map_name);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Finish pipeline aborted by exception: " << e.what()
+                 << ". Mapping state is kept; call finish_mapping again to retry.";
+      is_saving_ = false;
+      SetStage("");
+      SetErrorCode(MS::E_MAP_SAVE_FAILED);
+      return false;
+    } catch (...) {
+      LOG(ERROR) << "Finish pipeline aborted by a non-std::exception. "
+                    "Mapping state is kept; call finish_mapping again to retry.";
+      is_saving_ = false;
+      SetStage("");
+      SetErrorCode(MS::E_MAP_SAVE_FAILED);
+      return false;
+    }
+  }
+
+  bool RunFinishPipelineUnlocked(const std::string& map_name) {
+    using MS = nav_interfaces::msg::MappingState;
     is_saving_ = true;  // 进入保存/收尾阶段（~/state 报 SAVING）
     progress_ = 0.0f;
     // 完成所有轨迹并进行最终优化（只执行一次）
@@ -510,7 +537,7 @@ private:
     // ~/state：结构化建图状态（唯一状态出口，仅 topic）
     state_pub_->publish(BuildMappingState());
   }
-private:
+ private:
   // 状态
   std::string map_name_;                       // 受 state_mutex_ 保护
   std::string map_path_;                       // 受 state_mutex_ 保护

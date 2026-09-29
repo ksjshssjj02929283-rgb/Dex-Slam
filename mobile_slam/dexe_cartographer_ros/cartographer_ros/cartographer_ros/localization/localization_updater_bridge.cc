@@ -1170,7 +1170,18 @@ visualization_msgs::msg::MarkerArray LocalizationUpdaterBridge::GetConstraintLis
 }
 
 SensorBridge* LocalizationUpdaterBridge::sensor_bridge(const int trajectory_id) {
-  return sensor_bridges_.at(trajectory_id).get();
+  // Lock-free by contract: callers must hold LocalizationNode's
+  // localization_updater_mutex_, which is also what FinishTrajectory() and the
+  // sensor_bridges_-iterating getters run under. Returns nullptr instead of
+  // throwing when a message that the executor had already dequeued outlived
+  // the trajectory.
+  const auto it = sensor_bridges_.find(trajectory_id);
+  if (it == sensor_bridges_.end()) {
+    LOG(WARNING) << "No sensor bridge for trajectory " << trajectory_id
+                 << "; dropping sensor data.";
+    return nullptr;
+  }
+  return it->second.get();
 }
 
 /**

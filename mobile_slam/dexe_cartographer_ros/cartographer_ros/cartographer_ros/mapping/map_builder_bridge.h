@@ -137,6 +137,10 @@ class MapBuilderBridge {
       const cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr request,
       cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr response);
 
+  // Reads sensor_bridges_, so the caller MUST hold the owning Node's mutex.
+  // This method is deliberately lock-free: sensor_bridges_ is serialized by
+  // Node::mutex_, and taking MapBuilderBridge::mutex_ here would be a nested
+  // lock with no added safety.
   std::map<int /* trajectory_id */,
            ::cartographer::mapping::PoseGraphInterface::TrajectoryState>
   GetTrajectoryStates();
@@ -157,6 +161,13 @@ class MapBuilderBridge {
 
   // std::vector<Eigen::Vector2d> GetAllReflectors();
 
+  // Returns nullptr when the trajectory has no sensor bridge (e.g. the
+  // trajectory was already finished and its bridge erased). Callers MUST hold
+  // the owning Node's mutex and MUST treat nullptr as "drop this message":
+  // a sensor callback that was already dequeued by the executor can run after
+  // FinishTrajectory() and must not take the process down. The returned raw
+  // pointer is owned by sensor_bridges_ and is invalid once the trajectory is
+  // finished, so it must not be cached or used outside the critical section.
   SensorBridge* sensor_bridge(int trajectory_id);
 
  private:

@@ -129,6 +129,16 @@ class Node
 
   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options);
 
+  // Returns true while 'trajectory_id' is still allowed to consume sensor data.
+  //
+  // Destroying the rclcpp::Subscription in FinishTrajectoryUnderLock() does NOT
+  // cancel a message that the executor has already dequeued: such a callback is
+  // parked on mutex_ and resumes only after the finish path releases the lock,
+  // at which point the trajectory's sensor bridge is already erased. This gate
+  // is the single place where those stale messages are dropped; it is called
+  // from the SubscribeWithHandler() lambda for every sensor topic.
+  bool IsTrajectoryAcceptingData(int trajectory_id);
+
   // Returns unique SensorIds for multiple input bag files based on
   // their TrajectoryOptions.
   // 'SensorId::id' is the expected ROS topic name.
@@ -299,6 +309,12 @@ class Node
     ::cartographer::common::FixedRatioSampler imu_sampler;
     ::cartographer::common::FixedRatioSampler landmark_sampler;
   };
+
+  // Non-throwing lookup of the trajectory's sensor samplers. Returns nullptr
+  // when the trajectory does not exist, so a stale or malformed message can
+  // never throw out of a sensor callback. Callers must hold mutex_.
+  TrajectorySensorSamplers* GetSensorSamplersLocked(int trajectory_id)
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // These are keyed with 'trajectory_id'.
   std::map<int, ::cartographer::mapping::PoseExtrapolator> extrapolators_;

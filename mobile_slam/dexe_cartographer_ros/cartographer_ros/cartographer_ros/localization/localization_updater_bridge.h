@@ -175,6 +175,13 @@ class LocalizationUpdaterBridge {
 
   // std::vector<Eigen::Vector2d> GetAllReflectors();
 
+  // Returns nullptr when the trajectory has no sensor bridge (e.g. the
+  // trajectory was already finished and its bridge erased). Callers MUST hold
+  // LocalizationNode's localization_updater_mutex_ and MUST treat nullptr as
+  // "drop this message": a sensor callback that was already dequeued by the
+  // executor can run after FinishTrajectory() and must not kill the process.
+  // The returned raw pointer is owned by sensor_bridges_ and is invalid once
+  // the trajectory is finished, so it must not be cached.
   SensorBridge* sensor_bridge(int trajectory_id);
 
  private:
