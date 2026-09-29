@@ -132,8 +132,13 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
   }
   
   // 创建 global_dynamic_submap_
-  // 将 Eigen::Vector2d 转换为 Eigen::Vector2f
-  Eigen::Vector2f origin = global_static_submap_->local_pose().translation().head<2>().cast<float>();
+  // 局部地图窗口中心取【全局栅格的几何中心】。
+  // 旧代码取 local_pose()——违反 submaps.h:73 的位姿契约（它是刚体变换而非
+  // 位置；对 global_static_submap 更是不承载位姿语义，见 submap_2d.h
+  // GridCenterXY 注释）。align 产出的图该值位于数据范围外扩 30m 处，
+  // 配合 ±15m 窗口必然裁出空点云（9640 -> 0），进而 PCD 写盘抛异常、
+  // 启动失败、100ms 定时器空指针 SIGSEGV。
+  const Eigen::Vector2f origin = global_static_submap_->GridCenterXY().cast<float>();
   global_dynamic_submap_ = std::make_shared<mapping::Submap2D>(
       origin,
       std::move(grid_copy),
@@ -270,6 +275,39 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
   const int    nx  = static_cast<int>((box_.max_x - box_.min_x) / res);
   const int    ny  = static_cast<int>((box_.max_y - box_.min_y) / res);
 
+  // 裁剪前的诊断快照：窗口与数据是否重叠必须在此处可见。
+  // 历史上 origin 日志打在 BuildLocalSubmap 返回之后（SetGlobalSubmap 尾部），
+  // 一旦后续抛异常该日志就永远缺失，事后无法定位（9640 点被裁成 0 即如此）。
+  {
+    const auto& gl0 = prob_grid->limits();
+    Eigen::AlignedBox2d cloud_bbox;
+    for (const auto& pt : global_cloud->points()) {
+      cloud_bbox.extend(Eigen::Vector2d(pt.position.x(), pt.position.y()));
+    }
+    LOG(INFO) << "BuildLocalSubmap: window center=(" << ox << ", " << oy
+              << ") half_extent=(" << (box_.max_x - box_.min_x) / 2.0 << ", "
+              << (box_.max_y - box_.min_y) / 2.0 << ")"
+              << " cells=" << nx << "x" << ny
+              << " | source cloud points=" << global_cloud->points().size()
+              << " cloud_bbox_min=(" << (cloud_bbox.isEmpty() ? 0.0 : cloud_bbox.min().x())
+              << ", " << (cloud_bbox.isEmpty() ? 0.0 : cloud_bbox.min().y()) << ")"
+              << " cloud_bbox_max=(" << (cloud_bbox.isEmpty() ? 0.0 : cloud_bbox.max().x())
+              << ", " << (cloud_bbox.isEmpty() ? 0.0 : cloud_bbox.max().y()) << ")"
+              << " | global grid limits.max=(" << gl0.max().x() << ", "
+              << gl0.max().y() << ") cells="
+              << gl0.cell_limits().num_x_cells << "x"
+              << gl0.cell_limits().num_y_cells
+              << " | static_submap local_pose=("
+              << (global_static_submap_
+                      ? global_static_submap_->local_pose().translation().x()
+                      : 0.0)
+              << ", "
+              << (global_static_submap_
+                      ? global_static_submap_->local_pose().translation().y()
+                      : 0.0)
+              << ") [NOT the map center; see submap_2d.h GridCenterXY]";
+  }
+
   // ============ 1. 裁剪栅格 ============
   mapping::MapLimits map_limits(
       res,
@@ -295,7 +333,16 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
   tmp_filter.SetOrigin(Eigen::Vector3f(static_cast<float>(ox),
                                        static_cast<float>(oy), 0.0f));
   auto local_cloud = std::make_unique<sensor::PointCloud>();
-  tmp_filter.Filter(*global_cloud, *local_cloud);
+  const bool cloud_ok = tmp_filter.Filter(*global_cloud, *local_cloud);
+  if (!cloud_ok) {
+    LOG(ERROR) << "BuildLocalSubmap: clipping window does not overlap the map. "
+               << "window center=(" << ox << ", " << oy << ") half_extent=("
+               << (box_.max_x - box_.min_x) / 2.0 << ", "
+               << (box_.max_y - box_.min_y) / 2.0 << "), source cloud points="
+               << global_cloud->points().size() << ", all clipped away. "
+               << "Check that the window center comes from GridCenterXY() rather "
+               << "than local_pose() (see submap_2d.h GridCenterXY contract).";
+  }
 
   // ============ 3. 线地图 ============
   int latest_line_id = 0;

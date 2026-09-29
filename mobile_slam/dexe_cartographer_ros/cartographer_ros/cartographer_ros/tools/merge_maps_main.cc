@@ -264,8 +264,11 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
   // 的变换，不得参与位姿运算。该 submap 的栅格本身就建立在全局系上
   // （MapLimits.max 取首节点的全局位姿，插入的 range data 也是全局坐标），
   // 所以 FCSM / Ceres 的输入输出都已经在全局系；local_pose 只是与
-  // limits().max() 相等的记账值。定位侧的全局重定位
-  // （localization/internal/2d/pose_initializer_2d.cc）同样不引用该字段。
+  // limits().max() 相等的记账值（这是 Submap2D 构造约定，非不变式：可被
+  // set_local_pose() 改写）。需要地图中心请用 Submap2D::GridCenterXY()，
+  // 定位侧曾把它当 ±15m 窗口中心，导致点云被裁空、启动失败并 SIGSEGV。
+  // 定位侧的全局重定位（localization/internal/2d/pose_initializer_2d.cc）
+  // 同样不引用该字段。
   //
   // 此处原先假设它「通常为 Identity」并把它乘进了匹配结果 —— 该假设不成立：
   // 建图直出的图它等于首节点全局 XY（接近 0 但非 0），而从 node 重建过

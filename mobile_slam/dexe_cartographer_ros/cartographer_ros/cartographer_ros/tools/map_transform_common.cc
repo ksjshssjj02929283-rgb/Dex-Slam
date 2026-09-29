@@ -373,6 +373,12 @@ void LogRangeDataSource(const char* who, const std::string& data_version,
       std::ceil((bbox_max.y() - bbox_min.y()) / resolution));
 
   // ── 3. 空 Submap2D（grid + 空点云 + 空线地图），origin 取 bbox 右上角 ──
+  //    origin_2d 必须同时满足两个用途（Submap2D 构造契约）：
+  //      (a) local_pose = Translation(origin_2d)；
+  //      (b) MapLimits 的 max = origin_2d。
+  //    注意 bbox_max 经 SnapMaxToFirstNodeLattice 是为【栅格相位对齐】而选
+  //    （见上方注释），与位姿语义无关。因此本图的 local_pose 不代表任何位置，
+  //    消费方绝不可把它当地图中心——需要中心请用 Submap2D::GridCenterXY()。
   //    conv 必须比 submap 活得久：声明在前，析构在后（逆序销毁）。
   cm::ValueConversionTables conv;
   const Eigen::Vector2f origin_2d(static_cast<float>(bbox_max.x()),
@@ -582,6 +588,9 @@ void LogRangeDataSource(const char* who, const std::string& data_version,
       std::ceil((bbox_max.y() - bbox_min.y()) / resolution));
 
   // 3. 创建空的 ProbabilityGrid，origin/local_pose 设为 bbox 右上角
+  //    origin_2d 同时作 Submap2D 的 local_pose 与 MapLimits 的 max（构造契约）。
+  //    bbox_max 经 SnapMaxToFirstNodeLattice 是为栅格相位对齐，与位姿语义无关；
+  //    该 local_pose 不得当作地图中心，消费方请用 Submap2D::GridCenterXY()。
   ::cartographer::mapping::ValueConversionTables conv;
   const Eigen::Vector2f origin_2d(static_cast<float>(bbox_max.x()),
                                   static_cast<float>(bbox_max.y()));

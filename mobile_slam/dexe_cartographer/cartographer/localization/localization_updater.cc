@@ -188,6 +188,12 @@ std::shared_ptr<sensor::LineMapData> LocalizationUpdater::GetGlobalLineMap() con
 bool LocalizationUpdater::SetInitialPose(const transform::Rigid3d &initial_pose)
 {
   const int last_trajectory_id = num_trajectory_builders() - 1;
+  // 启动失败时反序列化留下的占位元素可能为 nullptr（见 :293），
+  // 空 vector 则 last_trajectory_id 为 -1，越界访问同样是未定义行为。
+  if (last_trajectory_id < 0 ||
+      !trajectory_builders_[last_trajectory_id]) {
+    return false;
+  }
   return trajectory_builders_[last_trajectory_id]->SetInitialPose(initial_pose);
 }
 
@@ -200,6 +206,13 @@ void LocalizationUpdater::TriggerGlobalRelocalization()
 std::optional<LocalizationState> LocalizationUpdater::GetLocalizationState()
 {
   const int last_trajectory_id = num_trajectory_builders() - 1;
+  // 该函数由 100ms 定时器经 bridge 无判空转发调用（localization_node.cc:299
+  // -> localization_updater_bridge.cc:171）。定位启动失败时对象处于半初始化
+  // 状态，此处若不判空即解引用 nullptr，占位 SIGSEGV。
+  if (last_trajectory_id < 0 ||
+      !trajectory_builders_[last_trajectory_id]) {
+    return std::nullopt;
+  }
   return trajectory_builders_[last_trajectory_id]->GetLocalizationState();
 }
 

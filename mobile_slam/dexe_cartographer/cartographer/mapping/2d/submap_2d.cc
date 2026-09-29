@@ -539,9 +539,25 @@ void Submap2D::ToResponseProto(
   grid()->DrawToSubmapTexture(texture, local_pose());
 }
 
+Eigen::Vector2d Submap2D::GridCenterXY() const {
+  CHECK(grid_);
+  const auto& limits = grid_->limits();
+  // MapLimits 只存 max_（右上角）与 cell_limits_，故 min = max - res * cells。
+  // cell index 为 [row=y, col=x]，num_x_cells 约束 index[1]，见 map_limits.h:69-82。
+  return limits.max() -
+         0.5 * limits.resolution() *
+             Eigen::Vector2d(limits.cell_limits().num_x_cells,
+                             limits.cell_limits().num_y_cells);
+}
+
 bool Submap2D::SaveSubmapCloud(const std::string& folder,
                                const std::string& filename)
 {
+  if (!cloud_ || cloud_->points().empty()) {
+    LOG(WARNING) << "SaveSubmapCloud: cloud is empty, skipping " << filename;
+    return false;
+  }
+
   if (!boost::filesystem::is_directory(folder)) {
     LOG(INFO) << "Creating folder: " << folder;
     if (!boost::filesystem::create_directories(folder)) {

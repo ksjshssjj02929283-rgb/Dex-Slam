@@ -1199,6 +1199,10 @@ void RerasterizeGridProto(::cartographer::mapping::proto::Grid2D* grid_proto,
       std::ceil((bbox_max.y() - bbox_min.y()) / resolution));
 
   ::cartographer::mapping::ValueConversionTables conv;
+  // origin_2d 同时作 Submap2D 的 local_pose 与 MapLimits 的 max（构造契约，
+  // 见 submaps.h:73 与 submap_2d.h GridCenterXY 注释）。bbox_max 取
+  // 「点云包围盒 + lidar_range_pad」的角点，该 local_pose 不代表任何位置，
+  // 消费方绝不可把它当地图中心——需要中心请用 Submap2D::GridCenterXY()。
   const Eigen::Vector2f origin_2d(static_cast<float>(bbox_max.x()),
                                   static_cast<float>(bbox_max.y()));
   auto submap = std::make_shared<::cartographer::mapping::Submap2D>(

@@ -76,6 +76,27 @@ class Submap2D : public Submap {
 
   const Grid2D* grid() const { return grid_.get(); }
 
+  // 栅格覆盖区域的几何中心（世界系）。
+  //
+  // ⚠️ 任何需要「地图在哪」的场合一律用本函数，绝不可用 local_pose()。
+  //
+  // local_pose 的契约（submaps.h:73）是「该 submap 在 local map 系中的位姿」
+  // 这一刚体变换，而非位置：
+  //   * 对注册进 pose_graph 的滑动窗口 submap，它是真实位姿，含义是
+  //     submap 自身系 -> local map 系 的变换；
+  //   * 对 global_static_submap，它从不被当作变换使用（map_builder.cc:634
+  //     只赋给独立成员，无 AddSubmap 路径；且数据插入前已变换到 global 系，
+  //     见 map_builder.cc:514-522），因此是 Submap2D 构造函数的副产物，
+  //     不承载位姿信息。
+  //
+  // 生产侧把它赋成「节点包围盒 + lidar_range_pad(30m)」的右上角
+  // （map_transform_common.cc:378-387，bbox_max 经 SnapMaxToFirstNodeLattice
+  // 是为栅格相位对齐，见同文件 :281-288 注释），与位姿语义无关。
+  //
+  // 该值可被 set_local_pose() 改写（submaps.h:76-79），
+  // 任何代码都不得假设它与栅格几何位置有固定关系。
+  Eigen::Vector2d GridCenterXY() const;
+
   // 返回全局定位地图缓存——缓存存在且层数与 options.branch_and_bound_depth
   // 一致则直接返回，否则从 grid 现场构建并缓存。matcher 创建时调用以避免重复构建。
   std::shared_ptr<scan_matching::PrecomputationGridStack2D>
