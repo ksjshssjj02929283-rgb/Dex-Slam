@@ -79,6 +79,20 @@ TEST(EstimateAlignmentYaw, ExactOrthogonalWallsAtVariousRotations) {
   }
 }
 
+// 更强的斜向线族不得遮住两族真实正交墙之间的配对。
+TEST(EstimateAlignmentYaw, StrongNonOrthogonalPeakDoesNotHideOrthogonalPair) {
+  const double phi = 60.615 * kDegToRad;
+  std::vector<sensor::LineData> lines;
+  AddWallFamily(&lines, 4, 4.0, phi);
+  AddWallFamily(&lines, 4, 4.0, phi + M_PI_2);
+  AddWallFamily(&lines, 5, 5.0, 24.398 * kDegToRad);
+
+  const auto yaw =
+      EstimateAlignmentYaw(MakeLineList(lines), StructureAlignmentOptions{});
+  ASSERT_TRUE(yaw.has_value());
+  EXPECT_NEAR(yaw.value(), FoldYaw(phi), 0.05 * kDegToRad);
+}
+
 // 方向带高斯噪声（σ = 0.5°）的正交墙：估计误差应远小于噪声尺度
 TEST(EstimateAlignmentYaw, NoisyOrthogonalWalls) {
   const double phi = 17.0 * kDegToRad;

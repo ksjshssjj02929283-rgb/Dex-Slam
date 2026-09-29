@@ -44,12 +44,15 @@ double DirectionDistance(double a, double b) {
   return std::min(d, M_PI - d);
 }
 
-// 循环下标
-int WrapIndex(int i, int n) { return ((i % n) + n) % n; }
-
 struct Candidate {
   double length;
   double angle;  // 已归一化到 [0, π)
+};
+
+// 一个互不相同的结构方向及其支撑量
+struct DirectionPeak {
+  double angle;    // 精化后的方向（弧度，归一化到 [0, π)）
+  double support;  // 精化窗口内候选线段长度之和（米）
 };
 
 // 角度包裹到 [−π/2, π/2)：线方向 mod π，两方向的正交误差合法范围即此区间
@@ -152,55 +155,97 @@ absl::optional<double> EstimateAlignmentYaw(
 
   const double bin_width = M_PI / num_bins;
   const double tol = options.orthogonality_tolerance_deg * kDegToRad;
-  const int tol_bins = std::max(1, static_cast<int>(std::ceil(tol / bin_width)));
 
-  // ── 4. 主方向：直方图峰值 → 候选线段角度迭代精化 ────────────────────
-  //    精化用线段自身角度（无分箱量化），收窄窗口以剔除不对称尾部；
-  //    w1 = 精化窗口内线段长度之和，即主方向支撑量（第 6 段融合与
-  //    次方向支撑比门槛共用）。
-  const int peak1 = static_cast<int>(
-      std::max_element(hist.begin(), hist.end()) - hist.begin());
-  if (hist[peak1] <= 0.0) {
-    LOG(INFO) << "EstimateAlignmentYaw: empty histogram, giving up.";
-    emit();
-    return absl::nullopt;
+  // ── 4. 枚举所有结构方向 ──────────────────────────────────────────────
+  //    旧实现取 hist 的 argmax 当主方向、屏蔽其 ±tol 后再取 argmax 当次方向，
+  //    最后才校验正交性。这是无条件 argmax：只要存在一族总长度更大的斜向
+  //    线（家具、稀疏回波拟合出的伪长线），次方向的 argmax 就会被它抢走，
+  //    正交校验必然失败并放弃对齐 —— 哪怕数据里确实躺着一对清晰的墙。
+  //    改为把显著峰全部枚举成方向、各自精化，正交性留给第 5 段在候选对里
+  //    挑，斜向族就只能"参与竞争"而无法"顶掉"真正的正交解。
+  std::vector<int> bins_by_support(num_bins);
+  for (int i = 0; i < num_bins; ++i) bins_by_support[i] = i;
+  std::sort(bins_by_support.begin(), bins_by_support.end(),
+            [&hist](int a, int b) { return hist[a] > hist[b]; });
+
+  std::vector<DirectionPeak> peaks;
+  for (const int bin : bins_by_support) {
+    if (hist[bin] <= 0.0) break;  // 已按支撑降序，后面全为 0
+    double support = 0.0;
+    const double angle = RefineDirection(
+        candidates, (bin + 0.5) * bin_width, tol, kRefineHalfWindowRad,
+        &support);
+    if (support <= 0.0) continue;
+    // 已被更强的方向覆盖（同一族墙的邻接 bin，或精化后收敛到同一模）
+    bool duplicate = false;
+    for (const auto& p : peaks) {
+      if (DirectionDistance(angle, p.angle) <= tol) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) peaks.push_back({angle, support});
   }
 
-  double w1 = 0.0;
-  const double theta1 = RefineDirection(candidates, (peak1 + 0.5) * bin_width,
-                                        tol, kRefineHalfWindowRad, &w1);
-
-  // ── 5. 次方向：屏蔽主方向窗口后的次峰，须接近主方向 +90° ────────────
-  std::vector<double> masked = hist;
-  for (int d = -tol_bins; d <= tol_bins; ++d) {
-    masked[WrapIndex(peak1 + d, num_bins)] = 0.0;
-  }
-  const int peak2 = static_cast<int>(
-      std::max_element(masked.begin(), masked.end()) - masked.begin());
-  if (masked[peak2] <= 0.0) {
+  LOG(INFO) << "EstimateAlignmentYaw: " << peaks.size()
+            << " distinct structure direction(s) above noise";
+  if (peaks.size() < 2) {
     LOG(INFO) << "EstimateAlignmentYaw: single direction only, no "
                  "orthogonal structure. Giving up.";
     emit();
     return absl::nullopt;
   }
-  double w2 = 0.0;
-  const double theta2 = RefineDirection(candidates, (peak2 + 0.5) * bin_width,
-                                        tol, kRefineHalfWindowRad, &w2);
-  if (DirectionDistance(theta2, theta1 + M_PI_2) > tol) {
-    LOG(INFO) << "EstimateAlignmentYaw: secondary direction ("
-              << theta2 / kDegToRad << " deg) is not orthogonal to primary ("
-              << theta1 / kDegToRad << " deg). Giving up.";
-    emit();
-    return absl::nullopt;
+
+  // ── 5. 在所有 (主方向, 正交伙伴) 组合里挑联合支撑最大的一对 ──────────
+  //    评分 w1·w2：两个方向各自都要有足够支撑才可能胜出，避免一对弱峰
+  //    因为恰好接近垂直而战胜真正的两族墙。
+  //    "支撑大者为 primary" 不是为了物理含义，而是堵住支撑比门槛的漏洞：
+  //    否则 (弱, 强) 这种反向配对会用 w2=强 去比 w1=弱，绕开门槛。交换
+  //    primary/secondary 得到的新原点角在 mod π/2 下相同，所以该约束不
+  //    损失任何解。
+  const DirectionPeak* best_primary = nullptr;
+  const DirectionPeak* best_secondary = nullptr;
+  double best_score = -1.0;
+  for (size_t i = 0; i < peaks.size(); ++i) {
+    for (size_t j = 0; j < peaks.size(); ++j) {
+      if (i == j) continue;
+      if (peaks[i].support < peaks[j].support) continue;
+      if (DirectionDistance(peaks[j].angle, peaks[i].angle + M_PI_2) > tol) {
+        continue;
+      }
+      if (peaks[j].support <
+          options.min_secondary_support_ratio * peaks[i].support) {
+        continue;
+      }
+      const double score = peaks[i].support * peaks[j].support;
+      if (score > best_score) {
+        best_score = score;
+        best_primary = &peaks[i];
+        best_secondary = &peaks[j];
+      }
+    }
   }
-  // 支撑比门槛直接用精化窗口内累计长度 w2/w1
-  if (w2 < options.min_secondary_support_ratio * w1) {
-    LOG(INFO) << "EstimateAlignmentYaw: secondary support too weak ("
-              << w2 << " vs primary " << w1 << ", required ratio "
+
+  if (best_primary == nullptr) {
+    // 区分「只有一族」与「有多族但两两都不正交」——两者的处置完全不同：
+    // 前者是数据不足，后者要去看是不是容差定得太紧。
+    LOG(INFO) << "EstimateAlignmentYaw: no pair of structure directions is "
+                 "orthogonal within tolerance ("
+              << options.orthogonality_tolerance_deg
+              << " deg, min secondary support ratio "
               << options.min_secondary_support_ratio << "). Giving up.";
+    for (const auto& p : peaks) {
+      LOG(INFO) << "  candidate direction " << p.angle / kDegToRad
+                << " deg (support " << p.support << " m)";
+    }
     emit();
     return absl::nullopt;
   }
+
+  const double theta1 = best_primary->angle;
+  const double theta2 = best_secondary->angle;
+  const double w1 = best_primary->support;
+  const double w2 = best_secondary->support;
 
   // ── 6. 双方向支撑加权融合：加权最小二乘折中 ─────────────────────────
   //    实际地图受位姿图漂移影响，两族墙未必精确正交（δ = θ2−θ1−90° ≠ 0）。
