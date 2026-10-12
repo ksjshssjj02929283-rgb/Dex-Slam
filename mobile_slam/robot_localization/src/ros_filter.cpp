@@ -1431,12 +1431,11 @@ void RosFilter<T>::loadParams()
 
       // Load custom pose covariance if specified
       std::string pose_cov_param = odom_topic_name + "_pose_covariance";
-      if (this->has_parameter(pose_cov_param)) {
-        std::vector<double> pose_cov_vec;
-        this->declare_parameter(pose_cov_param, pose_cov_vec);
-        this->get_parameter(pose_cov_param, pose_cov_vec);
-        
-        if (!pose_cov_vec.empty()) {
+      std::vector<double> pose_cov_vec;
+      this->declare_parameter(pose_cov_param, std::vector<double>{});
+      this->get_parameter(pose_cov_param, pose_cov_vec);
+      
+      if (!pose_cov_vec.empty()) {
           // Expecting 9 values for 3x3 covariance [x, y, yaw]
           if (pose_cov_vec.size() == 9) {
             Eigen::MatrixXd pose_cov(POSE_SIZE, POSE_SIZE);
@@ -1453,7 +1452,7 @@ void RosFilter<T>::loadParams()
             pose_cov(StateMemberYaw, StateMemberY) = pose_cov_vec[7];
             pose_cov(StateMemberYaw, StateMemberYaw) = pose_cov_vec[8];
             
-            custom_pose_covariances_[odom_topic_name] = pose_cov;
+            custom_pose_covariances_[odom_topic_name + "_pose"] = pose_cov;
             
             RF_DEBUG(
               odom_topic_name << " custom pose covariance loaded:\n" << pose_cov << "\n");
@@ -1461,18 +1460,16 @@ void RosFilter<T>::loadParams()
             RF_DEBUG(
               "WARNING: " << pose_cov_param << " has " << pose_cov_vec.size() <<
               " elements. Expected 9. Ignoring custom covariance.\n");
-          }
+}
         }
-      }
-
+      
       // Load custom twist covariance if specified
       std::string twist_cov_param = odom_topic_name + "_twist_covariance";
-      if (this->has_parameter(twist_cov_param)) {
-        std::vector<double> twist_cov_vec;
-        this->declare_parameter(twist_cov_param, twist_cov_vec);
-        this->get_parameter(twist_cov_param, twist_cov_vec);
-        
-        if (!twist_cov_vec.empty()) {
+      std::vector<double> twist_cov_vec;
+      this->declare_parameter(twist_cov_param, std::vector<double>{});
+      this->get_parameter(twist_cov_param, twist_cov_vec);
+      
+      if (!twist_cov_vec.empty()) {
           // Expecting 9 values for 3x3 covariance [vx, vy, vyaw]
           if (twist_cov_vec.size() == 9) {
             Eigen::MatrixXd twist_cov(TWIST_SIZE, TWIST_SIZE);
@@ -1488,18 +1485,17 @@ void RosFilter<T>::loadParams()
             twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVy - POSITION_V_OFFSET) = twist_cov_vec[7];
             twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = twist_cov_vec[8];
             
-            custom_twist_covariances_[odom_topic_name] = twist_cov;
+            custom_twist_covariances_[odom_topic_name + "_twist"] = twist_cov;
             
             RF_DEBUG(
               odom_topic_name << " custom twist covariance loaded:\n" << twist_cov << "\n");
-          } else {
+} else {
             RF_DEBUG(
               "WARNING: " << twist_cov_param << " has " << twist_cov_vec.size() <<
               " elements. Expected 9. Ignoring custom covariance.\n");
           }
         }
-      }
-
+      
       int pose_update_sum =
         std::accumulate(pose_update_vec.begin(), pose_update_vec.end(), 0);
       int twist_update_sum =
@@ -1643,12 +1639,11 @@ void RosFilter<T>::loadParams()
 
       // Load custom pose covariance if specified for pose topics
       std::string pose_cov_param = pose_topic_name + "_covariance";
-      if (this->has_parameter(pose_cov_param)) {
-        std::vector<double> pose_cov_vec;
-        this->declare_parameter(pose_cov_param, pose_cov_vec);
-        this->get_parameter(pose_cov_param, pose_cov_vec);
-        
-        if (!pose_cov_vec.empty()) {
+      std::vector<double> pose_cov_vec;
+      this->declare_parameter(pose_cov_param, std::vector<double>{});
+      this->get_parameter(pose_cov_param, pose_cov_vec);
+      
+      if (!pose_cov_vec.empty()) {
           if (pose_cov_vec.size() == 9) {
             Eigen::MatrixXd pose_cov(POSE_SIZE, POSE_SIZE);
             pose_cov.setZero();
@@ -1666,14 +1661,13 @@ void RosFilter<T>::loadParams()
             
             RF_DEBUG(
               pose_topic_name << " custom pose covariance loaded:\n" << pose_cov << "\n");
-          } else {
+} else {
             RF_DEBUG(
               "WARNING: " << pose_cov_param << " has " << pose_cov_vec.size() <<
               " elements. Expected 9. Ignoring custom covariance.\n");
           }
         }
-      }
-
+      
       int pose_update_sum =
         std::accumulate(pose_update_vec.begin(), pose_update_vec.end(), 0);
 
@@ -1944,12 +1938,11 @@ void RosFilter<T>::loadParams()
 
       // Load custom IMU pose covariance (for orientation)
       std::string imu_pose_cov_param = imu_topic_name + "_pose_covariance";
-      if (this->has_parameter(imu_pose_cov_param)) {
-        std::vector<double> imu_pose_cov_vec;
-        this->declare_parameter(imu_pose_cov_param, imu_pose_cov_vec);
-        this->get_parameter(imu_pose_cov_param, imu_pose_cov_vec);
-        
-        if (!imu_pose_cov_vec.empty()) {
+      std::vector<double> imu_pose_cov_vec;
+      this->declare_parameter(imu_pose_cov_param, std::vector<double>{});
+      this->get_parameter(imu_pose_cov_param, imu_pose_cov_vec);
+      
+      if (!imu_pose_cov_vec.empty()) {
           // Expecting 9 values for 3x3 covariance [roll, pitch, yaw]
           if (imu_pose_cov_vec.size() == 9) {
             Eigen::MatrixXd imu_pose_cov(POSE_SIZE, POSE_SIZE);
@@ -1964,26 +1957,24 @@ void RosFilter<T>::loadParams()
             imu_pose_cov(StateMemberYaw, StateMemberPitch) = imu_pose_cov_vec[7];
             imu_pose_cov(StateMemberYaw, StateMemberYaw) = imu_pose_cov_vec[8];
             
-            custom_pose_covariances_[imu_topic_name] = imu_pose_cov;
+            custom_pose_covariances_[imu_topic_name + "_pose"] = imu_pose_cov;
             
             RF_DEBUG(
               imu_topic_name << " custom pose (orientation) covariance loaded:\n" << imu_pose_cov << "\n");
           } else {
             RF_DEBUG(
               "WARNING: " << imu_pose_cov_param << " has " << imu_pose_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
+" elements. Expected 9. Ignoring custom covariance.\n");
           }
         }
-      }
-
+      
       // Load custom IMU twist covariance (for angular velocity)
       std::string imu_twist_cov_param = imu_topic_name + "_twist_covariance";
-      if (this->has_parameter(imu_twist_cov_param)) {
-        std::vector<double> imu_twist_cov_vec;
-        this->declare_parameter(imu_twist_cov_param, imu_twist_cov_vec);
-        this->get_parameter(imu_twist_cov_param, imu_twist_cov_vec);
-        
-        if (!imu_twist_cov_vec.empty()) {
+      std::vector<double> imu_twist_cov_vec;
+      this->declare_parameter(imu_twist_cov_param, std::vector<double>{});
+      this->get_parameter(imu_twist_cov_param, imu_twist_cov_vec);
+      
+      if (!imu_twist_cov_vec.empty()) {
           // Expecting 9 values for 3x3 covariance [vroll, vpitch, vyaw]
           if (imu_twist_cov_vec.size() == 9) {
             Eigen::MatrixXd imu_twist_cov(TWIST_SIZE, TWIST_SIZE);
@@ -1998,26 +1989,24 @@ void RosFilter<T>::loadParams()
             imu_twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVpitch - POSITION_V_OFFSET) = imu_twist_cov_vec[7];
             imu_twist_cov(StateMemberVyaw - POSITION_V_OFFSET, StateMemberVyaw - POSITION_V_OFFSET) = imu_twist_cov_vec[8];
             
-            custom_twist_covariances_[imu_topic_name] = imu_twist_cov;
+            custom_twist_covariances_[imu_topic_name + "_twist"] = imu_twist_cov;
             
             RF_DEBUG(
               imu_topic_name << " custom twist (angular velocity) covariance loaded:\n" << imu_twist_cov << "\n");
           } else {
             RF_DEBUG(
               "WARNING: " << imu_twist_cov_param << " has " << imu_twist_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
+" elements. Expected 9. Ignoring custom covariance.\n");
           }
         }
-      }
-
+      
       // Load custom IMU linear acceleration covariance
       std::string imu_accel_cov_param = imu_topic_name + "_linear_acceleration_covariance";
-      if (this->has_parameter(imu_accel_cov_param)) {
-        std::vector<double> imu_accel_cov_vec;
-        this->declare_parameter(imu_accel_cov_param, imu_accel_cov_vec);
-        this->get_parameter(imu_accel_cov_param, imu_accel_cov_vec);
-        
-        if (!imu_accel_cov_vec.empty()) {
+      std::vector<double> imu_accel_cov_vec;
+      this->declare_parameter(imu_accel_cov_param, std::vector<double>{});
+      this->get_parameter(imu_accel_cov_param, imu_accel_cov_vec);
+      
+      if (!imu_accel_cov_vec.empty()) {
           // Expecting 9 values for 3x3 covariance [ax, ay, az]
           if (imu_accel_cov_vec.size() == 9) {
             Eigen::MatrixXd imu_accel_cov(ACCELERATION_SIZE, ACCELERATION_SIZE);
@@ -2032,18 +2021,17 @@ void RosFilter<T>::loadParams()
             imu_accel_cov(2, 1) = imu_accel_cov_vec[7];
             imu_accel_cov(2, 2) = imu_accel_cov_vec[8];
             
-            custom_acceleration_covariances_[imu_topic_name] = imu_accel_cov;
+            custom_acceleration_covariances_[imu_topic_name + "_acceleration"] = imu_accel_cov;
             
             RF_DEBUG(
               imu_topic_name << " custom acceleration covariance loaded:\n" << imu_accel_cov << "\n");
           } else {
             RF_DEBUG(
               "WARNING: " << imu_accel_cov_param << " has " << imu_accel_cov_vec.size() <<
-              " elements. Expected 9. Ignoring custom covariance.\n");
+" elements. Expected 9. Ignoring custom covariance.\n");
           }
         }
-      }
-
+      
       int pose_update_sum =
         std::accumulate(pose_update_vec.begin(), pose_update_vec.end(), 0);
       int twist_update_sum =
