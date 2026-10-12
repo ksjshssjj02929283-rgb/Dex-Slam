@@ -42,8 +42,8 @@
  *
  * 覆盖与安全：
  *   - 输出会覆盖输出目录（默认即 tgt 目录）下的地图文件；
- *   - --backup 默认开启：覆盖前把所有将被替换的文件（pbstream/png/yaml/pcd)
- * 复制到 backup_时间戳 子目录，保留原文件名，便于对比新旧地图；
+ *   - --backup 默认开启：覆盖前把输出目录的现有地图存成一个底图版本
+ * （backups/backup.<时间戳>/，与 map_manager 同一版本序列，可回滚）；
  * 是 copy 不是 move —— 中途失败时原地图仍在原位可用；
  *   - --save_map_pcd 默认开启：一并重新生成 map.pcd / map_highlight.pcd，
  *     避免残留旧点云与新的栅格/坐标系不一致。
@@ -60,6 +60,7 @@
 #include <filesystem>
 #include <iostream>
 #include <rclcpp/rclcpp.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,7 @@
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer_ros/mapping/ros_map.h"
 #include "cartographer_ros/tools/map_ops/map_ops.h"
+#include "cartographer_ros/tools/map_transform_common.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 
@@ -146,24 +148,10 @@ DEFINE_bool(save_map_pcd, true,
             "是否额外输出 map.pcd / map_highlight.pcd（来自变换后的全局点云）。"
             "默认开启，避免残留旧点云");
 DEFINE_bool(backup, true,
-            "覆盖前把所有将被替换的地图文件复制到 backup_<时间戳>/ 保留。默认开启");
+            "覆盖前把输出目录的现有地图存成一个底图版本（backups/backup.<时间戳>/）。默认开启");
 
 namespace cartographer_ros {
 namespace {
-
-std::string MakeTimestamp() {
-  const std::time_t now = std::time(nullptr);
-  std::tm tm_buf{};
-  localtime_r(&now, &tm_buf);
-  char ts[32];
-  std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", &tm_buf);
-  return std::string(ts);
-}
-
-std::string Basename(const std::string& path) {
-  const size_t pos = path.find_last_of('/');
-  return (pos == std::string::npos) ? path : path.substr(pos + 1);
-}
 
 // ──────────────────────────────────────────────────
 // lua 配置读取
@@ -277,70 +265,6 @@ void PrintResultLine() {
             << ",\"matcher_params_source\":\"" << r.matcher_params_source << "\""
             << ",\"applied\":" << r.applied
             << "}" << std::endl;
-}
-
-// 在 out_dir 下创建带时间戳的备份子目录；同一秒多次运行时追加序号避免冲突。
-std::string CreateBackupDir(const std::string& out_dir) {
-  const std::string stamp = MakeTimestamp();
-  std::string dir = out_dir + "/backup_" + stamp;
-  int suffix = 1;
-  while (::mkdir(dir.c_str(), 0755) != 0) {
-    CHECK(errno == EEXIST) << "Failed to create backup dir: " << dir;
-    dir = out_dir + "/backup_" + stamp + "_" + std::to_string(++suffix);
-  }
-  return dir;
-}
-
-// 覆盖前，把将被替换的文件【保留原文件名】**复制**到时间戳备份子目录
-// （如 <out_dir>/backup_20260827_163045/map.pbstream）。
-// 这样替换前后文件名一致、分别位于新旧两个目录，便于直接对比图片/文档。
-// 只备份"本次会写出/覆盖"的文件，避免把不会被覆盖的文件误备份。
-//
-// ⚠️ 必须是 copy 而不是 move：备份发生在变换与重写之前，而后者有大量
-// CHECK 退出点。若用 move，任何一处中途失败都会让目标目录**一个地图文件
-// 都不剩**（全在 backup 子目录里），需要人工搬回才能恢复可用状态。
-// copy 的代价是一次磁盘拷贝，换取「失败时原地图原封不动」。
-// 与 align 链路的 map_transform::BackupMapFiles 语义保持一致。
-void BackupOverwrittenFiles(const std::string& out_dir,
-                            const std::string& out_pbstream,
-                            const std::string& out_filestem, bool save_map_pcd,
-                            bool save_origin_map) {
-  std::vector<std::string> files = {
-      out_pbstream,
-      out_filestem + ".png",
-      out_filestem + ".yaml",
-  };
-  if (save_map_pcd) {
-    files.push_back(out_filestem + ".pcd");
-    files.push_back(out_filestem + "_highlight.pcd");
-  }
-  if (save_origin_map) {
-    files.push_back(out_filestem + "_origin.png");
-  }
-
-  // 仅保留实际存在的文件。
-  std::vector<std::string> existing;
-  for (const auto& f : files) {
-    if (access(f.c_str(), F_OK) == 0) existing.push_back(f);
-  }
-  if (existing.empty()) {
-    LOG(INFO) << "No existing map files to backup in " << out_dir;
-    return;
-  }
-
-  const std::string backup_dir = CreateBackupDir(out_dir);
-  g_result.backup_dir = backup_dir;
-  namespace fs = std::filesystem;
-  for (const auto& f : existing) {
-    const std::string dst = backup_dir + "/" + Basename(f);
-    std::error_code ec;
-    fs::copy_file(f, dst, fs::copy_options::overwrite_existing, ec);
-    CHECK(!ec) << "Failed to backup " << f << " -> " << dst << ": "
-               << ec.message();
-    LOG(INFO) << "Backed up: " << f << " -> " << dst;
-  }
-  LOG(INFO) << "Backup saved to: " << backup_dir << "  (compare new '"
-            << out_filestem << ".png' with old '" << backup_dir << "/map.png')";
 }
 
 void Run(const std::string& dir_tgt, const std::string& dir_src,
@@ -561,10 +485,11 @@ void Run(const std::string& dir_tgt, const std::string& dir_src,
     }
   }
 
-  // Step 3（默认开启）: 覆盖前备份将被替换的文件。
+  // Step 3（默认开启）: 覆盖前把输出目录的现有地图存成一个底图版本
+  // （与 map_manager 同一版本序列：backups/backup.<ts>/，来源 replace，可经 map_manager 回滚）。
+  // 只复制不移动：后续变换与重写有大量 CHECK 退出点，失败时原地图必须原封不动。
   if (FLAGS_backup) {
-    BackupOverwrittenFiles(out_dir, out_pbstream, out_filestem,
-                           FLAGS_save_map_pcd, FLAGS_save_origin_map);
+    g_result.backup_dir = ::cartographer_ros::map_transform::CreateMapVersion(out_dir, "replace");
   }
 
   // Step 4: 施加变换并写出（覆盖输出目录）。
@@ -583,6 +508,9 @@ void Run(const std::string& dir_tgt, const std::string& dir_src,
   if (!opts.created_at.empty()) {
     LOG(INFO) << "created_at inherited from source map: " << opts.created_at;
   }
+  // 坐标系仍是 target 的（src 已变换进 tgt 系）⇒ display_yaw 等显示元数据沿用
+  // target 的 map.yaml；输出目录另指时也以 target 为底。
+  opts.base_yaml_path = dir_tgt + "/map.yaml";
 
   map_ops::RewriteStats rewrite_stats;
   map_ops::TransformAndRewriteMap(std::move(src_data), T_src_in_tgt,
@@ -646,6 +574,18 @@ int main(int argc, char** argv) {
   LOG(INFO) << "Replace map: source=" << dir_src << " -> target=" << dir_tgt
             << " (output=" << out_dir << ", mode=" << FLAGS_transform_mode
             << ", backup=" << (FLAGS_backup ? "on" : "off") << ")";
+
+  // 同一张地图同一时刻只允许一个改动操作；试算不改文件，不加锁
+  std::unique_ptr<::cartographer_ros::map_transform::MapOpLock> map_lock;
+  if (!FLAGS_dry_run) {
+    map_lock = std::make_unique<::cartographer_ros::map_transform::MapOpLock>(out_dir);
+    if (!map_lock->acquired()) {
+      ::cartographer_ros::g_result.reason = "map_busy";
+      ::cartographer_ros::PrintResultLine();
+      LOG(FATAL) << "Map is being modified by another operation (align / replace / reset origin / grid edit): "
+                 << out_dir << "; retry later.";
+    }
+  }
 
   ::cartographer_ros::Run(dir_tgt, dir_src, out_dir);
 

@@ -45,6 +45,7 @@
 #include "cartographer_ros/mapping/tf_bridge.h"
 #include "cartographer_ros/options/trajectory_options.h"
 #include "cartographer_ros/common/map_loader.h"
+#include "cartographer_ros/mapping/ros_map.h"
 #include "cartographer_ros_msgs/msg/submap_entry.hpp"
 #include "cartographer_ros_msgs/msg/submap_list.hpp"
 #include "cartographer_ros_msgs/srv/submap_query.hpp"
@@ -202,6 +203,8 @@ class LocalizationUpdaterBridge {
   bool SaveMapFromPoseGraph(const std::string& map_filename,
                             float occ_thresh,
                             float free_thresh);
+  // 定位侧保存 map.yaml 的合并参数：以已加载地图的正式 yaml 为底
+  MapYamlMergeOptions LoadedMapYamlMergeOptions() const;
 
  private:
   mutable absl::Mutex mutex_;
@@ -211,7 +214,12 @@ class LocalizationUpdaterBridge {
            std::shared_ptr<const LocalTrajectoryData::LocalSlamData>>
     local_slam_data_ GUARDED_BY(mutex_);
   std::unique_ptr<::cartographer::localization::LocalizationUpdater> localization_updater_;
-  std::string loaded_created_at_;   // 已加载地图 map.yaml 的 created_at，更新保存时沿用（旧图无键则保存时取当前时间）
+  // 已加载地图的正式 map.yaml 路径。保存时以它为底做合并写出（写盘时才读，
+  // 拿到的是最新内容），未归本侧管的键（created_at、display_yaw 等）原样带过去。
+  std::string loaded_map_yaml_path_;
+  // 下一次保存要叠加到 display_yaw 上的角度（rad）。仅在线重设原点期间非零：
+  // 坐标系转了 yaw，显示朝向要同步补偿，界面上地图看起来才不动。
+  double pending_display_yaw_delta_ = 0.0;
   tf2_ros::Buffer* const tf_buffer_;  // 继续外部传入
 
   std::unordered_map<std::string /* landmark ID */, int> landmark_to_index_;

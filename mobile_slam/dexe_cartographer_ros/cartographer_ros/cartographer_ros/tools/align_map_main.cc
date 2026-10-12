@@ -18,7 +18,7 @@
  * 工具将：
  *   1. 加载 map.pbstream，从 global_static_submap.line_map_2d_list 估计对齐角
  *      （--dry_run 只打印角度，不修改任何文件）
- *   2. 备份原地图文件到 <slam>/backups/backup_<时间戳>/（子文件保持原名）
+ *   2. 把原地图存成一个底图版本 <slam>/backups/backup.<时间戳>/（来源 align，可经 map_manager 回滚）
  *   3. 对 pose graph / global_static_submap / trajectory_data 施加旋转
  *   4. 从 trajectory node 点云**完全重建**栅格 / 点云 / 线特征（无退路开关：
  *      重栅格化旧 grid 会产出内部不自洽的地图）并重渲染 map.png + map.yaml
@@ -40,6 +40,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -411,12 +412,9 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
                  << " asset director(y|ies) will be left in the OLD frame.";
   }
 
-  // === Step 4: 备份原地图文件（修改任何文件之前）===
-  const std::vector<std::string> kBackupExtensions = {
-      ".pbstream", ".png",   ".yaml", ".pcd",
-      "_highlight.pcd", "_origin.png", "_line_map.json"};
+  // === Step 4: 修改任何文件之前，把原地图存成一个底图版本（与 map_manager 同一版本序列）===
   const std::string backup_dir =
-      mt::BackupMapFiles(map_filestem, kBackupExtensions);
+      mt::CreateMapVersion(fs::path(map_filestem).parent_path().string(), "align");
   LOG(INFO) << "Backup directory: " << backup_dir;
   if (fs::exists(map_filestem + "_line_map.json")) {
     LOG(WARNING) << "map_line_map.json exists but will NOT be transformed "
@@ -520,19 +518,21 @@ void Run(const std::string& pbstream_file, const std::string& map_filestem,
   const std::string yaml_path = map_filestem + ".yaml";
   const GridMapStats map_stats = ComputeGridMapStats(
       origin_mat, filtered_mat, render_resolution, free_thresh);
-  // 全量重写 yaml 会丢掉建图侧写过、本工具不认识的键；宁可吵也别静默丢。
-  for (const auto& key : FindDroppedYamlKeys(yaml_path, true)) {
-    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
-                 << "' — this tool regenerates map.yaml from scratch and does "
-                    "not know this key.";
-  }
-  // 对齐只是把整张图转了个角，内容没换 ⇒ created_at（内容采集时刻）原样保留。
-  const std::string created_at = ReadMapCreatedAt(yaml_path);
-  {
-    ::cartographer::io::StreamFileWriter yaml_writer(yaml_path);
-    WriteYaml(render_resolution, map_origin, map_filestem, &yaml_writer,
-              occ_thresh, free_thresh, contents.header.data_version(),
-              &map_stats, created_at);
+  // 以原 yaml 为底合并：本工具只换自己负责的键，其余键（created_at 等）原样保留。
+  // 对齐只是把整张图转了个角，内容没换 ⇒ created_at（内容采集时刻）沿用；
+  // 坐标系转了 new_yaw，显示朝向同步补偿，界面上地图看起来不动。
+  MapYamlMergeOptions yaml_opts;
+  yaml_opts.base_yaml_path = yaml_path;
+  yaml_opts.display_yaw_delta = new_yaw;
+  if (!WriteMapYamlMerged(yaml_path,
+                          MakeMapYamlEntries(render_resolution, map_origin,
+                                             map_filestem, occ_thresh, free_thresh,
+                                             contents.header.data_version(),
+                                             &map_stats),
+                          yaml_opts)) {
+    PrintResultLine(false, "map_yaml_write_failed", diag, new_yaw, false, new_yaw);
+    LOG(FATAL) << "failed to write " << yaml_path
+               << "; backups are kept in backups/.";
   }
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2()
@@ -657,6 +657,18 @@ int main(int argc, char** argv) {
       map_filestem =
           (dot != std::string::npos) ? pbstream_file.substr(0, dot)
                                      : pbstream_file;
+    }
+  }
+
+  // 同一张地图同一时刻只允许一个改动操作；试算不改文件，不加锁
+  std::unique_ptr<::cartographer_ros::map_transform::MapOpLock> map_lock;
+  if (!FLAGS_dry_run) {
+    const std::string lock_dir = map_filestem.substr(0, map_filestem.find_last_of('/'));
+    map_lock = std::make_unique<::cartographer_ros::map_transform::MapOpLock>(lock_dir.empty() ? "." : lock_dir);
+    if (!map_lock->acquired()) {
+      ::cartographer_ros::PrintResultLine(false, "map_busy", {}, 0.0, false, 0.0);
+      LOG(FATAL) << "Map is being modified by another operation (align / replace / reset origin / grid edit): "
+                 << lock_dir << "; retry later.";
     }
   }
 

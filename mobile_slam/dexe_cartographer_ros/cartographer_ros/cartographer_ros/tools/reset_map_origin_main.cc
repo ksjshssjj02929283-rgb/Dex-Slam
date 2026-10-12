@@ -8,7 +8,8 @@
  *     --map_name <地图名称> \
  *     --new_x 1.5 --new_y -2.0 --new_yaw 0.785
  *
- *   会从 ~/.dexe/data/maps/<map_name> 加载地图（可用 --maps_root 改默认根目录）。
+ *   会从 ~/.dexe/data/maps/<map_name>/slam/（分层布局；旧扁平布局 <map_name>/ 也兼容）加载地图
+ *   （可用 --maps_root 改默认根目录）。
  *
  * 说明：
  *   传入地图目录（含 map.pbstream、map.yaml、map.png）以及新原点在旧地图坐标系下的
@@ -19,7 +20,7 @@
  *     4. 将变换后的 submap pose 也写回 map.pbstream（使多次调用的变换可累积）
  *
  * 路径解析：
- *   --map_name <name>         → ~/.dexe/data/maps/<name>（或 --maps_root 指定的根目录）
+ *   --map_name <name>         → ~/.dexe/data/maps/<name>/slam/（或 --maps_root 指定的根目录）
  *   --map_dir  <name|path>    → 完整路径或相对 maps_root 的名称（向后兼容）
  *   --pbstream_filename <p>   → 直接指定 pbstream 文件（更细粒度控制）
  *
@@ -48,6 +49,7 @@
 #include "cartographer/transform/transform.h"
 #include "cartographer_ros/mapping/ros_map.h"
 #include "cartographer_ros/tools/map_transform_common.h"
+#include "cartographer_ros/tools/map_ops/map_ops.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include <opencv2/highgui.hpp>
@@ -234,6 +236,15 @@ void Run(const std::string& pbstream_file,
     render_resolution = resolution;
   }
 
+  // === Step 5b: 写任何文件之前，把原地图存成一个底图版本（与 map_manager 同一版本序列，可回滚）===
+  {
+    const size_t last_slash = map_filestem.find_last_of('/');
+    const std::string slam_dir =
+        last_slash != std::string::npos ? map_filestem.substr(0, last_slash) : ".";
+    const std::string version_dir = mt::CreateMapVersion(slam_dir, "reset_origin");
+    LOG(INFO) << "Map version before reset origin: " << version_dir;
+  }
+
   // === Step 6: 写出 png/yaml（统一走 WriteNavigationMap，与 node 端 save_map 一致）===
   const std::string png_file = map_filestem + ".png";
   const std::string yaml_file = map_filestem + ".yaml";
@@ -255,17 +266,19 @@ void Run(const std::string& pbstream_file,
 
   const GridMapStats map_stats = ComputeGridMapStats(
       origin_mat, filtered_mat, render_resolution, free_thresh);
-  for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
-    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
-                 << "' — this tool regenerates map.yaml from scratch and does "
-                    "not know this key.";
-  }
-  // 只改坐标系原点，内容没换 ⇒ created_at（内容采集时刻）原样保留。
-  const std::string created_at = ReadMapCreatedAt(yaml_file);
-  ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
-  WriteYaml(render_resolution, map_origin, map_filestem, &yaml_writer,
-            occ_thresh, free_thresh, contents.header.data_version(), &map_stats,
-            created_at);
+  // 以原 yaml 为底合并：只换本工具负责的键，其余原样保留。
+  // 只改坐标系原点，内容没换 ⇒ created_at（内容采集时刻）沿用；
+  // 坐标系转了 new_yaw，显示朝向同步补偿，界面上地图看起来不动。
+  MapYamlMergeOptions yaml_opts;
+  yaml_opts.base_yaml_path = yaml_file;
+  yaml_opts.display_yaw_delta = new_yaw;
+  CHECK(WriteMapYamlMerged(yaml_file,
+                           MakeMapYamlEntries(render_resolution, map_origin,
+                                              map_filestem, occ_thresh, free_thresh,
+                                              contents.header.data_version(),
+                                              &map_stats),
+                           yaml_opts))
+      << "Failed to write " << yaml_file;
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
@@ -304,42 +317,15 @@ int main(int argc, char** argv) {
     maps_root = std::string(home) + "/.dexe/data/maps";
   }
 
-  // 解析地图目录优先级：
-  //   1. --map_name        → <maps_root>/<map_name>（推荐）
-  //   2. --map_dir         → 完整路径或相对 maps_root 的名称（向后兼容旧用法）
-  //   3. --pbstream_filename 单独使用，map_dir 留空
+  // 解析地图目录：--map_name 优先，其次 --map_dir（名称或完整路径）；都没给则只用 --pbstream_filename。
+  // 与替换工具同一套规则（map_ops::ResolveMapDir）：先找分层布局 <map>/slam/，再兼容旧扁平布局。
   std::string map_dir;
   if (!FLAGS_map_name.empty()) {
-    map_dir = maps_root + "/" + FLAGS_map_name;
-    if (access((map_dir + "/map.pbstream").c_str(), F_OK) != 0) {
-      LOG(FATAL) << "Map not found: " << map_dir << "/map.pbstream\n"
-                 << "  --map_name = " << FLAGS_map_name << "\n"
-                 << "  --maps_root = " << maps_root;
-    }
-    LOG(INFO) << "Resolved map directory: " << map_dir;
+    map_dir = ::cartographer_ros::map_ops::ResolveMapDir(FLAGS_map_name, maps_root);
   } else if (!FLAGS_map_dir.empty() && FLAGS_pbstream_filename.empty()) {
-    // --map_dir 同时支持完整路径和相对 maps_root 的名称
-    const std::string candidate_default = maps_root + "/" + FLAGS_map_dir;
-    const std::string candidate_direct = FLAGS_map_dir;
-
-    const bool default_exists =
-        (access((candidate_default + "/map.pbstream").c_str(), F_OK) == 0);
-    const bool direct_exists =
-        (access((candidate_direct + "/map.pbstream").c_str(), F_OK) == 0);
-
-    if (default_exists) {
-      map_dir = candidate_default;
-      LOG(INFO) << "Found map in default path: " << map_dir;
-    } else if (direct_exists) {
-      map_dir = candidate_direct;
-      LOG(INFO) << "Found map at given path: " << map_dir;
-    } else {
-      LOG(FATAL) << "Map not found.\n"
-                 << "  Tried default path: " << candidate_default << "\n"
-                 << "  Tried given path:   " << candidate_direct << "\n"
-                 << "Please check --map_name / --map_dir / --pbstream_filename.";
-    }
+    map_dir = ::cartographer_ros::map_ops::ResolveMapDir(FLAGS_map_dir, maps_root);
   }
+  LOG(INFO) << "Resolved map directory: " << map_dir;
 
   std::string pbstream_file = FLAGS_pbstream_filename;
   std::string map_filestem = FLAGS_map_filestem;
@@ -356,6 +342,14 @@ int main(int argc, char** argv) {
       const size_t dot = p.rfind(".pbstream");
       map_filestem = (dot != std::string::npos) ? p.substr(0, dot) : p;
     }
+  }
+
+  // 同一张地图同一时刻只允许一个改动操作（防止重复的服务实例 / 并发请求同时写同一份文件）
+  const std::string lock_dir = map_filestem.substr(0, map_filestem.find_last_of('/'));
+  ::cartographer_ros::map_transform::MapOpLock map_lock(lock_dir.empty() ? "." : lock_dir);
+  if (!map_lock.acquired()) {
+    LOG(FATAL) << "Map is being modified by another operation (align / replace / reset origin / grid edit): "
+               << lock_dir << "; retry later.";
   }
 
   ::cartographer_ros::Run(

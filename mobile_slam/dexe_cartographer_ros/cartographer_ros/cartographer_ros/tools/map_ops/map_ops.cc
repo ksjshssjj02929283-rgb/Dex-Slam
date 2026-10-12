@@ -1535,16 +1535,20 @@ void TransformAndRewriteMap(
                      opts.save_debug_map, map_dir, &filtered_mat);
   const GridMapStats map_stats = ComputeGridMapStats(
       origin_mat, filtered_mat, render_resolution, opts.free_thresh);
-  // 全量重写 yaml 会丢掉建图侧写过、本工具不认识的键；宁可吵也别静默丢。
-  for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
-    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
-                 << "' — this tool regenerates map.yaml from scratch and does "
-                    "not know this key.";
-  }
-  ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
-  WriteYaml(render_resolution, map_origin, output_filestem, &yaml_writer,
-            opts.occ_thresh, opts.free_thresh, data.header.data_version(),
-            &map_stats, opts.created_at);
+  // 以旧 yaml 为底合并：只换本工具负责的键，其余原样保留；
+  // created_at 由调用方显式给出（替换语义下取 src 的）。
+  MapYamlMergeOptions yaml_opts;
+  yaml_opts.base_yaml_path =
+      opts.base_yaml_path.empty() ? yaml_file : opts.base_yaml_path;
+  yaml_opts.created_at = opts.created_at;
+  CHECK(WriteMapYamlMerged(yaml_file,
+                           MakeMapYamlEntries(render_resolution, map_origin,
+                                              output_filestem, opts.occ_thresh,
+                                              opts.free_thresh,
+                                              data.header.data_version(),
+                                              &map_stats),
+                           yaml_opts))
+      << "Failed to write " << yaml_file;
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2()
             << " m2 (" << map_stats.free_cells << "/" << map_stats.total_cells

@@ -62,6 +62,18 @@ install(TARGETS atomic_dir_swap_test
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# map.yaml 合并写出测试 binary（standalone，运行：`ros2 run cartographer_ros map_yaml_merge_test`）
+google_binary(map_yaml_merge_test
+  SRCS
+    mapping/map_yaml_merge_test_main.cc
+)
+
+install(TARGETS map_yaml_merge_test
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(loc_offline_node
   SRCS
     localization/loc_offline_node_main.cc

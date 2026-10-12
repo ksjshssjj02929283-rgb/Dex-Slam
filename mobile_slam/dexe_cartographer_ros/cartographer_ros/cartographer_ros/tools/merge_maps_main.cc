@@ -680,21 +680,19 @@ void Run(const std::string& pbstream_a,
                      FLAGS_save_debug_map, map_dir, &filtered_mat);
   const GridMapStats map_stats = ComputeGridMapStats(
       origin_mat, filtered_mat, render_resolution, free_thresh);
-  for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
-    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
-                 << "' — this tool regenerates map.yaml from scratch and does "
-                    "not know this key.";
-  }
-  // 合并保留 target 的 created_at（内容采集时刻）—— target 是坐标系宿主，
-  // 合并是在它上面追加 source 的轨迹，不是换掉它的内容。
+  // 以 target 的 yaml 为底合并：target 是坐标系宿主，合并是在它上面追加
+  // source 的轨迹，不是换掉它的内容 ⇒ created_at、display_yaw 等沿用 target。
   // pbstream_a 形如 <dir>/map.pbstream，同目录的 map.yaml 即 target 的。
-  const std::string tgt_yaml =
+  MapYamlMergeOptions yaml_opts;
+  yaml_opts.base_yaml_path =
       pbstream_a.substr(0, pbstream_a.find_last_of('.')) + ".yaml";
-  const std::string created_at = ReadMapCreatedAt(tgt_yaml);
-  ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
-  WriteYaml(render_resolution, origin, filestem_out, &yaml_writer,
-            occ_thresh, free_thresh, merged_header.data_version(), &map_stats,
-            created_at);
+  CHECK(WriteMapYamlMerged(yaml_file,
+                           MakeMapYamlEntries(render_resolution, origin,
+                                              filestem_out, occ_thresh, free_thresh,
+                                              merged_header.data_version(),
+                                              &map_stats),
+                           yaml_opts))
+      << "Failed to write " << yaml_file;
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 

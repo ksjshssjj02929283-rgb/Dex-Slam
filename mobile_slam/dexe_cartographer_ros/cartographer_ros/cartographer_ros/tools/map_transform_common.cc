@@ -7,6 +7,12 @@
 
 #include "cartographer_ros/tools/map_transform_common.h"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -763,48 +769,77 @@ void RenderSingleStaticSubmap(
                                                 std::move(line_map_data));
 }
 
-std::string CurrentTimestamp() {
-  const auto now = std::chrono::system_clock::now();
-  const std::time_t t = std::chrono::system_clock::to_time_t(now);
-  std::tm tm_buf;
-  localtime_r(&t, &tm_buf);
-  char buf[32];
-  std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm_buf);
-  return std::string(buf);
+MapOpLock::MapOpLock(const std::string& slam_dir) {
+  const std::string path = slam_dir + "/.map_op.lock";
+  const int fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+  if (fd < 0) {
+    LOG(ERROR) << "Cannot open map operation lock " << path << ": " << std::strerror(errno);
+    return;
+  }
+  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    ::close(fd);
+    return;
+  }
+  fd_ = fd;
 }
 
-std::string BackupMapFiles(
-    const std::string& map_filestem,
-    const std::vector<std::string>& candidate_extensions) {
-  const fs::path stem(map_filestem);
+MapOpLock::~MapOpLock() {
+  if (fd_ >= 0) {
+    ::flock(fd_, LOCK_UN);
+    ::close(fd_);
+  }
+}
+
+std::string CreateMapVersion(const std::string& slam_dir, const std::string& source,
+                             std::string* version_ts, int keep) {
+  static const char* kFiles[] = {"map.pbstream",    "map.png",         "map.yaml",
+                                 "map.pcd",         "map_highlight.pcd", "map_line_map.json",
+                                 "map_origin.png"};
+  const fs::path dir(slam_dir);
   std::error_code ec;
+  bool any = false;
+  for (const char* f : kFiles) any = any || fs::exists(dir / f, ec);
+  if (!any) return "";
 
-  bool any_exists = false;
-  for (const auto& ext : candidate_extensions) {
-    if (fs::exists(map_filestem + ext, ec)) {
-      any_exists = true;
-      break;
-    }
+  const fs::path backups = dir / "backups";
+  fs::create_directories(backups, ec);
+  CHECK(!ec) << "Failed to create " << backups << ": " << ec.message();
+  const std::time_t now = std::time(nullptr);
+  struct tm tm_buf;
+  localtime_r(&now, &tm_buf);
+  char buf[32];
+  std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm_buf);
+  std::string ts = buf;
+  for (int n = 1; fs::exists(backups / ("backup." + ts), ec); ++n) ts = std::string(buf) + "-" + std::to_string(n);
+
+  const fs::path staging = backups / (".backup." + ts + ".tmp");
+  fs::remove_all(staging, ec);
+  fs::create_directories(staging, ec);
+  CHECK(!ec) << "Failed to create " << staging << ": " << ec.message();
+  for (const char* f : kFiles) {
+    if (!fs::exists(dir / f, ec)) continue;
+    fs::copy_file(dir / f, staging / f, fs::copy_options::overwrite_existing, ec);
+    CHECK(!ec) << "Failed to back up " << (dir / f) << ": " << ec.message();
   }
-  if (!any_exists) return "";
+  std::ofstream((staging / ".source").string()) << source << "\n";
+  const fs::path final_dir = backups / ("backup." + ts);
+  fs::rename(staging, final_dir, ec);
+  CHECK(!ec) << "Failed to finalize map version " << final_dir << ": " << ec.message();
+  LOG(INFO) << "Map version saved: " << final_dir << " (source: " << source << ")";
 
-  // 带时间戳的备份目录，子文件保持原名
-  const fs::path backup_dir = stem.parent_path() / "backups" /
-                              ("backup_" + CurrentTimestamp());
-  fs::create_directories(backup_dir, ec);
-  CHECK(!ec) << "Failed to create backup directory " << backup_dir << ": "
-             << ec.message();
-
-  for (const auto& ext : candidate_extensions) {
-    const fs::path src(map_filestem + ext);
-    if (!fs::exists(src, ec)) continue;
-    const fs::path dst = backup_dir / src.filename();
-    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-    CHECK(!ec) << "Failed to backup " << src << " → " << dst << ": "
-               << ec.message();
-    LOG(INFO) << "Backed up: " << src << " → " << dst;
+  // 轮换：名字即时间，字典序 = 时间序
+  std::vector<fs::path> versions;
+  for (const auto& e : fs::directory_iterator(backups, ec)) {
+    const std::string name = e.path().filename().string();
+    if (name.rfind("backup.", 0) == 0 && e.is_directory()) versions.push_back(e.path());
   }
-  return backup_dir.string();
+  std::sort(versions.begin(), versions.end());
+  for (size_t i = 0; keep >= 0 && i + static_cast<size_t>(keep) < versions.size(); ++i) {
+    fs::remove_all(versions[i], ec);
+    if (ec) LOG(WARNING) << "Failed to prune old map version " << versions[i] << ": " << ec.message();
+  }
+  if (version_ts != nullptr) *version_ts = ts;
+  return final_dir.string();
 }
 
 bool TransformPcdFile(const std::string& pcd_file,
