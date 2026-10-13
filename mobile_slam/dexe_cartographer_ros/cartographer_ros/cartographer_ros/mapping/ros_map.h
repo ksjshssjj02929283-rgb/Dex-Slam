@@ -71,9 +71,10 @@ std::string ReadMapCreatedAt(const std::string& yaml_path);
 // map.yaml 的一组键值，值是已格式化好的 yaml 文本，按写出顺序排列。
 using MapYamlEntries = std::vector<std::pair<std::string, std::string>>;
 
-// 渲染写入方「负责」的键：image / line_map / cloud_map / highlight_cloud_map /
-// resolution / origin / negate / occupied_thresh / free_thresh，给出 stats 时再加
-// total_area_m2 / effective_area_m2，给出 data_version 时再加 data_version。
+// 渲染写入方「负责」的键：image / resolution / origin / negate / occupied_thresh / free_thresh，
+// 给出 stats 时再加 total_area_m2 / effective_area_m2，给出 data_version 时再加 data_version。
+// 不再写 line_map / cloud_map / highlight_cloud_map：点云与线特征都固化在 map.pbstream，
+// 需要文件时用 pbstream_export_tool 导出；合并写出时还会删掉旧地图里的这三个键。
 // 键名与数值格式只在这里定义一处，WriteYaml 与 WriteMapYamlMerged 共用。
 // 不含 created_at —— 它的去留按写入方语义另定（见 MapYamlMergeOptions）。
 // 'data_version' 语义同 WriteYaml。

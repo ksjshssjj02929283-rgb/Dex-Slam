@@ -300,9 +300,9 @@ MapYamlEntries MakeMapYamlEntries(const double resolution, const Eigen::Vector2d
                                   const double occ_thresh, const double free_thresh,
                                   const absl::optional<std::string>& data_version,
                                   const GridMapStats* stats) {
-  // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
-  // 这样无论地图目录位于何处（staging / 正式 / backup / 被整体移动），
-  // 加载侧（map_loader）都按"yaml 所在目录 + 相对路径"解析，路径恒有效。
+  // image 使用相对路径（仅 basename），不写绝对路径：无论地图目录位于何处
+  // （staging / 正式 / backup / 被整体移动），读取侧都按"yaml 所在目录 + 相对路径"解析。
+  // 点云与线特征都固化在 map.pbstream 里，yaml 不再引用 pcd / 线特征文件。
   const size_t slash = map_file_name.find_last_of('/');
   const std::string base =
       (slash == std::string::npos) ? map_file_name : map_file_name.substr(slash + 1);
@@ -310,9 +310,6 @@ MapYamlEntries MakeMapYamlEntries(const double resolution, const Eigen::Vector2d
   // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
   MapYamlEntries entries = {
       {"image", base + ".png"},
-      {"line_map", base + "_line_map.json"},
-      {"cloud_map", base + ".pcd"},
-      {"highlight_cloud_map", base + "_highlight.pcd"},
       {"resolution", absl::StrCat(resolution)},
       {"origin", absl::StrCat("[", origin.x(), ", ", origin.y(), ", 0.0]")},
       {"negate", "0"},
@@ -340,6 +337,9 @@ bool WriteMapYamlMerged(const std::string& out_yaml_path, const MapYamlEntries& 
 
   // 1. 本方负责的键：原位覆盖，底里没有的追加
   SetEntriesExceptVersion(entries, &yaml);
+
+  // 1b. 旧版本写过的文件引用键（点云 / 线特征已固化在 pbstream，文件不再生成），删掉免得指向不存在的文件
+  for (const char* key : {"line_map", "cloud_map", "highlight_cloud_map"}) yaml.Erase(key);
 
   // 2. 面积依赖底图像素：重画了底图却没算面积，旧值必须删掉，宁缺勿错
   if (!HasEntry(entries, "total_area_m2")) {

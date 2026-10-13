@@ -18,6 +18,7 @@
  *     M9 - 底不存在时等价于新建
  *     M10 - ReadMapCreatedAt：带引号 / 不带引号 / 无键 / 文件不存在
  *     M11 - last_edited_at：新建与 created_at 相同；合并重写一律取当前时间、已有键原位覆盖
+ *     M12 - 不写 line_map / cloud_map / highlight_cloud_map；合并时删掉旧地图里的这三个键，其余行不动
  */
 
 #include "cartographer_ros/mapping/ros_map.h"
@@ -161,14 +162,17 @@ void TestM0_FreshWrite() {
   EXPECT(WriteMapYamlMerged((d / "map.yaml").string(), Entries(&stats), {}), "write failed");
   const std::string t = ReadText(d / "map.yaml");
   const auto ls = Lines(t);
-  EXPECT(ls.size() == 14, "expect 14 lines, got " << ls.size());
+  EXPECT(ls.size() == 11, "expect 11 lines, got " << ls.size());
   EXPECT(ls.front() == "image: map.png", "first line " << ls.front());
   EXPECT(ValueOf(t, "origin") == "[-1.5, 2.25, 0.0]", "origin " << ValueOf(t, "origin"));
   EXPECT(ValueOf(t, "total_area_m2") == "1", "total " << ValueOf(t, "total_area_m2"));
   EXPECT(ValueOf(t, "effective_area_m2") == "0.25", "eff " << ValueOf(t, "effective_area_m2"));
   EXPECT(LooksLikeNow(ValueOf(t, "created_at")), "created_at " << ValueOf(t, "created_at"));
-  EXPECT(ls[11].rfind("created_at: ", 0) == 0, "created_at should be 3rd last");
-  EXPECT(ls[12].rfind("last_edited_at: ", 0) == 0, "last_edited_at should be 2nd last");
+  EXPECT(ls[8].rfind("created_at: ", 0) == 0, "created_at should be 3rd last");
+  EXPECT(ls[9].rfind("last_edited_at: ", 0) == 0, "last_edited_at should be 2nd last");
+  for (const char* k : {"line_map", "cloud_map", "highlight_cloud_map"}) {
+    EXPECT(CountKey(t, k) == 0, "file reference key must not be written: " << k);
+  }
   EXPECT(ls.back() == "data_version: 0.3.0", "last line " << ls.back());
   EXPECT(CountKey(t, "display_yaw") == 0, "display_yaw must not be invented");
 }
@@ -181,11 +185,12 @@ void TestM1_PreserveUnknown() {
   o.base_yaml_path = (d / "map.yaml").string();
   EXPECT(WriteMapYamlMerged(o.base_yaml_path, Entries(&stats), o), "write failed");
   const auto ls = Lines(ReadText(d / "map.yaml"));
-  EXPECT(ls.size() == 18, "line count " << ls.size());
+  // 底里的 line_map / cloud_map / highlight_cloud_map 三行被删
+  EXPECT(ls.size() == 15, "line count " << ls.size());
   EXPECT(ls[0] == "# map written by mapping node", "comment lost: " << ls[0]);
-  EXPECT(ls[12].empty(), "blank line lost");
-  EXPECT(ls[13] == "vendor_note: keep me  # trailing comment", "unknown key altered: " << ls[13]);
-  EXPECT(ls[15] == "display_yaw: 3.0", "display_yaw altered: " << ls[15]);
+  EXPECT(ls[9].empty(), "blank line lost");
+  EXPECT(ls[10] == "vendor_note: keep me  # trailing comment", "unknown key altered: " << ls[10]);
+  EXPECT(ls[12] == "display_yaw: 3.0", "display_yaw altered: " << ls[12]);
 }
 
 void TestM2_OverrideAndAppend() {
@@ -314,7 +319,7 @@ void TestM7_SeparateOutput() {
   EXPECT(fs::exists(live / ".map.yaml.lock"), "lock should sit next to the base");
 }
 
-// WriteYaml 的对照实现（改造前的拼接写法 + last_edited_at 紧跟 created_at）
+// WriteYaml 的对照实现（改造前的拼接写法，去掉三个文件引用键，last_edited_at 紧跟 created_at）
 static std::string LegacyWriteYaml(double resolution, const Eigen::Vector2d& origin,
                                    const std::string& map_file_name, double occ_thresh,
                                    double free_thresh,
@@ -325,9 +330,6 @@ static std::string LegacyWriteYaml(double resolution, const Eigen::Vector2d& ori
       (slash == std::string::npos) ? map_file_name : map_file_name.substr(slash + 1);
   std::string output = absl::StrCat(
       "image: ", base + ".png", "\n",
-      "line_map: ", base + "_line_map.json", "\n",
-      "cloud_map: ", base + ".pcd", "\n",
-      "highlight_cloud_map: ", base + "_highlight.pcd", "\n",
       "resolution: ", resolution, "\n",
       "origin: [", origin.x(), ", ", origin.y(),
       ", 0.0]\nnegate: 0\noccupied_thresh: ", occ_thresh, "\nfree_thresh: ", free_thresh, "\n");
@@ -375,7 +377,7 @@ void TestM9_MissingBase() {
   o.display_yaw_delta = 1.0;
   EXPECT(WriteMapYamlMerged((d / "map.yaml").string(), Entries(&stats), o), "write failed");
   const std::string t = ReadText(d / "map.yaml");
-  EXPECT(Lines(t).size() == 14, "should equal fresh write");
+  EXPECT(Lines(t).size() == 11, "should equal fresh write");
   EXPECT(CountKey(t, "display_yaw") == 0, "display_yaw must not be invented");
 }
 
@@ -426,6 +428,21 @@ void TestM11_LastEditedAt() {
   EXPECT(LooksLikeNow(ValueOf(ReadText(d / "map.yaml"), "last_edited_at")), "absent should get now");
 }
 
+void TestM12_DropFileReferenceKeys() {
+  const fs::path d = NewDir("m12");
+  WriteText(d / "map.yaml", kBaseYaml);
+  const auto stats = Stats();
+  MapYamlMergeOptions o;
+  o.base_yaml_path = (d / "map.yaml").string();
+  EXPECT(WriteMapYamlMerged(o.base_yaml_path, Entries(&stats), o), "write failed");
+  const std::string t = ReadText(d / "map.yaml");
+  for (const char* k : {"line_map", "cloud_map", "highlight_cloud_map"}) {
+    EXPECT(CountKey(t, k) == 0, "legacy key not erased: " << k);
+  }
+  EXPECT(ValueOf(t, "vendor_note") == "keep me  # trailing comment", "unknown key must survive");
+  EXPECT(ValueOf(t, "image") == "map.png", "image kept");
+}
+
 int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
   FLAGS_logtostderr = true;
@@ -445,6 +462,7 @@ int main(int argc, char** argv) {
   RUN_TEST(TestM9_MissingBase);
   RUN_TEST(TestM10_ReadMapCreatedAt);
   RUN_TEST(TestM11_LastEditedAt);
+  RUN_TEST(TestM12_DropFileReferenceKeys);
 
   fs::remove_all(g_root);
   std::cout << "\n== " << g_pass << " passed, " << g_fail << " failed ==\n";

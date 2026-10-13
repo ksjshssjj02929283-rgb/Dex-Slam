@@ -253,6 +253,18 @@ install(TARGETS replace_map_tool
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# 从 map.pbstream 导出点云 / 静态底图 / 线特征（只读，运行：`ros2 run cartographer_ros pbstream_export_tool --map_name <图名>`）
+google_binary(pbstream_export_tool
+  SRCS
+    tools/pbstream_export_main.cc
+)
+
+install(TARGETS pbstream_export_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(bbs_benchmark_tool
   SRCS
     tools/bbs_benchmark_main.cc

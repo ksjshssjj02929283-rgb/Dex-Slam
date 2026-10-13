@@ -44,7 +44,6 @@
 #include "cartographer_ros/mapping/sensor_bridge.h"
 #include "cartographer_ros/mapping/tf_bridge.h"
 #include "cartographer_ros/options/trajectory_options.h"
-#include "cartographer_ros/common/map_loader.h"
 #include "cartographer_ros/mapping/ros_map.h"
 #include "cartographer_ros_msgs/msg/submap_entry.hpp"
 #include "cartographer_ros_msgs/msg/submap_list.hpp"
@@ -63,6 +62,8 @@
 #endif
 
 namespace cartographer_ros {
+
+namespace carto = ::cartographer;
 
 /**
  * @brief map_builder_bridge是map_builder的ros接口，
@@ -228,9 +229,6 @@ class LocalizationUpdaterBridge {
   std::unordered_map<int, TrajectoryOptions> trajectory_options_;
   std::unordered_map<int, std::unique_ptr<SensorBridge>> sensor_bridges_;
   std::unordered_map<int, size_t> trajectory_to_highest_marker_id_;
-
-  // 地图加载器
-  MapLoader map_loader_;
 };
 
 }  // namespace cartographer_ros

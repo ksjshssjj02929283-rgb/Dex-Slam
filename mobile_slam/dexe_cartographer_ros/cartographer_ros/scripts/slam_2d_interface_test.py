@@ -765,9 +765,6 @@ LOCALIZATION_SERVICES = {
     "/localization/relocalization": "nav_interfaces/srv/Relocalize",
     "/map_asset_manager/save_assets": "nav_interfaces/srv/SaveAssets",
     "/map_asset_manager/reload_data": "std_srvs/srv/Trigger",
-    "/map_asset_manager/transform_assets": (
-        "nav_interfaces/srv/TransformAssets"
-    ),
     "/localization/set_pose": "robot_localization/srv/SetPose",
     "/localization/start_filter": "std_srvs/srv/Trigger",
     "/localization/stop_filter": "std_srvs/srv/Trigger",
