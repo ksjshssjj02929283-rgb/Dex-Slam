@@ -187,6 +187,77 @@ bool TestRejectsNonDirectoryMapRoot(const fs::path& test_root) {
          Expect(fs::is_regular_file(map_root), "map root file was modified");
 }
 
+// 可加载判定与 map_manager 列地图同口径：只有 slam/map.yaml 或扁平 map.yaml 才算地图
+bool TestIsLoadableMapDirectory(const fs::path& test_root) {
+  const fs::path root = test_root / "loadable";
+  fs::create_directories(root / "leftover/slam");
+  WriteFile(root / "layered/slam/map.yaml", "image: map.png");
+  WriteFile(root / "flat/map.yaml", "image: map.png");
+  WriteFile(root / "pbstream_only/slam/map.pbstream", "x");
+  return Expect(!cartographer_ros::IsLoadableMapDirectory(root / "leftover"),
+                "empty slam/ left by a cancelled session must not count as a map") &&
+         Expect(!cartographer_ros::IsLoadableMapDirectory(root / "pbstream_only"),
+                "pbstream without map.yaml is not loadable") &&
+         Expect(!cartographer_ros::IsLoadableMapDirectory(root / "missing"),
+                "missing directory is not a map") &&
+         Expect(cartographer_ros::IsLoadableMapDirectory(root / "layered"),
+                "slam/map.yaml must count as a map") &&
+         Expect(cartographer_ros::IsLoadableMapDirectory(root / "flat"),
+                "flat map.yaml must count as a map");
+}
+
+// 新名字建图后取消：目录整个删掉，同名可以再建
+bool TestDiscardFreshSession(const fs::path& test_root) {
+  const fs::path map_root = test_root / "discard_fresh";
+  const auto session = cartographer_ros::ResetMapDirectory(map_root, "t3");
+  if (!Expect(session.success, session.error_message)) return false;
+  const auto discard = cartographer_ros::DiscardMapDirectory(session, /*restore_previous=*/false);
+  return Expect(discard.success, discard.error_message) &&
+         Expect(!discard.restored_previous, "nothing to restore for a fresh session") &&
+         Expect(!fs::exists(map_root / "t3"), "unsaved map directory must be removed") &&
+         Expect(!fs::exists(map_root / cartographer_ros::kMapTrashDirName),
+                "a fresh session must not leave anything in the trash");
+}
+
+// overwrite=true 覆盖已有地图后取消：旧地图（slam + assets）原样回到原位，回收站不留这份
+bool TestDiscardRestoresPreviousMap(const fs::path& test_root) {
+  const fs::path map_root = test_root / "discard_restore";
+  const fs::path map_directory = map_root / "office";
+  WriteFile(map_directory / "slam/map.yaml", "old yaml");
+  WriteFile(map_directory / "slam/map.pbstream", "old slam");
+  WriteFile(map_directory / "assets/map_assets.json", "old assets");
+  const auto session = cartographer_ros::ResetMapDirectory(map_root, "office");
+  if (!Expect(session.success, session.error_message) ||
+      !Expect(!session.trashed_directory.empty(), "previous map must be archived")) {
+    return false;
+  }
+  WriteFile(session.slam_directory / "map.pbstream", "half-written new session");
+  const auto discard = cartographer_ros::DiscardMapDirectory(session, /*restore_previous=*/true);
+  std::ifstream yaml(map_directory / "slam/map.yaml");
+  std::string yaml_text((std::istreambuf_iterator<char>(yaml)), std::istreambuf_iterator<char>());
+  std::ifstream pb(map_directory / "slam/map.pbstream");
+  std::string pb_text((std::istreambuf_iterator<char>(pb)), std::istreambuf_iterator<char>());
+  return Expect(discard.success, discard.error_message) &&
+         Expect(discard.restored_previous, "previous map must be reported as restored") &&
+         Expect(yaml_text == "old yaml" && pb_text == "old slam",
+                "restored map must be the original content, not the cancelled session") &&
+         Expect(fs::is_regular_file(map_directory / "assets/map_assets.json"),
+                "restored map must keep its assets") &&
+         Expect(!fs::exists(session.trashed_directory), "restored archive must leave the trash");
+}
+
+// 残留目录（不是地图）被归档后取消：不还原残留，删掉本次目录即可
+bool TestDiscardLeftoverIsNotRestored(const fs::path& test_root) {
+  const fs::path map_root = test_root / "discard_leftover";
+  fs::create_directories(map_root / "t3/slam");
+  const auto session = cartographer_ros::ResetMapDirectory(map_root, "t3");
+  if (!Expect(session.success, session.error_message)) return false;
+  const auto discard = cartographer_ros::DiscardMapDirectory(session, /*restore_previous=*/false);
+  return Expect(discard.success, discard.error_message) &&
+         Expect(!discard.restored_previous, "leftover must not be restored") &&
+         Expect(!fs::exists(map_root / "t3"), "map directory must be gone after cancel");
+}
+
 }  // namespace
 
 int main() {
@@ -198,7 +269,11 @@ int main() {
                        TestArchivesExistingMapDirectoryToTrash(root) &&
                        TestTrashKeepsMultipleArchivesInSameSecond(root) &&
                        TestRejectsUnsafeMapNames(root) &&
-                       TestRejectsNonDirectoryMapRoot(root);
+                       TestRejectsNonDirectoryMapRoot(root) &&
+                       TestIsLoadableMapDirectory(root) &&
+                       TestDiscardFreshSession(root) &&
+                       TestDiscardRestoresPreviousMap(root) &&
+                       TestDiscardLeftoverIsNotRestored(root);
   if (!success) {
     return 1;
   }

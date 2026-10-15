@@ -150,4 +150,42 @@ MapDirectoryResetResult ResetMapDirectory(const fs::path& map_folder,
   return result;
 }
 
+bool IsLoadableMapDirectory(const fs::path& map_directory) {
+  std::error_code error;
+  return fs::is_regular_file(map_directory / "slam" / "map.yaml", error) ||
+         fs::is_regular_file(map_directory / "map.yaml", error);
+}
+
+MapDirectoryDiscardResult DiscardMapDirectory(const MapDirectoryResetResult& session,
+                                              const bool restore_previous) {
+  MapDirectoryDiscardResult result;
+  if (session.map_directory.empty()) {
+    result.success = true;
+    return result;
+  }
+  std::error_code error;
+  fs::remove_all(session.map_directory, error);
+  if (error) {
+    result.error_message = "failed to remove unsaved map directory " +
+                           session.map_directory.string() + ": " + error.message();
+    return result;
+  }
+  if (restore_previous && !session.trashed_directory.empty()) {
+    if (!fs::is_directory(session.trashed_directory, error)) {
+      result.error_message = "archived previous map is missing: " +
+                             session.trashed_directory.string();
+      return result;
+    }
+    fs::rename(session.trashed_directory, session.map_directory, error);
+    if (error) {
+      result.error_message = "failed to restore previous map from " +
+                             session.trashed_directory.string() + ": " + error.message();
+      return result;
+    }
+    result.restored_previous = true;
+  }
+  result.success = true;
+  return result;
+}
+
 }  // namespace cartographer_ros
