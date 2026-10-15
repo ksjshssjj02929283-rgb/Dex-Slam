@@ -76,7 +76,9 @@ RosMapWritingPointsProcessor::Flush() {
         limits.max().y() -
             (offset.x() + image->height()) * limits.resolution());
     auto yaml_writer = file_writer_factory_(filestem_ + ".yaml");
-    WriteYaml(limits.resolution(), origin, pgm_filename, yaml_writer.get(), 0.65, 0.196);
+    // 这份 yaml 不对应任何 pbstream，不写 data_version。
+    WriteYaml(limits.resolution(), origin, pgm_filename, yaml_writer.get(), 0.65, 0.196,
+              absl::nullopt);
     CHECK(yaml_writer->Close());
   }
 

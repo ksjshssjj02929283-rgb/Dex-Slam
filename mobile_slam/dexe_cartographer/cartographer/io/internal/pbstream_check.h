@@ -81,6 +81,47 @@ CullingCriteria ResolveCriteria(
         mapping::proto::TrajectoryBuilderOptionsWithSensorIds>& all_options,
     bool* from_pbstream);
 
+struct AlignmentStats {
+  bool evaluated = false;        // 是否估计出可靠的正交结构方向
+  double residual_yaw_deg = 0.0; // 对齐结构化环境所需的残余旋转角（|new_yaw|，
+                                 // 已折叠到 [0, 45°]）；evaluated=false 时无意义
+  // δ：两族墙的正交误差。位姿图漂移会让两族墙不严格正交，此时**即使算法已达
+  // 最优，残余角也不可能小于 |δ|/2**（等支撑时两族平分误差）。有了它才能把
+  // 「没对齐」和「已达最优但地图本身不正交」区分开（单看 residual 分不出来）。
+  double orthogonality_error_deg = 0.0;
+  // 对齐后两族各自保留残余角的支撑加权 RMS
+  double rms_axis_residual_deg = 0.0;
+  // 本次估计所用的判据阈值。⚠️ 这几个值在建图节点走 lua 的 reset_map_origin_*，
+  // 而本工具在核心库、拿不到 ros 侧的配置加载器，只能用结构体默认值。
+  // 两者今天一致，但将来 lua 里一旦显式写了这些键就会分叉 —— 把判据打出来，
+  // 让「两边用了不同尺子」这件事**可见**，而不是靠记忆。
+  double min_line_length = 0.0;
+  int max_candidate_lines = 0;
+  double orthogonality_tolerance_deg = 0.0;
+  double min_secondary_support_ratio = 0.0;
+};
+
+// ALIGN-01 的分级判定。单看残余角分不清三种情况，故按 δ 给出物理可达下界：
+//   kNotAligned  ：残余 > kNotAlignedDeg，基本等于没做过对齐
+//   kPass        ：残余 ≤ tolerance
+//   kPassLimited ：残余 > tolerance，但 ≤ |δ|/2 + tolerance —— **算法已达最优**，
+//                  再小受地图自身非正交性限制，不是对齐质量问题
+//   kWarn        ：以上都不是，确属对齐质量不足
+enum class AlignmentGrade { kNotEvaluable, kNotAligned, kPass, kPassLimited, kWarn };
+
+// 残余角超过此值视为「根本没对齐」（典型未对齐样本为几十度）
+constexpr double kNotAlignedDeg = 5.0;
+
+AlignmentGrade GradeAlignment(const AlignmentStats& stats,
+                              double tolerance_deg);
+
+// 从保存的全局线地图 proto 判断地图是否对齐结构化环境：
+// 把 proto 线段轻量重建为 LineMap2DList（不重放观测历史，保持保存时角度
+// 原样），复用 mapping::EstimateAlignmentYaw 估计残余旋转角。
+// 无可靠正交结构（估计返回 nullopt）时 evaluated=false。
+AlignmentStats EvaluateStructureAlignment(
+    const mapping::proto::LineMap2DList& proto);
+
 }  // namespace pbstream_check_internal
 }  // namespace io
 }  // namespace cartographer

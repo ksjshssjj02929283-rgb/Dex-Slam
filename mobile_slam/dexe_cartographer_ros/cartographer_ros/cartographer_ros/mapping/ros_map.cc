@@ -21,6 +21,9 @@
 
 #include "cartographer_ros/mapping/ros_map.h"
 
+#include <fstream>
+#include <set>
+
 #include "absl/strings/str_cat.h"
 
 namespace cartographer_ros {
@@ -64,12 +67,96 @@ std::string LocalTimeIso8601() {
   return buf;
 }
 
+GridMapStats ComputeGridMapStats(const cv::Mat& rendered_mat,
+                                 const cv::Mat& filtered_mat,
+                                 const double resolution,
+                                 const double free_thresh) {
+  GridMapStats stats;
+  stats.resolution = resolution;
+  // total 取渲染图外框（含画布 padding），与写出的 map.png 尺寸一致。
+  stats.total_cells =
+      rendered_mat.empty()
+          ? 0u
+          : static_cast<uint32_t>(rendered_mat.cols) *
+                static_cast<uint32_t>(rendered_mat.rows);
+  // free 与 map_server 的判定一致：occupancy = (255 - p) / 255 < free_thresh。
+  const int free_pixel_thresh = static_cast<int>(255.0 * (1.0 - free_thresh));
+  stats.free_cells =
+      filtered_mat.empty()
+          ? 0u
+          : static_cast<uint32_t>(
+                cv::countNonZero(filtered_mat > free_pixel_thresh));
+  return stats;
+}
+
+std::string ReadMapCreatedAt(const std::string& yaml_path) {
+  std::ifstream in(yaml_path);
+  if (!in.is_open()) return "";
+  std::string line;
+  while (std::getline(in, line)) {
+    const size_t colon = line.find(':');
+    if (colon == std::string::npos) continue;
+    std::string key = line.substr(0, colon);
+    const size_t kb = key.find_first_not_of(" \t");
+    const size_t ke = key.find_last_not_of(" \t\r");
+    if (kb == std::string::npos) continue;
+    key = key.substr(kb, ke - kb + 1);
+    if (key != "created_at") continue;
+    std::string value = line.substr(colon + 1);
+    const size_t vb = value.find_first_not_of(" \t");
+    const size_t ve = value.find_last_not_of(" \t\r");
+    if (vb == std::string::npos) return "";
+    value = value.substr(vb, ve - vb + 1);
+    // 去掉可能的引号（两种写法都接受）
+    if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+        value.back() == value.front()) {
+      value = value.substr(1, value.size() - 2);
+    }
+    return value;
+  }
+  return "";
+}
+
+std::vector<std::string> FindDroppedYamlKeys(
+    const std::string& existing_yaml_path, const bool with_area_stats) {
+  std::vector<std::string> dropped;
+  std::ifstream in(existing_yaml_path);
+  if (!in.is_open()) return dropped;
+  // 本工具重写 map.yaml 时会产出的全部键（见 WriteYaml）。
+  std::set<std::string> written = {
+      "image",  "line_map",        "cloud_map",   "highlight_cloud_map",
+      "resolution", "origin",      "negate",      "occupied_thresh",
+      "free_thresh",
+      // created_at 由调用方读出后原样回写（ReadMapCreatedAt），不算丢。
+      "created_at",
+      // data_version 由调用方按写出的 pbstream 重新给出，不算丢。
+      "data_version"};
+  if (with_area_stats) {
+    written.insert("total_area_m2");
+    written.insert("effective_area_m2");
+  }
+  std::string line;
+  while (std::getline(in, line)) {
+    const size_t colon = line.find(':');
+    if (colon == std::string::npos) continue;
+    std::string key = line.substr(0, colon);
+    // 去首尾空白
+    const size_t b = key.find_first_not_of(" \t");
+    const size_t e = key.find_last_not_of(" \t\r");
+    if (b == std::string::npos) continue;
+    key = key.substr(b, e - b + 1);
+    if (key.empty() || key[0] == '#') continue;
+    if (written.count(key) == 0) dropped.push_back(key);
+  }
+  return dropped;
+}
+
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
                double occ_thresh, double free_thresh,
-               const GridMapStats* stats,
-               const std::string& created_at)
+               const absl::optional<std::string>& data_version,
+               const GridMapStats* stats, const std::string& created_at)
 {
   // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
   // 这样无论地图目录位于何处（staging / 正式 / backup / 被整体移动），
@@ -102,19 +189,14 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
   // 地图创建时刻，机器人本地时间 ISO 8601、无时区后缀；map_manager get_maps 以 MapInfo.created_at 透传给上层。
   // 新建图取当前时间；定位侧更新保存（save_map）传入已加载地图的原值，创建时刻不随更新漂移
   absl::StrAppend(&output, "created_at: ", created_at.empty() ? LocalTimeIso8601() : created_at, "\n");
-  file_writer->Write(output.data(), output.size());
-}
-
-std::string ReadCreatedAtFromYaml(const std::string& yaml_path) {
-  std::ifstream in(yaml_path);
-  std::string line;
-  while (std::getline(in, line)) {
-    if (line.rfind("created_at:", 0) != 0) continue;
-    std::string v = line.substr(std::string("created_at:").size());
-    const size_t b = v.find_first_not_of(" \t'\""), e = v.find_last_not_of(" \t\r'\"");
-    return (b == std::string::npos) ? "" : v.substr(b, e - b + 1);
+  // 同目录 map.pbstream 的数据版本（语义见 ros_map.h WriteYaml 注释）。
+  if (data_version.has_value()) {
+    absl::StrAppend(&output, "data_version: ",
+                    data_version->empty() ? std::string("legacy")
+                                                   : *data_version,
+                    "\n");
   }
-  return "";
+  file_writer->Write(output.data(), output.size());
 }
 
 void WritePng(const ::cartographer::io::Image& image, 

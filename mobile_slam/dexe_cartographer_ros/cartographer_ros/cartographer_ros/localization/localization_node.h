@@ -90,6 +90,14 @@ public:
   // Public controls
   void FinishAllTrajectories();
 
+  // Returns true while 'trajectory_id' is still allowed to consume sensor data.
+  // Called from the SubscribeWithHandler() lambda for every sensor topic:
+  // destroying the rclcpp::Subscription does not cancel a message the executor
+  // has already dequeued, and such a callback would otherwise run against an
+  // already-erased sensor bridge after FinishTrajectoryUnderLock() releases
+  // localization_updater_mutex_.
+  bool IsTrajectoryAcceptingData(int trajectory_id);
+
   // Serialization
   void SerializeState(const std::string& filename, const bool include_unfinished_submaps);
   void LoadState(const std::string& state_filename, bool load_frozen_state);
@@ -256,6 +264,13 @@ private:
     ::cartographer::common::FixedRatioSampler imu_sampler;
     ::cartographer::common::FixedRatioSampler landmark_sampler;
   };
+
+  // Non-throwing lookup of the trajectory's sensor samplers. Returns nullptr
+  // when the trajectory does not exist, so a stale or malformed message can
+  // never throw out of a sensor callback. Callers must hold
+  // sensor_samplers_mutex_.
+  TrajectorySensorSamplers* GetSensorSamplersLocked(int trajectory_id)
+      EXCLUSIVE_LOCKS_REQUIRED(sensor_samplers_mutex_);
 
   std::map<int, rclcpp::Time> last_published_tf_stamps_;
   std::unordered_map<int, TrajectorySensorSamplers> sensor_samplers_ GUARDED_BY(sensor_samplers_mutex_);

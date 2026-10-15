@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "cartographer/common/thread_pool.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/mapping/map_builder_interface.h"
 #include "cartographer/mapping/pose_graph.h"
 #include "cartographer/mapping/2d/submap_2d.h"
@@ -110,10 +111,25 @@ class MapBuilder : public MapBuilderInterface {
   // Generate global static submap from all trajectory nodes
   std::shared_ptr<Submap2D> GenerateGlobalStaticSubmap(double resolution);
 
+  // 重置地图原点：把位姿图全局位姿变换到新坐标系（'T_old_to_new' 为
+  // 旧系 → 新系），并使已缓存的 global_static_submap_ 失效（下次
+  // SerializeState/SerializeStateToFile 会基于变换后的节点位姿重建）。
+  void ApplyOriginTransform(const transform::Rigid3d& T_old_to_new) override;
+
+  // 从位姿图节点线特征聚合全局线特征地图并估计对齐结构化环境的新原点朝向。
+  // 与 GenerateGlobalStaticSubmap 的线特征处理（跟踪 → 全局化 → culling）一致，
+  // 但不构建栅格/点云，因此可在 SerializeState 之前低成本调用。
+  // 返回新原点在旧地图坐标系下的朝向（|yaw| ≤ π/4），无可靠正交结构时返回
+  // nullopt。
+  absl::optional<double> EstimateStructureAlignmentYaw(
+      const StructureAlignmentOptions& options) override;
+
   // 返回已缓存的全局静态 Submap（SerializeStateToFile 后可用），否则返回 nullptr
   void SetProgressCallback(std::function<void(size_t, size_t)> callback) override {
     progress_callback_ = std::move(callback);
   }
+
+  std::string GetPbstreamDataVersion() const override { return data_version_; }
 
   std::shared_ptr<Submap2D> GetGlobalStaticSubmap() const override {
     return global_static_submap_;
@@ -143,6 +159,11 @@ class MapBuilder : public MapBuilderInterface {
   
   // Global static submap generated from all trajectory nodes
   std::shared_ptr<Submap2D> global_static_submap_;
+  // 保存时写入 pbstream 的数据版本（io/pbstream_version.h）。起始为本程序的
+  // 版本；每加载一张图就取两者较低者 —— 加载旧图后再保存（定位回写 / 续建），
+  // 那些节点没有原始 range data，不能被标成新版本。
+  std::string data_version_ = io::kPbstreamDataVersion;
+
   // 逐 node 处理进度回调（可为空）
   std::function<void(size_t, size_t)> progress_callback_;
   

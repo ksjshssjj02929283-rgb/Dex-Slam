@@ -427,6 +427,15 @@ private:
 
     } catch (const std::exception& e) {
       RCLCPP_ERROR(get_logger(), "Failed to start localization: %s", e.what());
+      // LocalizationNode 的 100ms 定时器在构造函数中已武装
+      // （localization_node.cc:231），且发布路径经 bridge 无判空转发。
+      // 若不在此销毁半初始化的对象，重试前定时器就会反复调用
+      // GetLocalizationState() 并解引用未建立的 trajectory builder 而 SIGSEGV。
+      // 故失败时必须完整回滚，随后才能安全重试。
+      map_persistence_manager_.reset();
+      localization_node_.reset();
+      node_options_.reset();
+      trajectory_options_.reset();
       state_ = LocalizationState::ERROR;
       return false;
     }

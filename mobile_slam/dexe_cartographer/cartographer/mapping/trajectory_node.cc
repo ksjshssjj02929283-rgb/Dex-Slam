@@ -24,6 +24,16 @@
 namespace cartographer {
 namespace mapping {
 
+std::vector<sensor::RangeData> GetRangeDatas(const TrajectoryNode::Data& data) {
+  if (!data.range_datas.empty()) return data.range_datas;
+  std::vector<sensor::RangeData> out;
+  out.reserve(data.compressed_range_datas.size());
+  for (const auto& compressed : data.compressed_range_datas) {
+    out.push_back(sensor::Decompress(compressed));
+  }
+  return out;
+}
+
 proto::TrajectoryNodeData ToProto(const TrajectoryNode::Data& constant_data) {
   proto::TrajectoryNodeData proto;
   proto.set_timestamp(common::ToUniversal(constant_data.time));
@@ -33,6 +43,11 @@ proto::TrajectoryNodeData ToProto(const TrajectoryNode::Data& constant_data) {
   // 直接使用合并后的点云进行序列化
   *proto.mutable_filtered_gravity_aligned_point_cloud() =
     sensor::CompressedPointCloud(constant_data.filtered_gravity_aligned_point_cloud).ToProto();
+  // 字段 10：高亮点云。FromProto 一直在读它，但此前这里从未写入，加载回来的
+  // 节点高亮点云恒为空 —— 离线重建（对齐 / 替换 / 合并）的 highlight_cloud
+  // 因此是空的。
+  *proto.mutable_highlight_point_cloud() =
+    sensor::CompressedPointCloud(constant_data.highlight_point_cloud).ToProto();
   for (const auto & lines : constant_data.lines) {
     for (int i = 0; i < static_cast<int>(lines.second.size()); i++) {
       auto * item = proto.add_lines();
@@ -56,6 +71,20 @@ proto::TrajectoryNodeData ToProto(const TrajectoryNode::Data& constant_data) {
     constant_data.rotational_scan_matcher_histogram(i));
   }
   *proto.mutable_local_pose() = transform::ToProto(constant_data.local_pose);
+
+  // 字段 11：去畸变原始 range data。
+  //   - 建图期：range_datas 由前端填入 → 压缩后写入；
+  //   - 加载来的节点（定位 / 续建）：range_datas 为空，原样透传压缩数据，
+  //     保证定位回写 pbstream（ResetMapOrigin / save_map）时不丢。
+  if (!constant_data.range_datas.empty()) {
+    for (const auto& range_data : constant_data.range_datas) {
+      *proto.add_range_datas() = sensor::ToProto(sensor::Compress(range_data));
+    }
+  } else {
+    for (const auto& compressed : constant_data.compressed_range_datas) {
+      *proto.add_range_datas() = sensor::ToProto(compressed);
+    }
+  }
   return proto;
 }
 
@@ -77,8 +106,15 @@ TrajectoryNode::Data FromProto(const proto::TrajectoryNodeData& proto) {
     reflectors.push_back(reflector);
   }
 
-  // 创建空的range_datas，因为protobuf中没有保存这个信息
+  // range_datas 保持为空：pbstream 里的 range data（字段 11）只以压缩态读入
+  // compressed_range_datas，不在这里解压 —— 定位不需要它，解压要多占
+  // ≈57 KB/节点。需要时用 GetRangeDatas() 按需解压。
   std::vector<sensor::RangeData> range_datas;
+  std::vector<sensor::CompressedRangeData> compressed_range_datas;
+  compressed_range_datas.reserve(proto.range_datas_size());
+  for (const auto& compressed_proto : proto.range_datas()) {
+    compressed_range_datas.push_back(sensor::FromProto(compressed_proto));
+  }
 
   return TrajectoryNode::Data{
     common::FromUniversal(proto.timestamp()),
@@ -95,7 +131,8 @@ TrajectoryNode::Data FromProto(const proto::TrajectoryNodeData& proto) {
     sensor::CompressedPointCloud(proto.low_resolution_point_cloud())
       .Decompress(),
     rotational_scan_matcher_histogram,
-    transform::ToRigid3(proto.local_pose())};
+    transform::ToRigid3(proto.local_pose()),
+    std::move(compressed_range_datas)};
 }
 
 }  // namespace mapping

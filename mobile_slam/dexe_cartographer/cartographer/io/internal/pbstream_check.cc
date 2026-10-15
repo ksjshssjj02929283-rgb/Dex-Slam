@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -28,14 +29,20 @@
 
 #include <google/protobuf/repeated_field.h>
 
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
+#include "cartographer/mapping/2d/line_map_2d.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 
 DEFINE_string(json, "", "Write machine readable check result to this path.");
 DEFINE_int32(min_cloud_points, 1,
              "Minimum point count in the global static submap cloud.");
+DEFINE_double(align_tolerance_deg, 1.0,
+              "ALIGN-01: residual rotation not exceeding this value (deg) "
+              "counts as aligned to the structural environment.");
 
 using cartographer::mapping::proto::SerializedData;
 
@@ -96,17 +103,89 @@ CullingCriteria ResolveCriteria(
                          kDefaultLineCullingObs};
 }
 
+AlignmentStats EvaluateStructureAlignment(
+    const mapping::proto::LineMap2DList& proto) {
+  // proto → 运行时 LineMap2DList 的轻量重建（submap_2d.cc FromProto 的子集）：
+  // 只重建主线段数据、不重放 line_data_list 观测历史 —— 检查的正是保存时的
+  // 角度，重放反而会触发重拟合。
+  std::map<int, mapping::MapLine2D> line_map_data;
+  for (const auto& map_line_proto : proto.line_map_data()) {
+    const auto& line_data_proto = map_line_proto.line_data();
+    const sensor::LineData line_data(
+        Eigen::Vector2d(line_data_proto.begin_x(), line_data_proto.begin_y()),
+        Eigen::Vector2d(line_data_proto.end_x(), line_data_proto.end_y()),
+        line_data_proto.weight());
+    mapping::MapLine2D map_line(mapping::MapLine2D::static_line,
+                                map_line_proto.global_id(), line_data);
+    map_line.SetLocalId(map_line_proto.local_id());
+    map_line.SetInliers(map_line_proto.inliers());
+    line_map_data.insert({map_line_proto.local_id(), std::move(map_line)});
+  }
+  const mapping::LineMap2DList line_map(proto.latest_local_id(),
+                                        std::move(line_map_data));
+
+  // 用结构体默认阈值：保存来的线地图已做过 culling，此处仅做结构方向估计。
+  // 这几个值会随 stats 一起打出来（见 AlignmentStats 注释：判据必须可见）。
+  const mapping::StructureAlignmentOptions options;
+  constexpr double kRadToDeg = 180.0 / M_PI;
+  AlignmentStats stats;
+  stats.min_line_length = options.min_line_length;
+  stats.max_candidate_lines = options.max_candidate_lines;
+  stats.orthogonality_tolerance_deg = options.orthogonality_tolerance_deg;
+  stats.min_secondary_support_ratio = options.min_secondary_support_ratio;
+
+  mapping::StructureAlignmentDiagnostics diag;
+  const auto yaw = mapping::EstimateAlignmentYaw(line_map, options, &diag);
+  if (!yaw.has_value()) return stats;  // evaluated 保持 false，但判据已填
+  stats.evaluated = true;
+  stats.residual_yaw_deg = std::abs(*yaw) * kRadToDeg;
+  stats.orthogonality_error_deg = std::abs(diag.orthogonality_error) * kRadToDeg;
+  stats.rms_axis_residual_deg = diag.rms_axis_residual * kRadToDeg;
+  return stats;
+}
+
+AlignmentGrade GradeAlignment(const AlignmentStats& stats,
+                              const double tolerance_deg) {
+  if (!stats.evaluated) return AlignmentGrade::kNotEvaluable;
+  if (stats.residual_yaw_deg > kNotAlignedDeg) return AlignmentGrade::kNotAligned;
+  if (stats.residual_yaw_deg <= tolerance_deg) return AlignmentGrade::kPass;
+  // |δ|/2 是等支撑时的物理下界；加上 tolerance 作为估计噪声的容差。
+  const double achievable_bound =
+      0.5 * stats.orthogonality_error_deg + tolerance_deg;
+  if (stats.residual_yaw_deg <= achievable_bound) {
+    return AlignmentGrade::kPassLimited;
+  }
+  return AlignmentGrade::kWarn;
+}
+
 }  // namespace pbstream_check_internal
 
 namespace {
 
+using pbstream_check_internal::AlignmentStats;
 using pbstream_check_internal::CollectLineStats;
 using pbstream_check_internal::CullingCriteria;
+using pbstream_check_internal::EvaluateStructureAlignment;
 using pbstream_check_internal::kDefaultMaxLineLength;
 using pbstream_check_internal::kDefaultMinLineLength;
 using pbstream_check_internal::kMinLineInliers;
 using pbstream_check_internal::LineStats;
 using pbstream_check_internal::ResolveCriteria;
+
+using pbstream_check_internal::AlignmentGrade;
+using pbstream_check_internal::GradeAlignment;
+using pbstream_check_internal::kNotAlignedDeg;
+
+const char* AlignmentGradeName(AlignmentGrade grade) {
+  switch (grade) {
+    case AlignmentGrade::kNotEvaluable: return "NOT_EVALUABLE";
+    case AlignmentGrade::kNotAligned:   return "NOT_ALIGNED";
+    case AlignmentGrade::kPass:         return "PASS";
+    case AlignmentGrade::kPassLimited:  return "PASS_LIMITED";
+    case AlignmentGrade::kWarn:         return "WARN";
+  }
+  return "?";
+}
 
 enum class Level { kPass, kWarn, kFail };
 
@@ -164,10 +243,12 @@ struct GlobalSubmapStats {
   bool has_pyramid = false;
   int pyramid_levels = 0;
   LineStats lines;
+  AlignmentStats alignment;
 };
 
 void WriteJson(const std::string& path, const std::string& pbstream_filename,
-               uint32_t format_version, const std::map<std::string, int>& counts,
+               uint32_t format_version, const std::string& data_version,
+               const std::map<std::string, int>& counts,
                int trajectory_nodes, int trajectory_submaps,
                const GlobalSubmapStats& gs, const CullingCriteria& criteria,
                bool criteria_from_pbstream,
@@ -182,6 +263,7 @@ void WriteJson(const std::string& path, const std::string& pbstream_filename,
   out << "{\n";
   out << "  \"file\": \"" << JsonEscape(pbstream_filename) << "\",\n";
   out << "  \"format_version\": " << format_version << ",\n";
+  out << "  \"data_version\": \"" << JsonEscape(data_version) << "\",\n";
   out << "  \"trajectory\": {\"nodes\": " << trajectory_nodes
       << ", \"submaps\": " << trajectory_submaps << "},\n";
   out << "  \"serialized_data_counts\": {";
@@ -213,7 +295,23 @@ void WriteJson(const std::string& path, const std::string& pbstream_filename,
   out << "    \"lines\": {\"field_present\": " << gs.has_line_field
       << ", \"count\": " << gs.lines.count
       << ", \"survive_pbstream_criteria\": " << gs.lines.survive_pbstream
-      << ", \"survive_dynamic_defaults\": " << gs.lines.survive_defaults << "}\n";
+      << ", \"survive_dynamic_defaults\": " << gs.lines.survive_defaults << "},\n";
+  out << std::boolalpha
+      << "    \"alignment\": {\"evaluated\": " << gs.alignment.evaluated
+      << ", \"residual_yaw_deg\": " << gs.alignment.residual_yaw_deg
+      << ", \"tolerance_deg\": " << FLAGS_align_tolerance_deg
+      << ", \"orthogonality_error_deg\": "
+      << gs.alignment.orthogonality_error_deg
+      << ", \"rms_axis_residual_deg\": " << gs.alignment.rms_axis_residual_deg
+      << ", \"grade\": \"" << AlignmentGradeName(GradeAlignment(
+                                  gs.alignment, FLAGS_align_tolerance_deg))
+      << "\", \"criteria\": {\"min_line_length\": "
+      << gs.alignment.min_line_length << ", \"max_candidate_lines\": "
+      << gs.alignment.max_candidate_lines
+      << ", \"orthogonality_tolerance_deg\": "
+      << gs.alignment.orthogonality_tolerance_deg
+      << ", \"min_secondary_support_ratio\": "
+      << gs.alignment.min_secondary_support_ratio << "}}\n";
   out << "  },\n";
   out << "  \"checks\": [\n";
   for (size_t i = 0; i < checks.size(); ++i) {
@@ -247,6 +345,7 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
   io::ProtoStreamReader reader(pbstream_filename);
   io::ProtoStreamDeserializer deserializer(&reader);
   const uint32_t format_version = deserializer.header().format_version();
+  const std::string data_version = deserializer.header().data_version();
 
   bool criteria_from_pbstream = false;
   const CullingCriteria criteria = ResolveCriteria(
@@ -277,11 +376,34 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
   };
 
   GlobalSubmapStats gs;
+  // 持久化的去畸变原始 range data（TrajectoryNodeData 字段 11）统计：
+  // 有它，离线对齐 / 替换 / 合并从 node 重建时才能与建图输出逐 cell 一致。
+  int nodes_with_range_data = 0;
+  int64_t range_data_points = 0;
+  int64_t range_data_bytes = 0;
+  int nodes_with_highlight = 0;
+  int64_t highlight_points = 0;
   SerializedData proto;
   while (deserializer.ReadNextSerializedData(&proto)) {
     auto it = data_case_to_name.find(proto.data_case());
     if (it == data_case_to_name.end()) continue;
     ++counts[it->second];
+    if (proto.data_case() == SerializedData::kNode &&
+        proto.node().node_data().highlight_point_cloud().num_points() > 0) {
+      ++nodes_with_highlight;
+      highlight_points +=
+          proto.node().node_data().highlight_point_cloud().num_points();
+    }
+    if (proto.data_case() == SerializedData::kNode &&
+        proto.node().node_data().range_datas_size() > 0) {
+      ++nodes_with_range_data;
+      for (const auto& rd : proto.node().node_data().range_datas()) {
+        range_data_points += rd.returns().num_points() + rd.misses().num_points();
+        // CompressedPointCloud 每个 int32 即 4 字节（点 + 块头）
+        range_data_bytes +=
+            4 * (rd.returns().point_data_size() + rd.misses().point_data_size());
+      }
+    }
     if (proto.data_case() == SerializedData::kSubmap) {
       if (proto.submap().has_submap_2d()) ++counts["submap_2d"];
       if (proto.submap().has_submap_3d()) ++counts["submap_3d"];
@@ -312,6 +434,7 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
       if (s2d.has_line_map_2d_list()) {
         gs.has_line_field = true;
         CollectLineStats(s2d.line_map_2d_list(), criteria, &gs.lines);
+        gs.alignment = EvaluateStructureAlignment(s2d.line_map_2d_list());
       }
     }
   }
@@ -330,6 +453,31 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
         "trajectory nodes = " + std::to_string(trajectory_nodes));
   } else {
     add(Level::kFail, "STRUCT-01", "no trajectory node in pbstream");
+  }
+
+  // 持久化 range data（不影响定位可用性，只影响离线重建能否无损，故只 WARN）。
+  // 离线工具按 data_version 决定重建方式（io/pbstream_version.h），这里据此判定。
+  {
+    const int total_nodes = counts["node"];
+    std::ostringstream os;
+    os << "data_version " << PbstreamDataVersionLabel(data_version)
+       << ", persisted range data on " << nodes_with_range_data << "/"
+       << total_nodes << " nodes (" << range_data_points << " pts, ~"
+       << range_data_bytes / 1024 << " KB compressed in memory)";
+    if (!PbstreamDataVersionHasRangeData(data_version)) {
+      add(Level::kWarn, "RANGE-01", os.str() + ": legacy map",
+          "offline align/replace/merge rebuild from the filtered cloud as "
+          "before; free space from no-return beams is lost. Re-map with a "
+          "current build to fix");
+    } else if (total_nodes > 0 && nodes_with_range_data == total_nodes) {
+      add(Level::kPass, "RANGE-01",
+          os.str() + ": offline rebuild reproduces the mapping grid");
+    } else {
+      add(Level::kWarn, "RANGE-01",
+          os.str() + ": inconsistent with the data version",
+          "nodes without range data will be synthesized from the filtered "
+          "cloud; the file was likely produced by a mixed toolchain");
+    }
   }
 
   if (gs.present) {
@@ -421,6 +569,74 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
       }
     }
 
+    // 结构化对齐（从线特征角度判断；未对齐只 WARN：不影响定位可用性，
+    // 只影响栅格/结构化适配）
+    if (!gs.has_line_field || gs.lines.count == 0) {
+      add(Level::kWarn, "ALIGN-01",
+          "no line features; structural alignment not evaluable");
+    } else {
+      // 判据一并打出：本工具用结构体默认阈值，而建图节点走 lua 的
+      // reset_map_origin_*。今天一致，将来 lua 显式写了就会分叉 ——
+      // 把尺子摆在数字旁边，分叉时一眼可辨（见 AlignmentStats 注释）。
+      std::ostringstream criteria;
+      criteria << "criteria: min_line_length=" << gs.alignment.min_line_length
+               << "m, max_candidate_lines=" << gs.alignment.max_candidate_lines
+               << ", orthogonality_tolerance=" << std::fixed
+               << std::setprecision(1)
+               << gs.alignment.orthogonality_tolerance_deg
+               << " deg, min_secondary_support_ratio="
+               << std::setprecision(2)
+               << gs.alignment.min_secondary_support_ratio;
+      std::ostringstream os;
+      os << std::fixed << std::setprecision(2);
+      switch (GradeAlignment(gs.alignment, FLAGS_align_tolerance_deg)) {
+        case AlignmentGrade::kNotEvaluable:
+          add(Level::kWarn, "ALIGN-01",
+              "lines present but no reliable orthogonal structure; structural "
+              "alignment not evaluable",
+              criteria.str());
+          break;
+        case AlignmentGrade::kPass:
+          os << "PASS: map aligned to structure (residual "
+             << gs.alignment.residual_yaw_deg << " deg <= "
+             << FLAGS_align_tolerance_deg << " deg)";
+          add(Level::kPass, "ALIGN-01", os.str(), criteria.str());
+          break;
+        case AlignmentGrade::kPassLimited:
+          // 已达算法最优：残余角受地图自身两族墙不正交（δ）限制，物理上不可能
+          // 更小。此前这种情况与「对齐质量差」在报告里长得一模一样。
+          os << "PASS-LIMITED: alignment is at the algorithmic optimum for this "
+                "map. Residual " << gs.alignment.residual_yaw_deg
+             << " deg exceeds tolerance " << FLAGS_align_tolerance_deg
+             << " deg, but the map's two wall families are off-orthogonal by "
+             << gs.alignment.orthogonality_error_deg
+             << " deg, so the residual cannot go below "
+             << 0.5 * gs.alignment.orthogonality_error_deg << " deg";
+          add(Level::kPass, "ALIGN-01", os.str(),
+              "not an alignment-quality problem; the map itself is not "
+              "orthogonal (pose graph drift). " + criteria.str());
+          break;
+        case AlignmentGrade::kNotAligned:
+          os << "NOT ALIGNED: residual rotation "
+             << gs.alignment.residual_yaw_deg << " deg > " << kNotAlignedDeg
+             << " deg — the map looks like it was never aligned";
+          add(Level::kWarn, "ALIGN-01", os.str(),
+              "re-save with reset_map_origin_to_align_structure = true, or run "
+              "align_map_tool on the saved map. " + criteria.str());
+          break;
+        case AlignmentGrade::kWarn:
+          os << "WARN: residual rotation " << gs.alignment.residual_yaw_deg
+             << " deg > tolerance " << FLAGS_align_tolerance_deg
+             << " deg and is NOT explained by the map's orthogonality error ("
+             << gs.alignment.orthogonality_error_deg
+             << " deg) — alignment quality is insufficient";
+          add(Level::kWarn, "ALIGN-01", os.str(),
+              "alignment ran but did not converge well; check line feature "
+              "quality. " + criteria.str());
+          break;
+      }
+    }
+
     // 全局定位金字塔缓存
     if (gs.has_pyramid) {
       add(Level::kPass, "PYRAMID-01",
@@ -450,6 +666,10 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
   // ---------------- 输出 ----------------
   std::cout << "\n[COUNT]  trajectory_nodes = " << trajectory_nodes
             << "   submaps = " << trajectory_submaps << "\n";
+  std::cout << "[COUNT]  data_version = "
+            << PbstreamDataVersionLabel(data_version) << "\n";
+  std::cout << "[COUNT]  node highlight clouds = " << nodes_with_highlight
+            << " nodes, " << highlight_points << " pts\n";
   std::cout << "[COUNT]  serialized:";
   for (const auto& entry : counts) {
     std::cout << "  " << entry.first << "=" << entry.second;
@@ -463,7 +683,10 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
     std::cout << "           lines       = " << gs.lines.count << " segments\n";
     std::cout << "           pyramid     = " << gs.pyramid_levels
               << " levels\n";
-    std::cout << "           range_data  = " << gs.num_range_data << "\n";
+    // 注意：这是插入全局子图的 range data 次数（Submap2D.num_range_data），
+    // 不是 pbstream 里存了多少扫描数据 —— 后者见 RANGE-01。
+    std::cout << "           inserted_range_data = " << gs.num_range_data
+              << "\n";
   }
   std::cout << "[CRIT ]  culling criteria from "
             << (criteria_from_pbstream ? "pbstream" : "built-in defaults")
@@ -489,7 +712,8 @@ int Run(const std::string& pbstream_filename, const std::string& json_path,
             << warnings << " warning(s))\n\n";
 
   if (!json_path.empty()) {
-    WriteJson(json_path, pbstream_filename, format_version, counts,
+    WriteJson(json_path, pbstream_filename, format_version, data_version,
+              counts,
               trajectory_nodes, trajectory_submaps, gs, criteria,
               criteria_from_pbstream, checks, verdict, exit_code);
   }
@@ -503,7 +727,8 @@ int pbstream_check(int argc, char* argv[]) {
   ss << "\n\n"
      << "Checks whether a pbstream satisfies the localization requirements.\n\n"
      << "Usage: " << argv[0] << " " << argv[1]
-     << " <pbstream_filename> [--json=<path>] [--min_cloud_points=N]\n\n"
+     << " <pbstream_filename> [--json=<path>] [--min_cloud_points=N]\n"
+     << "       [--align_tolerance_deg=D]\n\n"
      << "Exit code: 0 = ok (warnings allowed), 1 = requirements not met,\n"
      << "           2 = file missing / empty / unreadable\n";
   google::SetUsageMessage(ss.str());

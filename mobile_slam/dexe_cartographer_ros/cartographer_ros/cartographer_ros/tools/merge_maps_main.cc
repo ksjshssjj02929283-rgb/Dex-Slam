@@ -33,6 +33,7 @@
 
 #include "cartographer/common/port.h"
 #include "cartographer/io/proto_stream.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/submap_painter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
@@ -49,6 +50,7 @@
 #include "cartographer/transform/rigid_transform.h"
 #include "cartographer/transform/transform.h"
 #include "cartographer_ros/mapping/ros_map.h"
+#include "cartographer_ros/tools/map_transform_common.h"
 #include "gflags/gflags.h"
 #include "glog/logging.h"
 #include <rclcpp/rclcpp.hpp>
@@ -61,6 +63,9 @@ DEFINE_int32(min_votes, 10, "连续 scan match 成功帧数达到 N 后触发 Ce
 DEFINE_double(resolution, 0.05, "输出地图分辨率（米/格）");
 DEFINE_double(occ_thresh, 0.65, "占用阈值");
 DEFINE_double(free_thresh, 0.196, "空闲阈值");
+DEFINE_string(navigation_map_filter_mode, "normal",
+              "导航图噪点滤除模式（与建图节点同名参数一致）");
+DEFINE_bool(save_debug_map, false, "是否保存噪声过滤的中间调试图");
 
 namespace cartographer_ros {
 namespace {
@@ -255,16 +260,27 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
       data_a.global_submap->grid();
   CHECK(global_grid != nullptr) << "global_static_submap has no grid";
 
-  // global_submap 的 local_pose：submap 局部坐标系 → global A 坐标系
-  // 通常为 Identity（global submap 直接在 global frame 下建立）
-  const ::cartographer::transform::Rigid2d global_submap_pose_2d(
-      data_a.global_submap->local_pose().translation().head<2>(),
-      ::cartographer::transform::GetYaw(data_a.global_submap->local_pose()));
-
-  LOG(INFO) << "global_static_submap local_pose: ("
-            << global_submap_pose_2d.translation().x() << ", "
-            << global_submap_pose_2d.translation().y()
-            << " yaw=" << global_submap_pose_2d.rotation().angle() << ")";
+  // ⚠️ global_static_submap 的 local_pose **不是**「submap 局部系 → global A 系」
+  // 的变换，不得参与位姿运算。该 submap 的栅格本身就建立在全局系上
+  // （MapLimits.max 取首节点的全局位姿，插入的 range data 也是全局坐标），
+  // 所以 FCSM / Ceres 的输入输出都已经在全局系；local_pose 只是与
+  // limits().max() 相等的记账值（这是 Submap2D 构造约定，非不变式：可被
+  // set_local_pose() 改写）。需要地图中心请用 Submap2D::GridCenterXY()，
+  // 定位侧曾把它当 ±15m 窗口中心，导致点云被裁空、启动失败并 SIGSEGV。
+  // 定位侧的全局重定位（localization/internal/2d/pose_initializer_2d.cc）
+  // 同样不引用该字段。
+  //
+  // 此处原先假设它「通常为 Identity」并把它乘进了匹配结果 —— 该假设不成立：
+  // 建图直出的图它等于首节点全局 XY（接近 0 但非 0），而从 node 重建过
+  // global_static_submap 的图（align / replace 产物）它等于点云包围盒角点，
+  // 可达几十米。乘进去会让 T_src_in_tgt 整体平移同样的量。
+  // 这里只打日志用于排查，不参与计算。
+  const auto& tgt_static_local_pose = data_a.global_submap->local_pose();
+  LOG(INFO) << "global_static_submap local_pose (diagnostic only, not used in "
+               "pose math): ("
+            << tgt_static_local_pose.translation().x() << ", "
+            << tgt_static_local_pose.translation().y() << " yaw="
+            << ::cartographer::transform::GetYaw(tgt_static_local_pose) << ")";
 
   // ─── 构建 FCSM（单个，基于全局 grid）───
   ::cartographer::mapping::scan_matching::proto::FastCorrelativeScanMatcherOptions2D
@@ -311,7 +327,7 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
 
   // ─── 连续帧追踪 ───
   struct ConsecutiveFrame {
-    ::cartographer::transform::Rigid2d pose_in_submap;  // FCSM 返回（submap 局部坐标系）
+    ::cartographer::transform::Rigid2d pose_in_A;  // FCSM 返回（已在 global A 坐标系）
     ::cartographer::transform::Rigid2d node_pose_in_B;
     ::cartographer::sensor::PointCloud point_cloud;
     std::vector<::cartographer::sensor::LineData> line_data_list;  // gravity-aligned 线特征
@@ -335,9 +351,10 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
 
     // ─── FCSM 全图搜索 ───
     float score = 0.0f;
-    ::cartographer::transform::Rigid2d pose_in_submap;
+    // 匹配器输出直接就在 global A 坐标系（栅格即全局系），命名如实反映。
+    ::cartographer::transform::Rigid2d pose_in_A;
     const bool matched =
-        fcsm.MatchFullSubmap(pc_2d, min_score, &score, &pose_in_submap);
+        fcsm.MatchFullSubmap(pc_2d, min_score, &score, &pose_in_A);
 
     LOG(INFO) << "[node " << node_count << "/" << node_clouds_b.size()
               << "] FCSM score=" << score
@@ -358,7 +375,7 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
         node_entry.global_pose_b.translation().head<2>(),
         ::cartographer::transform::GetYaw(node_entry.global_pose_b));
 
-    consecutive.push_back({pose_in_submap, node_pose_in_B, pc_2d,
+    consecutive.push_back({pose_in_A, node_pose_in_B, pc_2d,
                            node_entry.line_data_list});
 
     if (static_cast<int>(consecutive.size()) < consecutive_needed) continue;
@@ -374,38 +391,32 @@ std::pair<bool, ::cartographer::transform::Rigid3d> FindTransformBinA(
       ::cartographer::transform::Rigid2d ceres_pose;
       ceres::Solver::Summary ceres_summary;
 
-      // pose 转换到 global A 坐标系（用于线特征匹配）
-      const ::cartographer::transform::Rigid2d pose_in_A =
-          global_submap_pose_2d * frame.pose_in_submap;
-
       // 线特征追踪：将节点的 gravity-aligned 线特征对齐到 global_line_map
+      // frame.pose_in_A 已在 global A 系，直接使用
       std::map<int, std::vector<::cartographer::sensor::LineData>> tracked_lane_data;
       if (has_line_map && !frame.line_data_list.empty()) {
-        line_matcher.TrackLineFromMap(pose_in_A, frame.line_data_list,
+        line_matcher.TrackLineFromMap(frame.pose_in_A, frame.line_data_list,
                                      *global_line_map, tracked_lane_data);
       }
 
       // Ceres 精配准：优先使用 grid + 线特征 + ikdtree，fallback 到仅 grid
       if (has_ikdtree && global_line_map) {
-        ceres_matcher.Match(frame.pose_in_submap.translation(),
-                            frame.pose_in_submap, frame.point_cloud,
+        ceres_matcher.Match(frame.pose_in_A.translation(),
+                            frame.pose_in_A, frame.point_cloud,
                             tracked_lane_data,
                             *global_grid, *global_line_map,
                             *global_cloud_ikdtree,
                             &ceres_pose, &ceres_summary);
       } else {
-        ceres_matcher.Match(frame.pose_in_submap.translation(),
-                            frame.pose_in_submap, frame.point_cloud,
+        ceres_matcher.Match(frame.pose_in_A.translation(),
+                            frame.pose_in_A, frame.point_cloud,
                             *global_grid, &ceres_pose, &ceres_summary);
       }
 
-      // Ceres 结果（submap 局部坐标系）→ global A 坐标系
-      const ::cartographer::transform::Rigid2d ceres_pose_in_A =
-          global_submap_pose_2d * ceres_pose;
-
-      // T_src_in_tgt（2D）= pose_in_A * node_pose_in_B^-1
+      // T_src_in_tgt（2D）= (node 在 A 系的位姿) * node_pose_in_B^-1
+      // ceres_pose 已在 global A 系（栅格即全局系）
       const ::cartographer::transform::Rigid2d T_2d =
-          ceres_pose_in_A * frame.node_pose_in_B.inverse();
+          ceres_pose * frame.node_pose_in_B.inverse();
 
       sum_trans.x() += T_2d.translation().x();
       sum_trans.y() += T_2d.translation().y();
@@ -512,6 +523,22 @@ void Run(const std::string& pbstream_a,
     *merged_pg.add_trajectory() = new_traj;
   }
 
+  // 合并产物的数据版本取两者较低者：只要有一张是旧图，合并后就有一部分节点
+  // 没有原始 range data，不能标成新版本（见 cartographer/io/pbstream_version.h）。
+  ::cartographer::mapping::proto::SerializationHeader merged_header =
+      data_a.header;
+  merged_header.set_data_version(::cartographer::io::MinPbstreamDataVersion(
+      data_a.header.data_version(), data_b.header.data_version()));
+  LOG(INFO) << "data_version: target "
+            << ::cartographer::io::PbstreamDataVersionLabel(
+                   data_a.header.data_version())
+            << ", source "
+            << ::cartographer::io::PbstreamDataVersionLabel(
+                   data_b.header.data_version())
+            << " -> merged "
+            << ::cartographer::io::PbstreamDataVersionLabel(
+                   merged_header.data_version());
+
   // Step 4: 构建合并的 SerializedData 列表（target map 原样保留，source map 改 tid=1）
   std::vector<::cartographer::mapping::proto::SerializedData> merged_records;
   // 先写 target map 的所有记录
@@ -543,19 +570,68 @@ void Run(const std::string& pbstream_a,
     merged_records.push_back(std::move(new_rec));
   }
 
+  // Step 4b: 重建合并后的 global_static_submap。
+  // 修掉三个缺陷（此前 Step 4 把**两份** global_static_submap 原样写进输出，
+  // 且 B 那份连 T_B_in_A 都没施加 —— 产物里躺着一份旧坐标系的全局栅格，而全局
+  // 重定位正是靠它）：
+  //   ① 丢弃两份旧的，只留一份从合并后 node 重建的；
+  //   ② 栅格 / 点云 / 线特征全部在合并后的系里重建（与 align / replace 同管线，
+  //      DEC-003），不再是「只渲染不重建」；
+  //   ③ 渲染改走 RenderSingleStaticSubmap + WriteNavigationMap，面积口径从此
+  //      与其余工具及建图侧一致。
+  {
+    std::vector<::cartographer::mapping::proto::SerializedData> cleaned;
+    cleaned.reserve(merged_records.size());
+    int dropped = 0;
+    for (auto& rec : merged_records) {
+      if (rec.has_global_static_submap()) { ++dropped; continue; }
+      cleaned.push_back(std::move(rec));
+    }
+    merged_records = std::move(cleaned);
+    LOG(INFO) << "Dropped " << dropped
+              << " stale global_static_submap record(s); rebuilding one from "
+                 "the merged trajectory nodes";
+    ::cartographer::mapping::proto::SerializedData rebuilt;
+    *rebuilt.mutable_global_static_submap() =
+        ::cartographer_ros::map_transform::RebuildGlobalStaticSubmapFromNodes(
+            merged_pg, merged_records, data_a.traj_options, resolution,
+            /*lidar_range_pad=*/30.0, merged_header.data_version());
+    merged_records.push_back(std::move(rebuilt));
+  }
+
   // Step 5: 写入合并后的 pbstream
   const std::string out_pbstream = filestem_out + ".pbstream";
   const std::string tmp_pbstream = out_pbstream + ".tmp";
   {
     ::cartographer::io::ProtoStreamWriter writer(tmp_pbstream);
-    writer.WriteProto(data_a.header);
+    writer.WriteProto(merged_header);
 
     ::cartographer::mapping::proto::SerializedData pg_data;
     *pg_data.mutable_pose_graph() = merged_pg;
     writer.WriteProto(pg_data);
 
+    // 轨迹数与 options 条数必须一致：ProtoStreamDeserializer 对此有硬 CHECK，
+    // 而定位侧 LoadState 走的就是它。此前直接照抄 target 的 traj_options
+    // （只有 1 条）而 pose_graph 有 2 条轨迹 ⇒ **合并出来的地图定位加载不了**，
+    // 连 cartographer_pbstream check 都会 CHECK 失败。
+    // merge 自己的 LoadMap 手动读前三个字段绕过了该 CHECK，所以这个缺陷一直
+    // 只在工具内部被掩盖着。
+    ::cartographer::mapping::proto::AllTrajectoryBuilderOptions merged_opts =
+        data_a.traj_options;
+    const int num_trajectories = merged_pg.trajectory_size();
+    CHECK_GT(merged_opts.options_with_sensor_ids_size(), 0)
+        << "target map has no trajectory builder options";
+    while (merged_opts.options_with_sensor_ids_size() < num_trajectories) {
+      // 两张图实践中用同一套建图配置；options 只影响续建 / 重建，复制末条即可。
+      *merged_opts.add_options_with_sensor_ids() =
+          merged_opts.options_with_sensor_ids(
+              merged_opts.options_with_sensor_ids_size() - 1);
+    }
+    LOG(INFO) << "trajectory_builder_options padded to "
+              << merged_opts.options_with_sensor_ids_size() << " entries for "
+              << num_trajectories << " trajectories";
     ::cartographer::mapping::proto::SerializedData opts_data;
-    *opts_data.mutable_all_trajectory_builder_options() = data_a.traj_options;
+    *opts_data.mutable_all_trajectory_builder_options() = merged_opts;
     writer.WriteProto(opts_data);
 
     for (const auto& rec : merged_records) {
@@ -567,77 +643,64 @@ void Run(const std::string& pbstream_a,
       << "Failed to rename tmp pbstream";
   LOG(INFO) << "Merged pbstream written to: " << out_pbstream;
 
-  // Step 6: 重新渲染合并后的 map.png + map.yaml
-  // 重新构建所有 submap_slices（mapA + mapB）
-  // SubmapSlice 不可拷贝，需直接 FillSubmapSlice 填充
-  std::map<::cartographer::mapping::SubmapId, ::cartographer::io::SubmapSlice> merged_slices;
-  ::cartographer::mapping::ValueConversionTables merged_conv;
-
-  // 填充 mapA 的 slices
-  for (const auto& rec : data_a.all_records) {
-    if (!rec.has_submap()) continue;
-    const auto& submap_proto = rec.submap();
-    const ::cartographer::mapping::SubmapId id_a{
-        submap_proto.submap_id().trajectory_id(),
-        submap_proto.submap_id().submap_index()};
-    ::cartographer::transform::Rigid3d gpose_a =
-        ::cartographer::transform::Rigid3d::Identity();
-    for (const auto& traj : merged_pg.trajectory()) {
-      if (traj.trajectory_id() != id_a.trajectory_id) continue;
-      for (const auto& sm : traj.submap()) {
-        if (sm.submap_index() == id_a.submap_index) {
-          gpose_a = ::cartographer::transform::ToRigid3(sm.pose());
-          break;
-        }
-      }
+  // Step 6: 渲染合并后的 map.png + map.yaml。
+  // 走与 align / replace / 建图侧同一条管线：渲染重建出的单个
+  // global_static_submap，再经 WriteNavigationMap 做导航噪点滤除。
+  // 此前是把 mapA / mapB 两套 submap slice 画到一起（PaintSubmapSlices +
+  // WritePng），既没重建、也没滤波，面积口径与其余工具不可比。
+  const auto* rebuilt_submap = [&]() -> const ::cartographer::mapping::proto::Submap2D* {
+    for (const auto& rec : merged_records) {
+      if (rec.has_global_static_submap()) return &rec.global_static_submap();
     }
-    ::cartographer::io::FillSubmapSlice(
-        gpose_a, submap_proto, &merged_slices[id_a], &merged_conv);
-  }
+    return nullptr;
+  }();
+  CHECK(rebuilt_submap != nullptr)
+      << "internal error: rebuilt global_static_submap missing";
 
-  for (const auto& rec : data_b.all_records) {
-    if (!rec.has_submap()) continue;
-    const auto& submap_proto = rec.submap();
-    const ::cartographer::mapping::SubmapId id{
-        traj_b_id, submap_proto.submap_id().submap_index()};
-
-    // 找新的 global pose（已施加 T_B_in_A）
-    ::cartographer::transform::Rigid3d new_global_pose;
-    bool found = false;
-    for (const auto& traj : merged_pg.trajectory()) {
-      if (traj.trajectory_id() != traj_b_id) continue;
-      for (const auto& sm : traj.submap()) {
-        if (sm.submap_index() == id.submap_index) {
-          new_global_pose = ::cartographer::transform::ToRigid3(sm.pose());
-          found = true;
-          break;
-        }
-      }
-      if (found) break;
-    }
-    if (!found) continue;
-
-    // 用新 global pose 填充 slice
-    ::cartographer::io::FillSubmapSlice(
-        new_global_pose, submap_proto, &merged_slices[id], &merged_conv);
-  }
-
-  auto result = ::cartographer::io::PaintSubmapSlices(merged_slices, resolution);
-  ::cartographer::io::Image image(std::move(result.surface));
-  const Eigen::Vector2d origin(
-      -result.origin.x() * resolution,
-      (result.origin.y() - image.height()) * resolution);
+  cv::Mat origin_mat;
+  Eigen::Vector2d origin;
+  double render_resolution = resolution;
+  ::cartographer_ros::map_transform::RenderSingleStaticSubmap(
+      *rebuilt_submap, occ_thresh, free_thresh, &origin_mat, &origin,
+      &render_resolution);
 
   const std::string png_file = filestem_out + ".png";
   const std::string yaml_file = filestem_out + ".yaml";
-  ::cartographer::io::StreamFileWriter png_writer(png_file);
-  WritePng(image, png_writer.GetFilename(), occ_thresh, free_thresh);
+  std::string map_dir;
+  {
+    const size_t last_slash = filestem_out.find_last_of('/');
+    map_dir = (last_slash != std::string::npos)
+                  ? filestem_out.substr(0, last_slash)
+                  : ".";
+  }
+  // 与 align / replace / 建图侧同一条出图路径：导航噪点滤除后再写 png，
+  // 于是 effective_area 数的是**滤波后最终图**的自由像素，口径终于可比。
+  cv::Mat filtered_mat;
+  WriteNavigationMap(origin_mat, png_file, FLAGS_navigation_map_filter_mode,
+                     FLAGS_save_debug_map, map_dir, &filtered_mat);
+  const GridMapStats map_stats = ComputeGridMapStats(
+      origin_mat, filtered_mat, render_resolution, free_thresh);
+  for (const auto& key : FindDroppedYamlKeys(yaml_file, true)) {
+    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key
+                 << "' — this tool regenerates map.yaml from scratch and does "
+                    "not know this key.";
+  }
+  // 合并保留 target 的 created_at（内容采集时刻）—— target 是坐标系宿主，
+  // 合并是在它上面追加 source 的轨迹，不是换掉它的内容。
+  // pbstream_a 形如 <dir>/map.pbstream，同目录的 map.yaml 即 target 的。
+  const std::string tgt_yaml =
+      pbstream_a.substr(0, pbstream_a.find_last_of('.')) + ".yaml";
+  const std::string created_at = ReadMapCreatedAt(tgt_yaml);
   ::cartographer::io::StreamFileWriter yaml_writer(yaml_file);
-  WriteYaml(resolution, origin, png_writer.GetFilename(), &yaml_writer,
-            occ_thresh, free_thresh);
+  WriteYaml(render_resolution, origin, filestem_out, &yaml_writer,
+            occ_thresh, free_thresh, merged_header.data_version(), &map_stats,
+            created_at);
+  LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
+            << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
   LOG(INFO) << "Merged map image written to: " << filestem_out << ".png/.yaml";
-  LOG(INFO) << "Map size: " << image.width() << "x" << image.height() << " pixels";
+  LOG(INFO) << "Map size: " << origin_mat.cols << "x" << origin_mat.rows
+            << " pixels";
   LOG(INFO) << "Map origin: (" << origin.x() << ", " << origin.y() << ")";
   LOG(INFO) << "Done. source map files are preserved at original location.";
 }

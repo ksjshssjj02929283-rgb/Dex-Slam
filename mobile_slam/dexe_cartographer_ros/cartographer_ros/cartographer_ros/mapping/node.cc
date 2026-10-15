@@ -16,11 +16,16 @@
 
 #include "cartographer_ros/mapping/node.h"
 
+#include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 
 #include "Eigen/Core"
+#include "Eigen/Geometry"
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 #include "cartographer/common/configuration_file_resolver.h"
@@ -72,7 +77,44 @@ template <typename MessageType>
   return node_handle->create_subscription<MessageType>(
       topic, qos,
       [node, handler, trajectory_id, topic](const typename MessageType::ConstSharedPtr msg) {
-            (node->*handler)(trajectory_id, topic, msg);
+            // Single funnel for every sensor callback. Two things happen here:
+            // 1) Lifecycle gate. Destroying the rclcpp::Subscription does not
+            //    cancel a message the executor already dequeued, so a callback
+            //    can still be delivered after FinishTrajectoryUnderLock() tore
+            //    the trajectory down. Drop it up front.
+            // 2) Exception firewall. An escaping exception would reach
+            //    std::terminate() and SIGABRT the whole node, taking hours of
+            //    mapping with it. Losing one message is always the lesser evil.
+            static std::atomic<bool> logged_first_exception{false};
+            static std::atomic<uint64_t> exception_count{0};
+            if (!node->IsTrajectoryAcceptingData(trajectory_id)) {
+              return;
+            }
+            try {
+              (node->*handler)(trajectory_id, topic, msg);
+            } catch (const std::exception& e) {
+              const uint64_t n = ++exception_count;
+              if (!logged_first_exception.exchange(true)) {
+                LOG(ERROR) << "Sensor callback for trajectory " << trajectory_id
+                           << " topic [" << topic << "] threw ("
+                           << e.what()
+                           << "). Further occurrences on this topic will only "
+                              "be counted.";
+              } else if (n % 1000 == 0) {
+                LOG(ERROR) << "Sensor callback exception count: " << n
+                           << " (last topic [" << topic << "])";
+              }
+            } catch (...) {
+              const uint64_t n = ++exception_count;
+              if (!logged_first_exception.exchange(true)) {
+                LOG(ERROR) << "Sensor callback for trajectory " << trajectory_id
+                           << " topic [" << topic
+                           << "] threw a non-std::exception.";
+              } else if (n % 1000 == 0) {
+                LOG(ERROR) << "Sensor callback exception count: " << n
+                           << " (last topic [" << topic << "])";
+              }
+            }
           });
 }
 
@@ -957,6 +999,14 @@ cartographer_ros_msgs::msg::StatusResponse Node::FinishTrajectoryUnderLock(
     return status_response;
   }
 
+  // Mark the trajectory as closing BEFORE any teardown below. Resetting the
+  // rclcpp subscriptions does not cancel a message the executor has already
+  // dequeued: such a callback is parked on mutex_ right now and will resume as
+  // soon as we release it. Publishing the marker first makes those callbacks
+  // drop their message at the gate (see SubscribeWithHandler) instead of
+  // running against an already-erased sensor bridge.
+  trajectories_scheduled_for_finish_.emplace(trajectory_id);
+
   // Shutdown the subscribers of this trajectory.
   // A valid case with no subscribers is e.g. if we just visualize states.
   if (subscribers_.count(trajectory_id)) {
@@ -968,13 +1018,28 @@ cartographer_ros_msgs::msg::StatusResponse Node::FinishTrajectoryUnderLock(
     CHECK_EQ(subscribers_.erase(trajectory_id), 1);
   }
   map_builder_bridge_->FinishTrajectory(trajectory_id);
-  trajectories_scheduled_for_finish_.emplace(trajectory_id);
   status_response.message =
       absl::StrCat("Finished trajectory ", trajectory_id, ".");
       // "Finished trajectory " + std::to_string(trajectory_id) + ".";
   status_response.code = cartographer_ros_msgs::msg::StatusCode::OK;
   return status_response;
 }
+
+bool Node::IsTrajectoryAcceptingData(const int trajectory_id) {
+  absl::MutexLock lock(&mutex_);
+  // A trajectory that has never been created (e.g. a message delivered between
+  // subscription setup and AddSensorSamplers) has no sensor sampler either, so
+  // require the bridge to exist as well before letting the message through.
+  return trajectories_scheduled_for_finish_.count(trajectory_id) == 0 &&
+         sensor_samplers_.count(trajectory_id) > 0;
+}
+
+Node::TrajectorySensorSamplers* Node::GetSensorSamplersLocked(
+    const int trajectory_id) {
+  const auto it = sensor_samplers_.find(trajectory_id);
+  return it == sensor_samplers_.end() ? nullptr : &it->second;
+}
+
 // tag: service 开始一条新的轨迹
 bool Node::HandleStartTrajectory(
     const cartographer_ros_msgs::srv::StartTrajectory::Request::SharedPtr request,
@@ -998,10 +1063,20 @@ bool Node::HandleStartTrajectory(
     }
 
     // Check if the requested trajectory for the relative initial pose exists.
-    response->status = TrajectoryStateToStatus(
-        request->relative_to_trajectory_id,
-        {TrajectoryState::ACTIVE, TrajectoryState::FROZEN,
-         TrajectoryState::FINISHED} /* valid states */);
+    // Scoped lock: TrajectoryStateToStatus() reads
+    // MapBuilderBridge::sensor_bridges_ via GetTrajectoryStates(), which
+    // FinishTrajectoryUnderLock() erases from. Note AddTrajectory() does NOT
+    // take mutex_ itself (it is the callers that lock, e.g.
+    // StartTrajectoryWithDefaultTopics); the lock here is kept scoped to this
+    // read anyway, because the rest of the handler mutates state that sensor
+    // callbacks read under mutex_.
+    {
+      absl::MutexLock lock(&mutex_);
+      response->status = TrajectoryStateToStatus(
+          request->relative_to_trajectory_id,
+          {TrajectoryState::ACTIVE, TrajectoryState::FROZEN,
+           TrajectoryState::FINISHED} /* valid states */);
+    }
     if (response->status.code != cartographer_ros_msgs::msg::StatusCode::OK) {
       LOG(ERROR) << "Can't start a trajectory with initial pose: "
                  << response->status.message;
@@ -1345,18 +1420,25 @@ bool Node::FinishTrajectory(const int trajectory_id) {
 }
 
 void Node::RunFinalOptimization() {
+  // GetTrajectoryStates() walks MapBuilderBridge::sensor_bridges_, which
+  // FinishTrajectoryUnderLock() erases entries from. Snapshot it under mutex_
+  // instead of iterating the bridge directly, otherwise this read races with a
+  // concurrent FinishTrajectory().
+  std::map<int, TrajectoryState> trajectory_states;
   {
-    for (const auto& entry : map_builder_bridge_->GetTrajectoryStates()) {
-      const int trajectory_id = entry.first;
-      if (entry.second == TrajectoryState::ACTIVE) {
-        LOG(WARNING)
-            << "Can't run final optimization if there are one or more active "
-               "trajectories. Trying to finish trajectory with ID "
-            << std::to_string(trajectory_id) << " now.";
-        CHECK(FinishTrajectory(trajectory_id))
-            << "Failed to finish trajectory with ID "
-            << std::to_string(trajectory_id) << ".";
-      }
+    absl::MutexLock lock(&mutex_);
+    trajectory_states = map_builder_bridge_->GetTrajectoryStates();
+  }
+  for (const auto& entry : trajectory_states) {
+    const int trajectory_id = entry.first;
+    if (entry.second == TrajectoryState::ACTIVE) {
+      LOG(WARNING)
+          << "Can't run final optimization if there are one or more active "
+             "trajectories. Trying to finish trajectory with ID "
+          << std::to_string(trajectory_id) << " now.";
+      CHECK(FinishTrajectory(trajectory_id))
+          << "Failed to finish trajectory with ID "
+          << std::to_string(trajectory_id) << ".";
     }
   }
   // Assuming we are not adding new data anymore, the final optimization
@@ -1403,15 +1485,80 @@ void Node::SetSaveProgressCallback(std::function<void(size_t, size_t)> callback)
   map_builder_bridge_->SetSaveProgressCallback(std::move(callback));
 }
 
+void Node::ApplyMapOriginTransform(const Rigid3d& T_old_to_new) {
+  absl::MutexLock lock(&mutex_);
+  map_builder_bridge_->ApplyMapOriginTransform(T_old_to_new);
+}
+
+absl::optional<double> Node::EstimateStructureAlignmentYaw(
+    const ::cartographer::mapping::StructureAlignmentOptions& options) {
+  absl::MutexLock lock(&mutex_);
+  return map_builder_bridge_->EstimateStructureAlignmentYaw(options);
+}
+
+void Node::ResetMapOriginToAlignStructure() {
+  if (!node_options_.reset_map_origin_to_align_structure) {
+    return;
+  }
+  absl::MutexLock lock(&mutex_);
+  if (map_origin_reset_done_) {
+    LOG(INFO) << "Map origin already reset in this mapping session, skipping.";
+    return;
+  }
+
+  // 计时：本函数的总耗时即开启对齐功能后保存阶段新增的开销
+  using Clock = std::chrono::steady_clock;
+  using Ms = std::chrono::duration<double, std::milli>;
+  const auto t_reset_start = Clock::now();
+
+  // 从全局线特征估计对齐角度
+  const auto t_estimate_start = Clock::now();
+  const auto estimated_yaw = map_builder_bridge_->EstimateStructureAlignmentYaw(
+      CreateStructureAlignmentOptions(node_options_));
+  LOG(INFO) << "[Timing] EstimateStructureAlignmentYaw: "
+            << Ms(Clock::now() - t_estimate_start).count() << " ms";
+  if (!estimated_yaw.has_value()) {
+    LOG(WARNING) << "No reliable orthogonal structure found in map line "
+                    "features, skipping map origin reset (identity kept).";
+    map_origin_reset_done_ = true;  // 决策已完成（结果 = 恒等），不再重试
+    LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
+              << Ms(Clock::now() - t_reset_start).count() << " ms";
+    return;
+  }
+
+  // 位置 (x, y) 为预留接口，纯角度重置保持 0，即绕 map 原点
+  // ——机器人建图起点——旋转
+  const double new_yaw = estimated_yaw.value();
+  // T_new_origin：新原点在旧地图坐标系下的位姿；施加其逆变换（旧系 → 新系）
+  const ::cartographer::transform::Rigid3d T_new_origin(
+      Eigen::Vector3d(0.0, 0.0, 0.0),
+      Eigen::Quaterniond(
+          Eigen::AngleAxisd(new_yaw, Eigen::Vector3d::UnitZ())));
+  LOG(INFO) << "Resetting map origin to align with structure: "
+            << "new origin in old map frame x=0, y=0, yaw=" << new_yaw
+            << " rad (" << (new_yaw * 180.0 / M_PI) << " deg)";
+  const auto t_apply_start = Clock::now();
+  map_builder_bridge_->ApplyMapOriginTransform(T_new_origin.inverse());
+  LOG(INFO) << "[Timing] ApplyMapOriginTransform: "
+            << Ms(Clock::now() - t_apply_start).count() << " ms";
+  map_origin_reset_done_ = true;
+  LOG(INFO) << "[Timing] ResetMapOriginToAlignStructure total: "
+            << Ms(Clock::now() - t_reset_start).count() << " ms";
+}
+
 
 void Node::HandleOdometryMessage(const int trajectory_id,
                                  const std::string& sensor_id,
                                  const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).odometry_sampler.Pulse()) {
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->odometry_sampler.Pulse()) {
     return;
   }
   auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
   auto odometry_data_ptr = sensor_bridge_ptr->ToOdometryData(msg);
   if (odometry_data_ptr != nullptr) {
     extrapolators_.at(trajectory_id).AddOdometryData(*odometry_data_ptr);
@@ -1423,32 +1570,44 @@ void Node::HandleNavSatFixMessage(const int trajectory_id,
                                   const std::string& sensor_id,
                                   const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).fixed_frame_pose_sampler.Pulse()) {
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->fixed_frame_pose_sampler.Pulse()) {
     return;
   }
-  map_builder_bridge_->sensor_bridge(trajectory_id)
-      ->HandleNavSatFixMessage(sensor_id, msg);
+  auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandleNavSatFixMessage(sensor_id, msg);
 }
 
 void Node::HandleLandmarkMessage(
     const int trajectory_id, const std::string& sensor_id,
     const cartographer_ros_msgs::msg::LandmarkList::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).landmark_sampler.Pulse()) {
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->landmark_sampler.Pulse()) {
     return;
   }
-  map_builder_bridge_->sensor_bridge(trajectory_id)
-      ->HandleLandmarkMessage(sensor_id, msg);
+  auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandleLandmarkMessage(sensor_id, msg);
 }
 
 void Node::HandleImuMessage(const int trajectory_id,
                             const std::string& sensor_id,
                             const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).imu_sampler.Pulse()) {
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->imu_sampler.Pulse()) {
     return;
   }
   auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
   auto imu_data_ptr = sensor_bridge_ptr->ToImuData(msg);
   if (imu_data_ptr != nullptr) {
     extrapolators_.at(trajectory_id).AddImuData(*imu_data_ptr);
@@ -1460,34 +1619,46 @@ void Node::HandleLaserScanMessage(const int trajectory_id,
                                   const std::string& sensor_id,
                                   const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->rangefinder_sampler.Pulse()) {
     return;
   }
   // sensor_bridge（返回SensorBridge类）是map_builder_bridge_（MapBuilderBridge类）的一个成员函数，用来
-  map_builder_bridge_->sensor_bridge(trajectory_id) 
-      ->HandleLaserScanMessage(sensor_id, msg);
+  auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandleLaserScanMessage(sensor_id, msg);
 }
 
 void Node::HandleMultiEchoLaserScanMessage(
     const int trajectory_id, const std::string& sensor_id,
     const sensor_msgs::msg::MultiEchoLaserScan::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->rangefinder_sampler.Pulse()) {
     return;
   }
-  map_builder_bridge_->sensor_bridge(trajectory_id)
-      ->HandleMultiEchoLaserScanMessage(sensor_id, msg);
+  auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandleMultiEchoLaserScanMessage(sensor_id, msg);
 }
 
 void Node::HandlePointCloud2Message(
     const int trajectory_id, const std::string& sensor_id,
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->rangefinder_sampler.Pulse()) {
     return;
   }
-  map_builder_bridge_->sensor_bridge(trajectory_id)
-      ->HandlePointCloud2Message(sensor_id, msg);
+  auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandlePointCloud2Message(sensor_id, msg);
 }
 
 void Node::SerializeState(const std::string& filename,

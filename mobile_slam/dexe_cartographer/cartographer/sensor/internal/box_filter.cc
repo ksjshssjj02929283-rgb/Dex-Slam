@@ -37,7 +37,8 @@ bool BoxFilter::Filter(const PointCloud& cloud_in,
                      edge_.at(1), edge_.at(3), edge_.at(5)});
 
   cloud_out = crop_box_->Filter(cloud_in);
-  return true;
+  // 返回裁剪后是否仍有数据，供调用方区分「窗口与点云不重叠」这一失败模式。
+  return !cloud_out.points().empty();
 }
 
 void BoxFilter::SetSize(std::vector<float> size) {

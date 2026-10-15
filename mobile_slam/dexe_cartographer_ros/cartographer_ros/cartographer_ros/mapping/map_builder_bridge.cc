@@ -205,6 +205,20 @@ void MapBuilderBridge::RunFinalOptimization() {
   map_builder_->pose_graph()->RunFinalOptimization();
 }
 
+void MapBuilderBridge::ApplyMapOriginTransform(
+    const ::cartographer::transform::Rigid3d& T_old_to_new) {
+  LOG(INFO) << "ApplyMapOriginTransform: T_old_to_new translation=("
+            << T_old_to_new.translation().x() << ", "
+            << T_old_to_new.translation().y() << "), rotation="
+            << T_old_to_new.rotation().coeffs().transpose();
+  map_builder_->ApplyOriginTransform(T_old_to_new);
+}
+
+absl::optional<double> MapBuilderBridge::EstimateStructureAlignmentYaw(
+    const ::cartographer::mapping::StructureAlignmentOptions& options) {
+  return map_builder_->EstimateStructureAlignmentYaw(options);
+}
+
 bool MapBuilderBridge::SaveMap(const std::string& map_filename, const double resolution)
 {
   using Clock = std::chrono::steady_clock;
@@ -623,6 +637,7 @@ bool MapBuilderBridge::SaveGridMapFromRange(
             map_filename, &yaml_writer,
             node_options_.mapping_occ_thresh,
             node_options_.mapping_free_thresh,
+            map_builder_->GetPbstreamDataVersion(),
             &local_stats);
   LOG(INFO) << "Map area: total " << local_stats.TotalAreaM2() << " m2, effective (free) "
             << local_stats.EffectiveAreaM2() << " m2 ("
@@ -856,7 +871,8 @@ bool MapBuilderBridge::SaveGridMap(
   WriteYaml(resolution, origin,
             map_filename, &yaml_writer,
             node_options_.mapping_occ_thresh,
-            node_options_.mapping_free_thresh);
+            node_options_.mapping_free_thresh,
+            map_builder_->GetPbstreamDataVersion());
   LOG(INFO) << "Saving Grid Map Success." << std::endl;
 
   return true;
@@ -1354,7 +1370,19 @@ visualization_msgs::msg::MarkerArray MapBuilderBridge::GetConstraintList(rclcpp:
  * @return SensorBridge* 
  */
 SensorBridge* MapBuilderBridge::sensor_bridge(const int trajectory_id) {
-  return sensor_bridges_.at(trajectory_id).get();
+  // Must stay lock-free: every caller already holds Node::mutex_ (Node owns
+  // MapBuilderBridge), so taking MapBuilderBridge::mutex_ here would be a
+  // nested-lock deadlock hazard. Serialization therefore comes from the caller.
+  const auto it = sensor_bridges_.find(trajectory_id);
+  if (it == sensor_bridges_.end()) {
+    // Non-fatal: a sensor message that was already dequeued by the executor can
+    // arrive after FinishTrajectory() erased this trajectory. Callers must treat
+    // nullptr as "drop this message" instead of crashing the whole process.
+    LOG(WARNING) << "No sensor bridge for trajectory " << trajectory_id
+                 << "; dropping sensor data.";
+    return nullptr;
+  }
+  return it->second.get();
 }
 
 /**

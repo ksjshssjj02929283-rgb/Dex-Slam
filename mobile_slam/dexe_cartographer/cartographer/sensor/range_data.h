@@ -72,6 +72,21 @@ proto::RangeData ToProto(const RangeData& range_data);
 // Converts 'proto' to RangeData.
 RangeData FromProto(const proto::RangeData& proto);
 
+// RangeData 的压缩形式，用于 pbstream 持久化（returns / misses 走
+// CompressedPointCloud，1mm 精度）。压缩后不做任何运算，仅用于存取与透传。
+struct CompressedRangeData {
+  Eigen::Vector3f origin;
+  CompressedPointCloud returns;
+  CompressedPointCloud misses;
+};
+
+CompressedRangeData Compress(const RangeData& range_data);
+RangeData Decompress(const CompressedRangeData& compressed_range_data);
+
+proto::CompressedRangeData ToProto(
+    const CompressedRangeData& compressed_range_data);
+CompressedRangeData FromProto(const proto::CompressedRangeData& proto);
+
 }  // namespace sensor
 }  // namespace cartographer
 

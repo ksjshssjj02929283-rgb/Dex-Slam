@@ -54,6 +54,16 @@ message RangeData {
   repeated RangefinderPoint misses = 5;
 }
 
+// Proto representation of ::cartographer::sensor::CompressedRangeData.
+// 压缩存储的一帧 range data（去畸变后、节点 tracking 系）。与上面逐点存储的
+// RangeData 相比，returns / misses 走 CompressedPointCloud（1mm 精度，约 4
+// 字节/点），体积约为其 1/4，用于 pbstream 持久化。
+message CompressedRangeData {
+  transform.proto.Vector3f origin = 1;
+  CompressedPointCloud returns = 2;
+  CompressedPointCloud misses = 3;
+}
+
 // Proto representation of ::cartographer::sensor::ImuData.
 message ImuData {
   int64 timestamp = 1;

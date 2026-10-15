@@ -22,6 +22,7 @@
 
 #include "cartographer/common/lua_parameter_dictionary.h"
 #include "cartographer/common/port.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "cartographer/mapping/proto/map_builder_options.pb.h"
 #include "cartographer_ros/options/trajectory_options.h"
 
@@ -52,7 +53,24 @@ struct MappingNodeOptions {
   std::string navigation_map_filter_mode = "normal"; // "normal", "high", "super"
   bool save_debug_map = false; // Enable debug visualization output
   bool save_map_pcd = false;              // save map point cloud as *.pcd
+
+  // 保存地图前重置地图原点（整体旋转使栅格对齐结构化环境）。
+  // 重置角度由全局线特征在线估计（见 cartographer/mapping/2d/structure_alignment.h）。
+  bool reset_map_origin_to_align_structure = false;
+  // 对齐角度估计的阈值（填充 StructureAlignmentOptions；兜底默认值与
+  // StructureAlignmentOptions 及两份 lua 配置保持一致）。
+  // 观测次数 / RANSAC 内点等基础质量剔除已由上游 LineDataCulling 完成，
+  // 此处不再重复设门槛：
+  double reset_map_origin_min_line_length = 0.3;  // 结构线段最小长度（米）
+  int reset_map_origin_max_candidate_lines = 20;  // 按长度取前 N 条候选
+  double reset_map_origin_orthogonality_tolerance_deg = 10.0;  // 正交容差（度）
+  // 次方向支撑量 / 主方向支撑量 的最小比值（低于则视为无正交结构，不重置）
+  double reset_map_origin_min_secondary_support_ratio = 0.1;
 };
+
+// 由 MappingNodeOptions 填充对齐角度估计阈值（在线/离线建图节点共用）。
+::cartographer::mapping::StructureAlignmentOptions
+CreateStructureAlignmentOptions(const MappingNodeOptions& options);
 
 MappingNodeOptions CreateMappingNodeOptions(
     ::cartographer::common::LuaParameterDictionary* lua_parameter_dictionary);

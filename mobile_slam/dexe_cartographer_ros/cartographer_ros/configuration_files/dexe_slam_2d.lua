@@ -51,6 +51,13 @@ options = {
   navigation_map_filter_mode = "normal",  -- 滤波强度: "normal", "high", "super"
   save_debug_map = false,  -- 是否保存调试图片（mask、连通域等中间结果）
   save_map_pcd = false,  -- 是否保存地图点云（.pcd）
+  -- [地图起点重置]
+  reset_map_origin_to_align_structure = true,  -- 保存地图前是否重置地图起点（旋转栅格对齐结构化环境；重置角度由全局线特征在线估计）
+  -- 对齐角度估计阈值（仅在上面开关打开时生效）：
+  reset_map_origin_min_line_length = 0.3,        -- 结构线段最小长度（米），短于此不参与估角（观测次数/内点的基础剔除已由 LineDataCulling 完成）
+  reset_map_origin_max_candidate_lines = 20,     -- 通过门槛的线段中按长度取前 N 条候选
+  reset_map_origin_orthogonality_tolerance_deg = 10.0,  -- 正交容差（度）
+  reset_map_origin_min_secondary_support_ratio = 0.02,   -- 次方向支撑量/主方向支撑量 最小比值（低于则视为无正交结构，不重置）
 
   publish_tracked_pose = true,
   save_tracked_pose = false,

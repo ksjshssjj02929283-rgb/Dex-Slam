@@ -20,6 +20,7 @@
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
 #include "cartographer/io/internal/mapping_state_serialization.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/serialization_format_migration.h"
@@ -187,6 +188,12 @@ std::shared_ptr<sensor::LineMapData> LocalizationUpdater::GetGlobalLineMap() con
 bool LocalizationUpdater::SetInitialPose(const transform::Rigid3d &initial_pose)
 {
   const int last_trajectory_id = num_trajectory_builders() - 1;
+  // 启动失败时反序列化留下的占位元素可能为 nullptr（见 :293），
+  // 空 vector 则 last_trajectory_id 为 -1，越界访问同样是未定义行为。
+  if (last_trajectory_id < 0 ||
+      !trajectory_builders_[last_trajectory_id]) {
+    return false;
+  }
   return trajectory_builders_[last_trajectory_id]->SetInitialPose(initial_pose);
 }
 
@@ -199,6 +206,13 @@ void LocalizationUpdater::TriggerGlobalRelocalization()
 std::optional<LocalizationState> LocalizationUpdater::GetLocalizationState()
 {
   const int last_trajectory_id = num_trajectory_builders() - 1;
+  // 该函数由 100ms 定时器经 bridge 无判空转发调用（localization_node.cc:299
+  // -> localization_updater_bridge.cc:171）。定位启动失败时对象处于半初始化
+  // 状态，此处若不判空即解引用 nullptr，占位 SIGSEGV。
+  if (last_trajectory_id < 0 ||
+      !trajectory_builders_[last_trajectory_id]) {
+    return std::nullopt;
+  }
   return trajectory_builders_[last_trajectory_id]->GetLocalizationState();
 }
 
@@ -383,7 +397,8 @@ void LocalizationUpdater::SerializeState(bool include_unfinished_submaps,
   // 保存时传递 global_static_submap_，确保增量更新后的全局地图被保存
   EnsureGlobalSubmapPyramid(global_static_submap_);  // 补全局定位地图缓存
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, data_version_,
+                    global_static_submap_);
   
   if (global_static_submap_) {
     LOG(INFO) << "=== Global Static Submap Save Statistics ===";
@@ -470,7 +485,8 @@ bool LocalizationUpdater::SerializeStateToFile(bool include_unfinished_submaps,
   EnsureGlobalSubmapPyramid(submap_to_save);
   // 保存时传递选定的 submap
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps, submap_to_save);
+                    include_unfinished_submaps, data_version_,
+                    submap_to_save);
   
   bool success = writer.Close();
   
@@ -627,10 +643,14 @@ std::shared_ptr<mapping::Submap2D> LocalizationUpdater::GenerateGlobalStaticSubm
   int nodes_with_synthetic_range_data = 0;
   
   for (const auto& node : nodes) {
-    // 7a. 插入 range data（栅格地图）
-    if (!node.data.constant_data->range_datas.empty()) {
+    // 7a. 插入 range data（栅格地图）。定位侧的节点都来自 pbstream，range_datas
+    // 为空、真数据以压缩态存在 compressed_range_datas；这里临时解压用完即弃，
+    // 不常驻内存（ResetMapOrigin 重建全局子图时走到这里）。
+    const std::vector<sensor::RangeData> node_range_datas =
+        cmapping::GetRangeDatas(*node.data.constant_data);
+    if (!node_range_datas.empty()) {
       nodes_with_real_range_data++;
-      for (const auto& range_data : node.data.constant_data->range_datas) {
+      for (const auto& range_data : node_range_datas) {
         sensor::RangeData global_range_data;
         global_range_data.origin = (node.data.global_pose *
                                     range_data.origin.cast<double>()).cast<float>();
@@ -718,6 +738,13 @@ std::shared_ptr<mapping::Submap2D> LocalizationUpdater::GenerateGlobalStaticSubm
 std::map<int, int> LocalizationUpdater::LoadState(
     io::ProtoStreamReaderInterface* const reader, bool load_frozen_state) {
   io::ProtoStreamDeserializer deserializer(reader);
+  data_version_ = io::MinPbstreamDataVersion(
+      data_version_, deserializer.header().data_version());
+  LOG(INFO) << "Loaded pbstream data_version: "
+            << io::PbstreamDataVersionLabel(
+                   deserializer.header().data_version())
+            << " -> will save as "
+            << io::PbstreamDataVersionLabel(data_version_);
 
   // Create a copy of the pose_graph_proto, such that we can re-write the
   // trajectory ids.

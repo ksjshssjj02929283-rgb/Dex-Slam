@@ -224,8 +224,10 @@ private:
       error_code_ = MS::E_NONE;
     }
     progress_ = 0.0f;
-    // A new mapping session always owns a clean map directory. This removes
-    // stale slam/assets/versions data before any trajectory is started.
+    // A new mapping session always owns a clean map directory. Existing
+    // slam/assets/versions data is archived to <map_folder>/.map_trash/
+    // instead of being deleted: map assets take hours to author by hand,
+    // and a mistaken overwrite=true used to wipe them irrecoverably.
     const MapDirectoryResetResult reset_result =
         ResetMapDirectory(FLAGS_map_folder, map_name_);
     if (!reset_result.success) {
@@ -242,9 +244,19 @@ private:
       return;
     }
     if (reset_result.replaced_existing) {
-      LOG(WARNING) << "Recreated existing map directory '"
-                   << reset_result.map_directory.string() << "' (removed "
-                   << reset_result.removed_entries << " entries).";
+      if (!reset_result.trashed_directory.empty()) {
+        LOG(WARNING) << "Recreated existing map directory '"
+                     << reset_result.map_directory.string()
+                     << "'; previous content (slam + assets + versions) "
+                        "archived to '"
+                     << reset_result.trashed_directory.string()
+                     << "'. map_manager rotates that trash by count and size.";
+      } else {
+        LOG(WARNING) << "Recreated existing map directory '"
+                     << reset_result.map_directory.string() << "' (removed "
+                     << reset_result.removed_entries
+                     << " entries, NOT archived).";
+      }
     } else {
       LOG(INFO) << "Created map directory '"
                 << reset_result.map_directory.string() << "'.";
@@ -417,7 +429,8 @@ private:
     is_mapping_ = false;
     is_saving_ = false;
     trajectories_finished_ = false;  // 重置标志
-    
+    // 地图原点重置的幂等标志在 Node 内部，mapping_node_ 重建时自然复位
+
     LOG(INFO) << "Mapping node reset completed.";
   }
 
@@ -431,6 +444,33 @@ private:
       map_name = map_name_;
       error_code_ = MS::E_NONE;
     }
+    // Exception firewall. Everything below touches the live pose graph, the
+    // submap list and the filesystem; an escaping exception would unwind into
+    // the service callback and end in std::terminate() -> SIGABRT, discarding
+    // the entire in-memory map that this very call is trying to write out.
+    // Convert it into the same "failed, retryable" outcome the explicit
+    // save-failure branch produces, so a retry can still recover the map.
+    try {
+      return RunFinishPipelineUnlocked(map_name);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Finish pipeline aborted by exception: " << e.what()
+                 << ". Mapping state is kept; call finish_mapping again to retry.";
+      is_saving_ = false;
+      SetStage("");
+      SetErrorCode(MS::E_MAP_SAVE_FAILED);
+      return false;
+    } catch (...) {
+      LOG(ERROR) << "Finish pipeline aborted by a non-std::exception. "
+                    "Mapping state is kept; call finish_mapping again to retry.";
+      is_saving_ = false;
+      SetStage("");
+      SetErrorCode(MS::E_MAP_SAVE_FAILED);
+      return false;
+    }
+  }
+
+  bool RunFinishPipelineUnlocked(const std::string& map_name) {
+    using MS = nav_interfaces::msg::MappingState;
     is_saving_ = true;  // 进入保存/收尾阶段（~/state 报 SAVING）
     progress_ = 0.0f;
     // 完成所有轨迹并进行最终优化（只执行一次）
@@ -445,6 +485,18 @@ private:
     } else {
       LOG(INFO) << "Trajectories already finished, skipping optimization.";
     }
+
+    // 保存前重置地图起点以对齐结构化环境（来自 cdd81f3；rebase 到 apply_for_xwiz
+    // 后，原先挂在旧 FinishMapping 上的调用移植到重构后的 RunFinishPipeline）。
+    // 调用前提：FinishAllTrajectories + RunFinalOptimization 已完成、尚未
+    // SaveOptimizedPoses / SerializeState —— 这样 pbstream / png / yaml / pcd
+    // 全部产物天然落在新坐标系，不需要事后各自变换。
+    // 幂等性由 Node::ResetMapOriginToAlignStructure 内部标志保证：保存失败重试
+    // 不会重复施加旋转。
+    // 刻意不新增 stage：MappingState.msg 的 stage 取值是对外契约
+    //（FINISHING_TRAJECTORIES / OPTIMIZING / SERIALIZING / WRITING_GRID / DONE），
+    // 对齐属于收尾优化的一部分，沿用当前 stage，不在冲突解决里悄悄改契约。
+    mapping_node_->ResetMapOriginToAlignStructure();
     if (node_options_->save_tracked_pose) {
       mapping_node_->SaveOptimizedPoses(int(0));
     }
@@ -485,7 +537,7 @@ private:
     // ~/state：结构化建图状态（唯一状态出口，仅 topic）
     state_pub_->publish(BuildMappingState());
   }
-private:
+ private:
   // 状态
   std::string map_name_;                       // 受 state_mutex_ 保护
   std::string map_path_;                       // 受 state_mutex_ 保护

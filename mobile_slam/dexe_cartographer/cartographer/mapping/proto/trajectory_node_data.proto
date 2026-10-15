@@ -31,6 +31,15 @@ message TrajectoryNodeData {
   sensor.proto.CompressedPointCloud low_resolution_point_cloud = 7;
   repeated float rotational_scan_matcher_histogram = 8;
   transform.proto.Rigid3d local_pose = 9;
+  // 高亮点云。自 data_version 0.3.0 起写入（此前只读不写，旧图恒为空）。
   sensor.proto.CompressedPointCloud
       highlight_point_cloud = 10;
+  // 去畸变后的原始 range data（每个雷达一份：origin + returns + misses），
+  // 与建图保存时 MapBuilder::GenerateGlobalStaticSubmap 插栅格用的是同一份输入。
+  // 用途：离线工具（对齐 / 替换 / 合并 / 重置原点）从 node 重建全局子图时
+  // 能与建图输出逐 cell 一致；缺它只能由字段 3 合成（无 misses、origin 取节点
+  // 位姿），无回波光束扫出的 free space 会丢失。
+  // 定位不使用：加载时不解压，只原样保留以便回写 pbstream 时不丢。
+  // 自 data_version 0.3.0 起写入（见 cartographer/io/pbstream_version.h）。
+  repeated sensor.proto.CompressedRangeData range_datas = 11;
 }

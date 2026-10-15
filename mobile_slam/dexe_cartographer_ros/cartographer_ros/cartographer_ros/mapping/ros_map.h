@@ -19,8 +19,10 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "Eigen/Core"
+#include "absl/types/optional.h"
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
 #include "cartographer/io/file_writer.h"
@@ -44,16 +46,50 @@ struct GridMapStats {
   double EffectiveAreaM2() const { return free_cells * resolution * resolution; }
 };
 
+// 从「渲染图」与「导航滤波后的最终图」统计面积，口径与建图侧
+// MapBuilderBridge::SaveGridMap 完全一致：
+//   total_cells = 渲染图外框 width × height（含画布 padding，与 map.png 一致）
+//   free_cells  = 最终保存图中 pixel > 255*(1-free_thresh) 的像素数
+// 离线工具（align / replace / merge / reset_origin）重新生成地图后必须重算并写入
+// map.yaml —— 面积是 map_manager get_maps 对外暴露的字段，不重算就会退回 0。
+// 'filtered_mat' 传空 Mat 时 free_cells = 0（调用方须自行说明口径）。
+GridMapStats ComputeGridMapStats(const cv::Mat& rendered_mat,
+                                 const cv::Mat& filtered_mat,
+                                 double resolution, double free_thresh);
+
+// 从既有 map.yaml 读取 'created_at'（本地时间 ISO 8601，无引号/有引号均可）。
+// 语义：**内容采集时刻**，不是文件最后修改时刻 —— 后者由 map.yaml 的 mtime
+// 表达（map_manager 的 MapInfo.updated_at 就取 mtime，永远不会因某个写入方
+// 忘记更新而失真）。因此这个值在重写地图时要按"内容有没有换"决定去留：
+//   - 对齐 / reset_origin / 定位侧保存：内容没变（只是转了角或更新了动态层）→ **保留**
+//   - 替换：内容整体换成 src 那次勘测 → **取 src 的值**（取"现在"是错的，那是 updated_at）
+//   - 合并：保留 tgt 的（tgt 是坐标系宿主）
+// 键不存在时返回空串（传给 WriteYaml 即取当前时间）。
+std::string ReadMapCreatedAt(const std::string& yaml_path);
+
+// 比对既有 map.yaml 里的键与本次将要写出的键，列出**会被丢掉**的键。
+// 工具是全量重写 map.yaml 的，建图侧将来新增任何键（如 created_at）都会被静默
+// 抹掉；这个检查把「下次记得」变成一次机器告警。文件不存在时返回空。
+std::vector<std::string> FindDroppedYamlKeys(const std::string& existing_yaml_path,
+                                             bool with_area_stats);
+
 // Write the corresponding yaml into 'file_writer'.
+// 'data_version'：与这份 yaml 一起写出的 pbstream 的数据版本
+// （SerializationHeader.data_version），写成 yaml 键 data_version，
+// map_manager 读它告诉上层这张图的 pbstream 存了哪些数据：
+//   - "0.3.0" 等 → 原样写入；
+//   - ""（旧版 pbstream）→ 写 "legacy"；
+//   - absl::nullopt（这份 yaml 不对应 pbstream，如 assets_writer）→ 不写该键。
+// 必须由调用方显式给出：各写入方写出的 pbstream 版本不同（替换取 source、
+// 定位回写沿用加载图），漏给就编译失败，而不是悄悄写错。
+// 'created_at' 空 = 当前本地时间（新建图）；更新已有地图时传入原值沿用（见 ReadMapCreatedAt）。
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
                double occ_thresh, double free_thresh,
+               const absl::optional<std::string>& data_version,
                const GridMapStats* stats = nullptr,
-               const std::string& created_at = "");   // 空 = 当前本地时间（新建图）；更新已有地图时传入原值沿用
-
-// 读取已有 map.yaml 的 created_at（文件不存在 / 无键 → 空串）
-std::string ReadCreatedAtFromYaml(const std::string& yaml_path);
+               const std::string& created_at = "");
 
 void WritePng(const ::cartographer::io::Image& image,
               const std::string file_name,

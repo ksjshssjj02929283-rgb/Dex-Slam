@@ -20,6 +20,7 @@
 #include <memory>
 
 #include "cartographer/common/thread_pool.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/mapping/trajectory_builder_interface.h"
 #include "cartographer/mapping/map_builder_interface.h"
 #include "cartographer/mapping/pose_graph.h"
@@ -129,6 +130,10 @@ public:
     return pose_estimator_2d_;
   }
 
+  // 保存时会写入 pbstream 的数据版本（加载地图时继承，见 data_version_）。
+  // 空 = legacy。定位侧重写 map.yaml 时随之记录。
+  const std::string& data_version() const { return data_version_; }
+
 private:
   // 从 pose_graph_ 的所有轨迹节点重新生成 global_static_submap_
   // 当旧格式 pbstream（不含 kGlobalStaticSubmap 字段）被加载时，作为 fallback
@@ -143,6 +148,11 @@ private:
   mapping::ValueConversionTables conversion_tables_;
   
   std::shared_ptr<mapping::Submap2D> global_static_submap_;
+
+  // 保存时写入 pbstream 的数据版本（io/pbstream_version.h）。起始为本程序的
+  // 版本；每加载一张图就取两者较低者 —— 加载旧图后再保存（定位回写 / 续建），
+  // 那些节点没有原始 range data，不能被标成新版本。
+  std::string data_version_ = io::kPbstreamDataVersion;
 
   std::shared_ptr<std::vector<Eigen::Vector2d>> global_reflector_map_;
 

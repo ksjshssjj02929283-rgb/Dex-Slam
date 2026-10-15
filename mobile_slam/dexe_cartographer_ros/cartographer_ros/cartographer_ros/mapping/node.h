@@ -98,6 +98,28 @@ class Node
   bool SaveMap(const std::string & map_filename, const double resolution);
   // 保存进度回调（逐 node 上报 done/total），透传到 MapBuilder
   void SetSaveProgressCallback(std::function<void(size_t, size_t)> callback);
+
+  // 重置地图原点：把位姿图所有全局位姿变换到新坐标系（'T_old_to_new' 为
+  // 旧系 → 新系）。必须在 RunFinalOptimization 之后、SerializeState/SaveMap
+  // 之前调用。
+  void ApplyMapOriginTransform(
+      const ::cartographer::transform::Rigid3d& T_old_to_new);
+
+  // 从位姿图节点线特征估计对齐结构化环境的新原点朝向（|yaw| ≤ π/4）。
+  // 必须在 RunFinalOptimization 之后、ApplyMapOriginTransform 之前调用；
+  // 无可靠正交结构时返回 nullopt。
+  absl::optional<double> EstimateStructureAlignmentYaw(
+      const ::cartographer::mapping::StructureAlignmentOptions& options);
+
+  // 保存地图前重置地图原点以对齐结构化环境：估计 new_yaw 并施加纯旋转
+  // （估计 + 变换一站式完成，在线/离线建图节点共用）。开关与阈值读取
+  // 本节点持有的 MappingNodeOptions（reset_map_origin_*）。
+  // 调用前提：FinishAllTrajectories + RunFinalOptimization 已完成、尚未
+  // SerializeState/SaveMap；应置于 SaveOptimizedPoses 之前，使保存的轨迹
+  // 落在新系。
+  // 幂等：每个 Node 实例至多决策一次（包括「估计失败 → 不重置」），保存
+  // 失败重试不会重复估计/应用；Node 随建图会话重建时自然复位。
+  void ResetMapOriginToAlignStructure();
   // Starts the first trajectory with the default topics.
 //   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options, 
 //                                         bool flag_localization, 
@@ -106,6 +128,16 @@ class Node
 //                                         const std::string& location_name); // added by hz
 
   void StartTrajectoryWithDefaultTopics(const TrajectoryOptions& options);
+
+  // Returns true while 'trajectory_id' is still allowed to consume sensor data.
+  //
+  // Destroying the rclcpp::Subscription in FinishTrajectoryUnderLock() does NOT
+  // cancel a message that the executor has already dequeued: such a callback is
+  // parked on mutex_ and resumes only after the finish path releases the lock,
+  // at which point the trajectory's sensor bridge is already erased. This gate
+  // is the single place where those stale messages are dropped; it is called
+  // from the SubscribeWithHandler() lambda for every sensor topic.
+  bool IsTrajectoryAcceptingData(int trajectory_id);
 
   // Returns unique SensorIds for multiple input bag files based on
   // their TrajectoryOptions.
@@ -209,6 +241,9 @@ class Node
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   absl::Mutex mutex_;
+  // 本次 Node 生命周期内是否已决策/应用「地图原点对齐重置」（幂等标志，
+  // Node 随建图会话重建时自然复位）
+  bool map_origin_reset_done_ = false;
   std::unique_ptr<cartographer_ros::metrics::FamilyFactory> metrics_registry_;
   // 在访问 map_builder_bridge_ 之前，需要先获得 mutex_ 锁，并在访问结束后释放锁,确保多个线程在同时访问 map_builder_bridge_ 时不会产生数据竞争问题
   std::shared_ptr<MapBuilderBridge> map_builder_bridge_ GUARDED_BY(mutex_);
@@ -274,6 +309,12 @@ class Node
     ::cartographer::common::FixedRatioSampler imu_sampler;
     ::cartographer::common::FixedRatioSampler landmark_sampler;
   };
+
+  // Non-throwing lookup of the trajectory's sensor samplers. Returns nullptr
+  // when the trajectory does not exist, so a stale or malformed message can
+  // never throw out of a sensor callback. Callers must hold mutex_.
+  TrajectorySensorSamplers* GetSensorSamplersLocked(int trajectory_id)
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // These are keyed with 'trajectory_id'.
   std::map<int, ::cartographer::mapping::PoseExtrapolator> extrapolators_;

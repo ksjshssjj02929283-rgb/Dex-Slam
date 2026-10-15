@@ -92,6 +92,19 @@ class MapBuilderBridge {
       const TrajectoryOptions& trajectory_options);
   void FinishTrajectory(int trajectory_id);
   void RunFinalOptimization();
+
+  // 重置地图原点：把位姿图所有全局位姿变换到新坐标系。
+  // 'T_old_to_new' 为 旧系 → 新系 的变换（新原点位姿的逆）。
+  // 必须在 RunFinalOptimization 之后、SerializeState/SaveMap 之前调用，
+  // 这样 pbstream 与地图文件都会以新坐标系产出。
+  void ApplyMapOriginTransform(
+      const ::cartographer::transform::Rigid3d& T_old_to_new);
+
+  // 从位姿图节点线特征估计对齐结构化环境的新原点朝向（|yaw| ≤ π/4）。
+  // 必须在 RunFinalOptimization 之后、ApplyMapOriginTransform 之前调用；
+  // 无可靠正交结构时返回 nullopt。
+  absl::optional<double> EstimateStructureAlignmentYaw(
+      const ::cartographer::mapping::StructureAlignmentOptions& options);
   // noted by hz: 序列化/压缩 数据，保存到文件, 包含 header/位姿图/参数配置/submap数据/scan数据+前后端pose+时间戳/重力+imu系数+fixed_frame_origin_in_map/其他传感器数据
   bool SerializeState(const std::string& filename,
                       const bool include_unfinished_submaps);
@@ -124,6 +137,10 @@ class MapBuilderBridge {
       const cartographer_ros_msgs::srv::TrajectoryQuery::Request::SharedPtr request,
       cartographer_ros_msgs::srv::TrajectoryQuery::Response::SharedPtr response);
 
+  // Reads sensor_bridges_, so the caller MUST hold the owning Node's mutex.
+  // This method is deliberately lock-free: sensor_bridges_ is serialized by
+  // Node::mutex_, and taking MapBuilderBridge::mutex_ here would be a nested
+  // lock with no added safety.
   std::map<int /* trajectory_id */,
            ::cartographer::mapping::PoseGraphInterface::TrajectoryState>
   GetTrajectoryStates();
@@ -144,6 +161,13 @@ class MapBuilderBridge {
 
   // std::vector<Eigen::Vector2d> GetAllReflectors();
 
+  // Returns nullptr when the trajectory has no sensor bridge (e.g. the
+  // trajectory was already finished and its bridge erased). Callers MUST hold
+  // the owning Node's mutex and MUST treat nullptr as "drop this message":
+  // a sensor callback that was already dequeued by the executor can run after
+  // FinishTrajectory() and must not take the process down. The returned raw
+  // pointer is owned by sensor_bridges_ and is invalid once the trajectory is
+  // finished, so it must not be cached or used outside the critical section.
   SensorBridge* sensor_bridge(int trajectory_id);
 
  private:

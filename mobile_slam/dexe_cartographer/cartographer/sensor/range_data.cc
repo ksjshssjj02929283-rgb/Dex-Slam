@@ -81,5 +81,32 @@ RangeData FromProto(const proto::RangeData& proto) {
                    PointCloud(misses)};
 }
 
+CompressedRangeData Compress(const RangeData& range_data) {
+  return CompressedRangeData{range_data.origin,
+                             CompressedPointCloud(range_data.returns),
+                             CompressedPointCloud(range_data.misses)};
+}
+
+RangeData Decompress(const CompressedRangeData& compressed_range_data) {
+  return RangeData{compressed_range_data.origin,
+                   compressed_range_data.returns.Decompress(),
+                   compressed_range_data.misses.Decompress()};
+}
+
+proto::CompressedRangeData ToProto(
+    const CompressedRangeData& compressed_range_data) {
+  proto::CompressedRangeData proto;
+  *proto.mutable_origin() = transform::ToProto(compressed_range_data.origin);
+  *proto.mutable_returns() = compressed_range_data.returns.ToProto();
+  *proto.mutable_misses() = compressed_range_data.misses.ToProto();
+  return proto;
+}
+
+CompressedRangeData FromProto(const proto::CompressedRangeData& proto) {
+  return CompressedRangeData{transform::ToEigen(proto.origin()),
+                             CompressedPointCloud(proto.returns()),
+                             CompressedPointCloud(proto.misses())};
+}
+
 }  // namespace sensor
 }  // namespace cartographer

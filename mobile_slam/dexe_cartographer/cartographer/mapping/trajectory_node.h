@@ -67,6 +67,15 @@ struct TrajectoryNode {
 
     // The node pose in the local SLAM frame.
     transform::Rigid3d local_pose;
+
+    // 从 pbstream 加载来的 range data，保持压缩态、不解压。
+    // range_datas（上面）只在建图期由前端填入；从 pbstream 加载的节点那一项为空，
+    // 真数据留在这里。之所以不在加载时解压：定位根本不用它，解压后每节点常驻
+    // ≈57 KB（2000 节点 ≈115 MB）。之所以又不能直接丢掉：定位侧会回写 pbstream
+    // （ResetMapOrigin / save_map），丢了就永久没了 —— 所以原样保留、写回时透传。
+    // 需要用时（重新生成全局子图）由调用方按需 sensor::Decompress。
+    // 放在结构体末尾：现有按位置的 brace 初始化不需要改。
+    std::vector<sensor::CompressedRangeData> compressed_range_datas;
   };
 
   common::Time time() const { return constant_data->time; }
@@ -81,6 +90,11 @@ struct TrajectoryNode {
 
 proto::TrajectoryNodeData ToProto(const TrajectoryNode::Data& constant_data);
 TrajectoryNode::Data FromProto(const proto::TrajectoryNodeData& proto);
+
+// 取节点用于插栅格的 range data（节点 tracking 系，未做全局变换）：
+// 优先建图期的 range_datas，其次解压加载来的 compressed_range_datas；
+// 都没有返回空。
+std::vector<sensor::RangeData> GetRangeDatas(const TrajectoryNode::Data& data);
 
 }  // namespace mapping
 }  // namespace cartographer

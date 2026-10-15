@@ -149,7 +149,7 @@ void LocalizationUpdaterBridge::LoadState(const std::string& state_filename,
   {
     const size_t slash = state_filename.find_last_of('/');
     const std::string dir = (slash == std::string::npos) ? "." : state_filename.substr(0, slash);
-    loaded_created_at_ = ReadCreatedAtFromYaml(dir + "/map.yaml");   // 更新保存沿用创建时刻
+    loaded_created_at_ = ReadMapCreatedAt(dir + "/map.yaml");   // 更新保存沿用创建时刻
   }
   cartographer::io::ProtoStreamReader stream(state_filename);
   localization_updater_->LoadState(&stream, load_frozen_state);
@@ -427,7 +427,8 @@ static bool RenderSubmapToFiles(
     const std::string& navigation_map_filter_mode,
     const bool save_debug_map,
     const bool save_map_pcd,
-    const std::string& created_at) {   // 已加载地图的 created_at，空 = 取当前时间
+    const std::string& created_at,     // 已加载地图的 created_at，空 = 取当前时间
+    const std::string& data_version) {   // 随之写出的 pbstream 版本（空 = legacy）
   const cartographer::mapping::Grid2D* grid = submap->grid();
   if (!grid) {
     LOG(ERROR) << "RenderSubmapToFiles: Grid is null";
@@ -511,15 +512,30 @@ static bool RenderSubmapToFiles(
   cv::Mat origin_mat = ::cartographer_ros::GeneratePngMat(image, occ_thresh, free_thresh);
 
   // 2. 生成 navigation map 作为默认输出 map.png
+  // 地图重新生成 ⇒ 地图信息一起重算。定位侧同样会全量重写 map.yaml，
+  // 若不重算，对齐 / 替换刚写进去的面积会在下一次 save_map 时被抹掉。
+  cv::Mat filtered_mat;
   WriteNavigationMap(origin_mat,
                      map_filename + ".png",
                      navigation_map_filter_mode,
                      save_debug_map,
-                     map_dir);
+                     map_dir,
+                     &filtered_mat);
 
   // 3. 写入 map.yaml（引用 navigation map = map.png）
-  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
-  WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh, free_thresh, nullptr, created_at);
+  const std::string yaml_path = map_filename + ".yaml";
+  const GridMapStats map_stats =
+      ComputeGridMapStats(origin_mat, filtered_mat, resolution, free_thresh);
+  // 定位侧保存的是同一场勘测的更新结果（动态层/位姿图优化），内容没换
+  // ⇒ created_at 沿用已加载地图的值（由调用方传入）。
+  for (const auto& key : FindDroppedYamlKeys(yaml_path, true)) {
+    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key << "'";
+  }
+  cartographer::io::StreamFileWriter yaml_writer(yaml_path);
+  WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh,
+            free_thresh, data_version, &map_stats, created_at);
+  LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
+            << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
   LOG(INFO) << "RenderSubmapToFiles: saved " << map_filename << ".png/.yaml (navigation map)"
             << " (" << image.width() << "x" << image.height() << " pixels)";
@@ -570,7 +586,8 @@ bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
                              node_options_.navigation_map_filter_mode,
                              node_options_.save_debug_map,
                              node_options_.save_map_pcd,
-                             loaded_created_at_);
+                             loaded_created_at_,
+                             localization_updater_->data_version());
 }
 
 // ---------------------------------------------------------------------------
@@ -660,15 +677,28 @@ bool LocalizationUpdaterBridge::SaveMapFromPoseGraph(
   cv::Mat origin_mat =
       ::cartographer_ros::GeneratePngMat(image, occ_thresh, free_thresh);
 
+  // 同 RenderSubmapToFiles：重新生成地图 ⇒ 地图信息一起重算，否则会抹掉
+  // 对齐 / 替换写进去的面积。内容没换 ⇒ created_at 原样保留。
+  cv::Mat filtered_mat;
   WriteNavigationMap(origin_mat,
                      map_filename + ".png",
                      node_options_.navigation_map_filter_mode,
                      node_options_.save_debug_map,
-                     map_dir);
+                     map_dir,
+                     &filtered_mat);
 
-  cartographer::io::StreamFileWriter yaml_writer(map_filename + ".yaml");
+  const std::string yaml_path = map_filename + ".yaml";
+  const GridMapStats map_stats =
+      ComputeGridMapStats(origin_mat, filtered_mat, resolution, free_thresh);
+  for (const auto& key : FindDroppedYamlKeys(yaml_path, true)) {
+    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key << "'";
+  }
+  cartographer::io::StreamFileWriter yaml_writer(yaml_path);
   WriteYaml(resolution, map_origin, map_filename, &yaml_writer,
-            occ_thresh, free_thresh, nullptr, loaded_created_at_);
+            occ_thresh, free_thresh, localization_updater_->data_version(),
+            &map_stats, loaded_created_at_);
+  LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
+            << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
   if (node_options_.save_origin_map) {
     const std::string origin_png = map_filename + "_origin.png";
@@ -1140,7 +1170,18 @@ visualization_msgs::msg::MarkerArray LocalizationUpdaterBridge::GetConstraintLis
 }
 
 SensorBridge* LocalizationUpdaterBridge::sensor_bridge(const int trajectory_id) {
-  return sensor_bridges_.at(trajectory_id).get();
+  // Lock-free by contract: callers must hold LocalizationNode's
+  // localization_updater_mutex_, which is also what FinishTrajectory() and the
+  // sensor_bridges_-iterating getters run under. Returns nullptr instead of
+  // throwing when a message that the executor had already dequeued outlived
+  // the trajectory.
+  const auto it = sensor_bridges_.find(trajectory_id);
+  if (it == sensor_bridges_.end()) {
+    LOG(WARNING) << "No sensor bridge for trajectory " << trajectory_id
+                 << "; dropping sensor data.";
+    return nullptr;
+  }
+  return it->second.get();
 }
 
 /**

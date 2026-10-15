@@ -51,6 +51,8 @@ class BoxFilter
 public:
   BoxFilter(const CropBox::Box& box);
   ~BoxFilter() = default;
+  // 裁剪 cloud_in 到 box_（含 SetOrigin 平移）并写入 cloud_out。
+  // 返回裁剪后 cloud_out 是否非空：false 表示裁剪窗口与点云完全不重叠。
   bool Filter(const PointCloud& cloud_in,
               PointCloud& cloud_out);
 

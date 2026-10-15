@@ -16,6 +16,8 @@
 
 #include "cartographer/io/internal/pbstream_check.h"
 
+#include <cmath>
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -35,6 +37,35 @@ void AddLine(double length, int inliers, mapping::proto::LineMap2DList* list) {
   line->set_begin_y(0.0);
   line->set_end_x(length);
   line->set_end_y(0.0);
+}
+
+// 以 (mid_x, mid_y) 为中心造一条给定长度/方向的线段。
+void AddLineAt(double length, int inliers, double angle_rad, double mid_x,
+               double mid_y, mapping::proto::LineMap2DList* list) {
+  const double dx = 0.5 * length * std::cos(angle_rad);
+  const double dy = 0.5 * length * std::sin(angle_rad);
+  auto* map_line = list->add_line_map_data();
+  map_line->set_local_id(list->line_map_data_size());
+  map_line->set_global_id(list->line_map_data_size());
+  map_line->set_inliers(inliers);
+  auto* line = map_line->mutable_line_data();
+  line->set_begin_x(mid_x - dx);
+  line->set_begin_y(mid_y - dy);
+  line->set_end_x(mid_x + dx);
+  line->set_end_y(mid_y + dy);
+}
+
+// 正交两族墙，整体朝向 phi（主族 3 条、次族 2 条，参数同
+// structure_alignment_test 的精确用例）。
+void AddOrthogonalWalls(double phi_rad, mapping::proto::LineMap2DList* list) {
+  for (int i = 0; i < 3; ++i) {
+    AddLineAt(5.0 - i, 5, phi_rad, i * 1.5,
+              list->line_map_data_size() * 0.7, list);
+  }
+  for (int i = 0; i < 2; ++i) {
+    AddLineAt(4.0 - i, 5, phi_rad + M_PI / 2,
+              list->line_map_data_size() * 0.7, i * 1.5, list);
+  }
 }
 
 constexpr CullingCriteria kMappingCriteria{0.3, 7.0, 2};
@@ -145,6 +176,45 @@ TEST(ResolveCriteriaTest, FallsBackWhenMaxLineLengthIsUnset) {
 
   EXPECT_FALSE(from_pbstream);
   EXPECT_DOUBLE_EQ(criteria.max_length, kDefaultMaxLineLength);
+}
+
+// 轴向正交墙：残余旋转角应近 0（已对齐）。
+TEST(EvaluateStructureAlignmentTest, AxisAlignedWallsEvaluateToNearZeroResidual) {
+  mapping::proto::LineMap2DList list;
+  AddOrthogonalWalls(0.0, &list);
+
+  const AlignmentStats stats = EvaluateStructureAlignment(list);
+
+  EXPECT_TRUE(stats.evaluated);
+  EXPECT_LT(stats.residual_yaw_deg, 0.05);
+}
+
+// 整体旋转 phi 的墙：残余角应还原出折叠后的 phi（>1° 即未对齐）。
+TEST(EvaluateStructureAlignmentTest, RotatedWallsReportFoldedResidual) {
+  for (const double phi_deg : {30.0, 44.0}) {
+    mapping::proto::LineMap2DList list;
+    AddOrthogonalWalls(phi_deg * M_PI / 180.0, &list);
+
+    const AlignmentStats stats = EvaluateStructureAlignment(list);
+
+    ASSERT_TRUE(stats.evaluated) << "phi = " << phi_deg;
+    EXPECT_NEAR(stats.residual_yaw_deg, phi_deg, 0.05) << "phi = " << phi_deg;
+  }
+}
+
+// 单一方向（无正交结构）：不可判定。
+TEST(EvaluateStructureAlignmentTest, SingleDirectionNotEvaluable) {
+  mapping::proto::LineMap2DList list;
+  for (int i = 0; i < 5; ++i) {
+    AddLineAt(4.0, 5, 0.0, i * 2.0, 0.0, &list);
+  }
+  EXPECT_FALSE(EvaluateStructureAlignment(list).evaluated);
+}
+
+// 空线地图：不可判定。
+TEST(EvaluateStructureAlignmentTest, EmptyListNotEvaluable) {
+  mapping::proto::LineMap2DList list;
+  EXPECT_FALSE(EvaluateStructureAlignment(list).evaluated);
 }
 
 }  // namespace

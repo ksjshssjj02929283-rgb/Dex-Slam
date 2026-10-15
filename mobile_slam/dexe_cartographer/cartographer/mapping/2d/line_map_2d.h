@@ -27,7 +27,10 @@ namespace cartographer
 namespace mapping
 {
 void LinearRegression(const std::vector<double> &xs, const std::vector<double> &ys, double &a, double &b);
-int LineFittingRANSAC(  
+// 正交回归（TLS / PCA 主轴）拟合，输出契约与 LinearRegression 相同。
+// 详见 line_map_2d.cc 的实现注释。
+void OrthogonalRegression(const std::vector<double> &xs, const std::vector<double> &ys, double &a, double &b);
+int LineFittingRANSAC(
   const std::vector<double> &xs, const std::vector<double> &ys,  
   double *a, double *b, double *r,  
   int iterations = 200, double threshold = 0.1, int minInliers = 20);

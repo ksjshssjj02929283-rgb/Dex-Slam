@@ -1,4 +1,7 @@
+#include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <exception>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -91,7 +94,35 @@ template <typename MessageType>
   return node_handle->create_subscription<MessageType>(
       topic, qos,
       [node, handler, trajectory_id, topic](const typename MessageType::ConstSharedPtr msg) {
-            (node->*handler)(trajectory_id, topic, msg);
+            // Same two guards as the mapping node: drop messages that were
+            // already dequeued when the trajectory was being torn down, and
+            // never let a single message take the whole node down.
+            static std::atomic<bool> logged_first_exception{false};
+            static std::atomic<uint64_t> exception_count{0};
+            if (!node->IsTrajectoryAcceptingData(trajectory_id)) {
+              return;
+            }
+            try {
+              (node->*handler)(trajectory_id, topic, msg);
+            } catch (const std::exception& e) {
+              const uint64_t n = ++exception_count;
+              if (!logged_first_exception.exchange(true)) {
+                LOG(ERROR) << "Sensor callback for trajectory " << trajectory_id
+                           << " topic [" << topic << "] threw (" << e.what()
+                           << "). Further occurrences will only be counted.";
+              } else if (n % 1000 == 0) {
+                LOG(ERROR) << "Sensor callback exception count: " << n;
+              }
+            } catch (...) {
+              const uint64_t n = ++exception_count;
+              if (!logged_first_exception.exchange(true)) {
+                LOG(ERROR) << "Sensor callback for trajectory " << trajectory_id
+                           << " topic [" << topic
+                           << "] threw a non-std::exception.";
+              } else if (n % 1000 == 0) {
+                LOG(ERROR) << "Sensor callback exception count: " << n;
+              }
+            }
           });
 }
 
@@ -936,6 +967,12 @@ LocalizationNode::FinishTrajectoryUnderLock(const int trajectory_id)
     return status_response;
   }
 
+  // Mark the trajectory as closing BEFORE any teardown below: resetting the
+  // rclcpp subscriptions does not cancel a message the executor already
+  // dequeued, so such a callback is parked and will resume right after we
+  // release the lock, against an already-erased sensor bridge.
+  trajectories_scheduled_for_finish_.emplace(trajectory_id);
+
   // Shutdown the subscribers of this trajectory.
   // A valid case with no subscribers is e.g. if we just visualize states.
   if (subscribers_.count(trajectory_id)) {
@@ -948,7 +985,6 @@ LocalizationNode::FinishTrajectoryUnderLock(const int trajectory_id)
   }
 
   localization_updater_bridge_.FinishTrajectory(trajectory_id);
-  trajectories_scheduled_for_finish_.emplace(trajectory_id);
 
   status_response.message =
       absl::StrCat("Finished trajectory ", trajectory_id, ".");
@@ -1032,6 +1068,23 @@ void LocalizationNode::FinishAllTrajectories() {
                cartographer_ros_msgs::msg::StatusCode::OK);
     }
   }
+}
+
+bool LocalizationNode::IsTrajectoryAcceptingData(const int trajectory_id) {
+  {
+    absl::MutexLock lock(&localization_updater_mutex_);
+    if (trajectories_scheduled_for_finish_.count(trajectory_id) > 0) {
+      return false;
+    }
+  }
+  absl::MutexLock lock(&sensor_samplers_mutex_);
+  return sensor_samplers_.count(trajectory_id) > 0;
+}
+
+LocalizationNode::TrajectorySensorSamplers*
+LocalizationNode::GetSensorSamplersLocked(const int trajectory_id) {
+  const auto it = sensor_samplers_.find(trajectory_id);
+  return it == sensor_samplers_.end() ? nullptr : &it->second;
 }
 
 
@@ -1334,11 +1387,19 @@ void LocalizationNode::HandleOdometryMessage(
 {
   {
     absl::MutexLock lock(&sensor_samplers_mutex_);
-    if (!sensor_samplers_.at(trajectory_id).odometry_sampler.Pulse()) {
+    auto* samplers = GetSensorSamplersLocked(trajectory_id);
+    if (samplers == nullptr || !samplers->odometry_sampler.Pulse()) {
       return;
     }
   }
+  // Hold localization_updater_mutex_ across the lookup: sensor_bridge() must be
+  // mutually exclusive with FinishTrajectory() (which erases the bridge) and
+  // with GetLocalTrajectoryData()/GetTrajectoryStates() (which iterate it).
+  absl::MutexLock lock(&localization_updater_mutex_);
   auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
   sensor_bridge_ptr->HandleOdometryMessage(sensor_id, msg);
 }
 
@@ -1349,12 +1410,17 @@ void LocalizationNode::HandleNavSatFixMessage(
 {
   {
     absl::MutexLock lock(&sensor_samplers_mutex_);
-    if (!sensor_samplers_.at(trajectory_id).fixed_frame_pose_sampler.Pulse()) {
+    auto* samplers = GetSensorSamplersLocked(trajectory_id);
+    if (samplers == nullptr || !samplers->fixed_frame_pose_sampler.Pulse()) {
       return;
     }
   }
-  localization_updater_bridge_.sensor_bridge(trajectory_id)
-      ->HandleNavSatFixMessage(sensor_id, msg);
+  absl::MutexLock lock(&localization_updater_mutex_);
+  auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandleNavSatFixMessage(sensor_id, msg);
 }
 
 
@@ -1364,12 +1430,17 @@ void LocalizationNode::HandleLandmarkMessage(
 {
   {
     absl::MutexLock lock(&sensor_samplers_mutex_);
-    if (!sensor_samplers_.at(trajectory_id).landmark_sampler.Pulse()) {
+    auto* samplers = GetSensorSamplersLocked(trajectory_id);
+    if (samplers == nullptr || !samplers->landmark_sampler.Pulse()) {
       return;
     }
   }
-  localization_updater_bridge_.sensor_bridge(trajectory_id)
-      ->HandleLandmarkMessage(sensor_id, msg);
+  absl::MutexLock lock(&localization_updater_mutex_);
+  auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandleLandmarkMessage(sensor_id, msg);
 }
 
 
@@ -1379,11 +1450,16 @@ void LocalizationNode::HandleImuMessage(
 {
   {
     absl::MutexLock lock(&sensor_samplers_mutex_);
-    if (!sensor_samplers_.at(trajectory_id).imu_sampler.Pulse()) {
+    auto* samplers = GetSensorSamplersLocked(trajectory_id);
+    if (samplers == nullptr || !samplers->imu_sampler.Pulse()) {
       return;
     }
   }
+  absl::MutexLock lock(&localization_updater_mutex_);
   auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
   auto imu_data_ptr = sensor_bridge_ptr->ToImuData(msg);
   // if (imu_data_ptr != nullptr &&
   //     !sensor_bridge_ptr->IgnoreMessage(sensor_id, imu_data_ptr->time)) {
@@ -1399,12 +1475,17 @@ void LocalizationNode::HandleLaserScanMessage(
 {
   {
     absl::MutexLock lock(&sensor_samplers_mutex_);
-    if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
+    auto* samplers = GetSensorSamplersLocked(trajectory_id);
+    if (samplers == nullptr || !samplers->rangefinder_sampler.Pulse()) {
       return;
     }
   }
-  localization_updater_bridge_.sensor_bridge(trajectory_id)
-    ->HandleLaserScanMessage(sensor_id, msg);
+  absl::MutexLock lock(&localization_updater_mutex_);
+  auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandleLaserScanMessage(sensor_id, msg);
 }
 
 
@@ -1414,12 +1495,17 @@ void LocalizationNode::HandlePointCloud2Message(
 {
   {
     absl::MutexLock lock(&sensor_samplers_mutex_);
-    if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
+    auto* samplers = GetSensorSamplersLocked(trajectory_id);
+    if (samplers == nullptr || !samplers->rangefinder_sampler.Pulse()) {
       return;
     }
   }
-  localization_updater_bridge_.sensor_bridge(trajectory_id)
-      ->HandlePointCloud2Message(sensor_id, msg);
+  absl::MutexLock lock(&localization_updater_mutex_);
+  auto sensor_bridge_ptr = localization_updater_bridge_.sensor_bridge(trajectory_id);
+  if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->HandlePointCloud2Message(sensor_id, msg);
 }
 
 void LocalizationNode::SerializeState(const std::string& filename,

@@ -71,9 +71,17 @@ class Submap {
       proto::SubmapQuery::Response* response) const = 0;
 
   // Pose of this submap in the local map frame.
+  //
+  // ⚠️ 这是刚体变换（submap 自身系 -> local map 系），不是位置。
+  // 不得把它解释为地图位置或地图中心；需要地图中心请用
+  // Submap2D::GridCenterXY()（见 submap_2d.h）。
+  // 特别地，对 global_static_submap（整幅静态图）它从不被当作变换使用，
+  // 是 Submap2D 构造函数的副产物，不承载位姿信息。
   transform::Rigid3d local_pose() const { return local_pose_; }
 
   // Update the local pose (e.g. for coordinate origin reset).
+  //
+  // 因为本字段可被外部改写，任何代码都不得假设它与栅格几何位置有固定关系。
   void set_local_pose(const transform::Rigid3d& local_pose) {
     local_pose_ = local_pose;
   }

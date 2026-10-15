@@ -22,6 +22,7 @@
 #include "absl/types/optional.h"
 #include "cartographer/common/time.h"
 #include "cartographer/io/internal/mapping_state_serialization.h"
+#include "cartographer/io/pbstream_version.h"
 #include "cartographer/io/proto_stream.h"
 #include "cartographer/io/proto_stream_deserializer.h"
 #include "cartographer/io/serialization_format_migration.h"
@@ -35,6 +36,7 @@
 #include "cartographer/mapping/internal/motion_filter.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
+#include "cartographer/mapping/2d/structure_alignment.h"
 #include "cartographer/sensor/internal/collator.h"
 #include "cartographer/sensor/internal/trajectory_collator.h"
 #include "cartographer/sensor/internal/voxel_filter.h"
@@ -263,7 +265,8 @@ void MapBuilder::SerializeState(bool include_unfinished_submaps,
   }
   
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, data_version_,
+                    global_static_submap_);
 }
 
 bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
@@ -292,8 +295,108 @@ bool MapBuilder::SerializeStateToFile(bool include_unfinished_submaps,
   
   io::ProtoStreamWriter writer(filename);
   io::WritePbStream(*pose_graph_, all_trajectory_builder_options_, &writer,
-                    include_unfinished_submaps, global_static_submap_);
+                    include_unfinished_submaps, data_version_,
+                    global_static_submap_);
   return (writer.Close());
+}
+
+void MapBuilder::ApplyOriginTransform(const transform::Rigid3d& T_old_to_new) {
+  // 1. 变换位姿图中所有 node / submap / landmark 的全局位姿。
+  //    约束为相对量，对全局刚体变换不变，无需重新优化。
+  pose_graph_->ApplyTransformToAllPoses(T_old_to_new);
+
+  // 2. 已缓存的 global_static_submap_（若有）仍处于旧坐标系，直接失效：
+  //    - SerializeState/SerializeStateToFile 总会重新 GenerateGlobalStaticSubmap，
+  //      重建时使用的 node.global_pose 已是新系；
+  //    - 单独调用 SaveMap 时，上层会回退到基于位姿图节点重新生成最终子图，
+  //      同样基于新系位姿。
+  //    注意：不要在这里立即重建——后续序列化流程本来就要重建，避免重复开销。
+  if (global_static_submap_) {
+    LOG(INFO) << "ApplyOriginTransform: invalidating cached "
+                 "global_static_submap (stale in old frame)";
+    global_static_submap_.reset();
+  }
+}
+
+absl::optional<double> MapBuilder::EstimateStructureAlignmentYaw(
+    const StructureAlignmentOptions& options) {
+  // 聚合位姿图所有节点的线特征到全局 LineMap2DList。
+  // 流程与 GenerateGlobalStaticSubmap 的线特征处理（步骤 7c）完全一致：
+  //   节点 local 系线段 --(TrackLineFromMap 关联)--> 全局化 --(PushBack/
+  //   UpdateLineMap 跟踪拟合)--> 最终 LineDataCulling 剔除低质量线段。
+  // 区别：不构建栅格/点云（角度估计只需要线段），因此成本低得多，
+  // 可以在 SerializeState 之前调用。
+  const MapById<NodeId, TrajectoryNode> nodes = pose_graph_->GetTrajectoryNodes();
+  if (nodes.empty()) {
+    LOG(WARNING) << "EstimateStructureAlignmentYaw: no trajectory nodes";
+    return absl::nullopt;
+  }
+
+  CHECK(!all_trajectory_builder_options_.empty())
+      << "No trajectory options available for structure alignment.";
+  const auto& first_trajectory_options = all_trajectory_builder_options_[0];
+  const auto& trajectory_builder_2d_options =
+      first_trajectory_options.trajectory_builder_options()
+          .trajectory_builder_2d_options();
+  const auto& submaps_options = trajectory_builder_2d_options.submaps_options();
+  const auto& line_matcher_options =
+      trajectory_builder_2d_options.line_matcher_options();
+
+  // latest_local_id 从 0 开始，与 Submap2D 的构造方式一致
+  LineMap2DList global_line_map(0, std::map<int, MapLine2D>{});
+  global_line_map.SetCullingParam(submaps_options.min_line_length(),
+                                  submaps_options.max_line_length(),
+                                  submaps_options.line_culling_obs());
+  scan_matching::LineMatcher2D line_matcher(line_matcher_options);
+
+  int nodes_with_lines = 0;
+  for (const auto& node : nodes) {
+    const auto& lines = node.data.constant_data->lines;
+    if (lines.empty()) {
+      continue;
+    }
+    ++nodes_with_lines;
+
+    const transform::Rigid2d global_pose_2d =
+        transform::Project2D(node.data.global_pose);
+    std::map<int, std::vector<sensor::LineData>> tracked_line_data;
+    line_matcher.TrackLineFromMap(global_pose_2d, lines, global_line_map,
+                                  tracked_line_data);
+
+    std::map<int, std::vector<sensor::LineData>> global_tracked_lines;
+    for (const auto& tracked_element : tracked_line_data) {
+      for (const auto& line : tracked_element.second) {
+        global_tracked_lines[tracked_element.first].push_back(
+            sensor::TransformLineData(global_pose_2d, line));
+      }
+    }
+    if (global_tracked_lines.empty()) {
+      continue;
+    }
+
+    // 等价于 Submap2D::InsertLineData（此处不做周期性 culling，
+    // 聚合完成后统一 culling 一次；lose_time 仅在线实时跟踪使用，无需维护）
+    for (const auto& tracked_element : global_tracked_lines) {
+      if (tracked_element.first < 0) {
+        global_line_map.PushBack(tracked_element.second);
+      } else {
+        global_line_map.UpdateLineMap(tracked_element.first,
+                                      tracked_element.second);
+      }
+    }
+  }
+
+  global_line_map.LineDataCulling();
+  LOG(INFO) << "EstimateStructureAlignmentYaw: " << nodes.size()
+            << " nodes (" << nodes_with_lines
+            << " with lines), global lines after culling: "
+            << global_line_map.size();
+
+  if (global_line_map.size() == 0) {
+    LOG(WARNING) << "EstimateStructureAlignmentYaw: global line map is empty";
+    return absl::nullopt;
+  }
+  return EstimateAlignmentYaw(global_line_map, options);
 }
 
 std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resolution) {
@@ -390,10 +493,23 @@ std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resoluti
     if (progress_callback_) {
       progress_callback_(processed_nodes, total_nodes);
     }
-    // 7a. 处理range_datas
+    // 7a. 处理range_datas：建图期的原始数据，或从 pbstream 加载来的压缩数据
+    // （续建场景下节点来自已保存地图，range_datas 为空但压缩数据还在）。
+    std::vector<sensor::RangeData> node_range_datas =
+        GetRangeDatas(*node.data.constant_data);
+    // 建图期 range_datas 是全精度 float，写进 pbstream 的却是 1mm 量化的压缩版。
+    // 若这里用全精度插栅格，离线工具从 pbstream 重建时恰在格线附近的点会落到
+    // 邻格，无法逐 cell 复现本图（实测 0.087% 像素类别不同）。所以这里也用
+    // 量化后的数据 —— 1mm 相对 5cm 格子的影响可忽略，换来的是「保存下来
+    // 的地图可以被精确复现」，任何离线重建的差异都能直接判为缺陷。
     if (!node.data.constant_data->range_datas.empty()) {
+      for (auto& range_data : node_range_datas) {
+        range_data = sensor::Decompress(sensor::Compress(range_data));
+      }
+    }
+    if (!node_range_datas.empty()) {
       nodes_with_real_range_data++;
-      for (const auto& range_data : node.data.constant_data->range_datas) {
+      for (const auto& range_data : node_range_datas) {
         sensor::RangeData global_range_data;
         global_range_data.origin = (node.data.global_pose * 
                                     range_data.origin.cast<double>()).cast<float>();
@@ -530,6 +646,13 @@ std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resoluti
 std::map<int, int> MapBuilder::LoadState(
     io::ProtoStreamReaderInterface* const reader, bool load_frozen_state) {
   io::ProtoStreamDeserializer deserializer(reader);
+  data_version_ = io::MinPbstreamDataVersion(
+      data_version_, deserializer.header().data_version());
+  LOG(INFO) << "Loaded pbstream data_version: "
+            << io::PbstreamDataVersionLabel(
+                   deserializer.header().data_version())
+            << " -> will save as "
+            << io::PbstreamDataVersionLabel(data_version_);
 
   // Create a copy of the pose_graph_proto, such that we can re-write the
   // trajectory ids.
