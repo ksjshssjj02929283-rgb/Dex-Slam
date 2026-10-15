@@ -94,7 +94,7 @@ private:
   std::shared_ptr<mapping::Submap2D> local_submap_;
 
   std::shared_ptr<transform::Rigid2d> robot_pose_;
-  std::shared_ptr<transform::Rigid2d> local_map_origin_;  // 当前 local_submap_ 的中心位姿
+  std::shared_ptr<transform::Rigid2d> local_map_origin_;  // 上次构建的参考位姿，不要求等于栅格几何中心
 
   sensor::CropBox::Box box_;
 
