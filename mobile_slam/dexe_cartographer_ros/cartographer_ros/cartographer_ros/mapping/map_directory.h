@@ -38,6 +38,11 @@ struct MapDirectoryResetResult {
 // 「.」前缀让 map_manager 的目录扫描天然跳过它。
 inline constexpr const char* kMapTrashDirName = ".map_trash";
 
+// 地图名字节上限：ext4 单个文件名上限 255 字节，地图名之后还要拼回收站条目、导出包等后缀，
+// 留出余量；中文一个字 3 字节，约 66 个汉字。与 map_manager 一致。
+inline constexpr size_t kMaxMapNameBytes = 200;
+
+// 新地图名的校验（建图入口）。规则与 map_manager 的改名 / 恢复 / 导入相同，见 .cc。
 bool ValidateMapName(const std::string& map_name,
                      std::string* error_message);
 

@@ -166,12 +166,41 @@ bool TestTrashKeepsMultipleArchivesInSameSecond(const fs::path& test_root) {
 }
 
 bool TestRejectsUnsafeMapNames(const fs::path& test_root) {
+  std::string han67;
+  for (int i = 0; i < 67; ++i) han67 += "图";
   const std::vector<std::string> unsafe_names = {
-      "", ".", "..", "../outside", "nested/map", "/absolute"};
+      "", ".", "..", "../outside", "nested/map", "/absolute",
+      // 统一地图名规则：超长、隐藏 / 选项样式、首尾空白（含全角）、不可见字符、
+      // Windows 与 shell 敏感字符、非法 UTF-8、控制字符
+      han67, ".hidden", "-opt", " lead", "trail ", "全角\xE3\x80\x80",
+      "零\xE2\x80\x8B宽", "a\\b", "a:b", "a*b", "a?b", "a\"b", "a<b", "a>b",
+      "a|b", "a'b", "a$b", "a`b", "bad\xFF", "line\nbreak", "\xC0\xAF"};
   for (const auto& name : unsafe_names) {
     const auto result =
         cartographer_ros::ResetMapDirectory(test_root / "safe_root", name);
     if (!Expect(!result.success, "unsafe map name accepted: " + name)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// 中文名能建；66 个汉字（198 字节）能建，覆盖建图时旧图能进回收站（条目名 +16 字节仍在 255 内）
+bool TestAcceptsChineseMapNames(const fs::path& test_root) {
+  const fs::path map_root = test_root / "chinese_root";
+  std::string han66;
+  for (int i = 0; i < 66; ++i) han66 += "图";
+  for (const std::string& name : {std::string("一楼大厅"), std::string("Floor 1 东区"), han66}) {
+    auto first = cartographer_ros::ResetMapDirectory(map_root, name);
+    if (!Expect(first.success, "Chinese map name rejected: " + name + " (" + first.error_message + ")")) {
+      return false;
+    }
+    WriteFile(first.slam_directory / "map.yaml", "image: map.png\n");
+    auto second = cartographer_ros::ResetMapDirectory(map_root, name);
+    if (!Expect(second.success && !second.trashed_directory.empty() &&
+                    fs::exists(second.trashed_directory / "slam" / "map.yaml"),
+                "overwrite of Chinese map must archive the old one: " + name + " (" +
+                    second.error_message + ")")) {
       return false;
     }
   }
@@ -269,6 +298,7 @@ int main() {
                        TestArchivesExistingMapDirectoryToTrash(root) &&
                        TestTrashKeepsMultipleArchivesInSameSecond(root) &&
                        TestRejectsUnsafeMapNames(root) &&
+                       TestAcceptsChineseMapNames(root) &&
                        TestRejectsNonDirectoryMapRoot(root) &&
                        TestIsLoadableMapDirectory(root) &&
                        TestDiscardFreshSession(root) &&

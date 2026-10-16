@@ -130,10 +130,13 @@ void RunOfflineNode(const MapBuilderFactory& map_builder_factory,
   if (!FLAGS_map_folder.empty() && !FLAGS_map_name.empty()) {
     const MapDirectoryResetResult reset_result =
         ResetMapDirectory(FLAGS_map_folder, FLAGS_map_name);
-    CHECK(reset_result.success)
-        << "Failed to reset offline map directory '"
-        << reset_result.map_directory.string() << "': "
-        << reset_result.error_message;
+    if (!reset_result.success) {
+      // 名字不合规或目录无法重建：报错退出，不用 CHECK 让进程崩掉
+      LOG(ERROR) << "Failed to reset offline map directory '"
+                 << reset_result.map_directory.string() << "': "
+                 << reset_result.error_message;
+      return;
+    }
     map_slam_directory = reset_result.slam_directory;
     if (reset_result.replaced_existing) {
       LOG(WARNING) << "Recreated existing offline map directory '"

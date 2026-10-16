@@ -3869,10 +3869,27 @@ def run_model_c_backup_rollback(
     return evidence
 
 
+def valid_map_name(name: str) -> bool:
+    """与建图服务、map_manager 同一套地图名规则：中文可用；不超过 200 字节；不以 . 或 - 开头；
+    首尾无空格（含全角）；不含控制字符、不可见字符和 / \\ : * ? " < > | ' $ `。"""
+    if not name or len(name.encode("utf-8")) > 200 or name in (".", ".."):
+        return False
+    if name[0] in ".-" or name[0] in " \u00a0\u3000" or name[-1] in " \u00a0\u3000":
+        return False
+    for ch in name:
+        cp = ord(ch)
+        if cp < 0x20 or cp == 0x7F or 0x80 <= cp <= 0x9F:
+            return False
+        if 0x200B <= cp <= 0x200F or 0x202A <= cp <= 0x202E or 0x2060 <= cp <= 0x2064 or cp in (0x2028, 0x2029, 0xFEFF):
+            return False
+        if ch in "/\\:*?\"<>|'$`":
+            return False
+    return True
+
+
 def allowed_test_map(name: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z0-9_.-]+", name)) and name.startswith(
-        ALLOWED_TEST_PREFIXES
-    )
+    # 安全门：只动带测试前缀的图；前缀之后允许中文（如 test_一楼大厅），其余按地图名规则
+    return name.startswith(ALLOWED_TEST_PREFIXES) and valid_map_name(name)
 
 
 def restore_original_map(
@@ -3970,7 +3987,7 @@ def run_localization_mutations(
             "LOC-G-02",
             "测试地图安全门",
             ERROR,
-            "map-name 必须以 slam2d_test_、mm_test_ 或 test_ 开头，且只能含安全字符",
+            "map-name 必须以 slam2d_test_、mm_test_ 或 test_ 开头，其余按地图名规则（可用中文，如 test_一楼大厅）",
             [
                 interface_check(
                     "argument",
