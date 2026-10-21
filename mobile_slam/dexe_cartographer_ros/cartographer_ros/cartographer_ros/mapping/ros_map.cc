@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <ctime>
+#include <fstream>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -52,10 +54,22 @@ void WritePgm(const ::cartographer::io::Image& image, const double resolution,
   }
 }
 
+// 本地时间 ISO 8601（秒级，无时区后缀），如 2026-09-14T16:30:00
+std::string LocalTimeIso8601() {
+  const std::time_t now = std::time(nullptr);
+  std::tm tm_local{};
+  localtime_r(&now, &tm_local);
+  char buf[32];
+  std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm_local);
+  return buf;
+}
+
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const std::string& map_file_name,
                ::cartographer::io::FileWriter* file_writer,
-               double occ_thresh, double free_thresh)
+               double occ_thresh, double free_thresh,
+               const GridMapStats* stats,
+               const std::string& created_at)
 {
   // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
   // 这样无论地图目录位于何处（staging / 正式 / backup / 被整体移动），
@@ -71,7 +85,7 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
 
   // Magic constants taken directly from ros map_saver code:
   // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
-  const std::string output = absl::StrCat(
+  std::string output = absl::StrCat(
       "image: ", pgm_filename, "\n",
       "line_map: ", line_map_filename, "\n",
       "cloud_map: ", cloud_map_filename, "\n",
@@ -79,7 +93,28 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
       "resolution: ", resolution, "\n",
       "origin: [", origin.x(), ", ", origin.y(),
       ", 0.0]\nnegate: 0\noccupied_thresh: ", occ_thresh, "\nfree_thresh: ", free_thresh, "\n");
+  if (stats != nullptr) {
+    // 地图面积统计（口径见 GridMapStats）；读取侧对多余键不报错，旧地图无此段亦可加载
+    absl::StrAppend(&output,
+        "total_area_m2: ", stats->TotalAreaM2(), "\n",
+        "effective_area_m2: ", stats->EffectiveAreaM2(), "\n");
+  }
+  // 地图创建时刻，机器人本地时间 ISO 8601、无时区后缀；map_manager get_maps 以 MapInfo.created_at 透传给上层。
+  // 新建图取当前时间；定位侧更新保存（save_map）传入已加载地图的原值，创建时刻不随更新漂移
+  absl::StrAppend(&output, "created_at: ", created_at.empty() ? LocalTimeIso8601() : created_at, "\n");
   file_writer->Write(output.data(), output.size());
+}
+
+std::string ReadCreatedAtFromYaml(const std::string& yaml_path) {
+  std::ifstream in(yaml_path);
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.rfind("created_at:", 0) != 0) continue;
+    std::string v = line.substr(std::string("created_at:").size());
+    const size_t b = v.find_first_not_of(" \t'\""), e = v.find_last_not_of(" \t\r'\"");
+    return (b == std::string::npos) ? "" : v.substr(b, e - b + 1);
+  }
+  return "";
 }
 
 void WritePng(const ::cartographer::io::Image& image, 
@@ -127,7 +162,8 @@ void WriteNavigationMap(const cv::Mat& original,
                        const std::string output_file_name,
                        const std::string& filter_mode,
                        bool save_debug_map,
-                       const std::string& map_dir)
+                       const std::string& map_dir,
+                       cv::Mat* filtered_out)
 {
   LOG(INFO) << "Starting WriteNavigationMap with noise removal for " << output_file_name;
   LOG(INFO) << "Input mat dimensions: " << original.cols << "x" << original.rows;
@@ -302,6 +338,9 @@ void WriteNavigationMap(const cv::Mat& original,
   LOG(INFO) << "  Kept components (has gray neighbors): " << kept_by_gray;
   
   // 步骤3: 保存为PNG文件
+  if (filtered_out != nullptr) {
+    *filtered_out = result;
+  }
   if (!cv::imwrite(output_file_name, result)) {
     LOG(ERROR) << "Failed to write navigation map to " << output_file_name;
     return;

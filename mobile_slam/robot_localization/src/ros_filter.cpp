@@ -1316,20 +1316,20 @@ void RosFilter<T>::loadParams()
   // Create a subscriber for manually setting/resetting pose
   set_pose_sub_ =
     this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-    "/robot_localization/set_pose", rclcpp::QoS(1),
+    "set_pose", rclcpp::QoS(1),
     std::bind(&RosFilter<T>::setPoseCallback, this, std::placeholders::_1));
 
   // Create a service for manually setting/resetting pose
   set_pose_service_ =
     this->create_service<robot_localization::srv::SetPose>(
-    "/robot_localization/set_pose", std::bind(
+    "set_pose", std::bind(
       &RosFilter<T>::setPoseSrvCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Create a service for manually enabling the filter
   enable_filter_srv_ =
     this->create_service<std_srvs::srv::Empty>(
-    "/robot_localization/enable", std::bind(
+    "enable", std::bind(
       &RosFilter::enableFilterSrvCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
@@ -1337,21 +1337,21 @@ void RosFilter<T>::loadParams()
   // publishing
   toggle_filter_processing_srv_ =
     this->create_service<robot_localization::srv::ToggleFilterProcessing>(
-    "/robot_localization/toggle", std::bind(
+    "toggle", std::bind(
       &RosFilter<T>::toggleFilterProcessingCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Create a service for starting filter (convenience wrapper)
   start_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "/robot_localization/start_filter", std::bind(
+    "start_filter", std::bind(
       &RosFilter<T>::startFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
   // Create a service for stopping filter (convenience wrapper)
   stop_filter_srv_ =
     this->create_service<std_srvs::srv::Trigger>(
-    "/robot_localization/stop_filter", std::bind(
+    "stop_filter", std::bind(
       &RosFilter<T>::stopFilterCallback, this,
       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 

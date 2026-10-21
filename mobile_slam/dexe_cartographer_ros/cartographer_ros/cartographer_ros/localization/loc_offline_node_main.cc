@@ -38,10 +38,10 @@ int main(int argc, char** argv) {
         localization_updater_options);
   };
   
-  // 注册离线定位节点。统一域名：节点名 = "localization_node"（与在线定位一致）
-  // → 话题/服务全部落 /localization_node/ 域，在线离线消费方通用。
+  // 注册离线定位节点。统一域名：节点名 = "localization"（与在线定位一致）
+  // → 话题/服务全部落 /localization/ 域，在线离线消费方通用。
   rclcpp::Node::SharedPtr loc_offline_node =
-      rclcpp::Node::make_shared("localization_node");
+      rclcpp::Node::make_shared("localization");
   
   cartographer_ros::localization::RunLocOfflineNode(
       localization_updater_factory, loc_offline_node);

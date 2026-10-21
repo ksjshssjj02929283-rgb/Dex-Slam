@@ -383,7 +383,13 @@ std::shared_ptr<Submap2D> MapBuilder::GenerateGlobalStaticSubmap(double resoluti
   int nodes_with_real_range_data = 0;
   int nodes_with_synthetic_range_data = 0;
   
+  const size_t total_nodes = nodes.size();
+  size_t processed_nodes = 0;
   for (const auto& node : nodes) {
+    ++processed_nodes;
+    if (progress_callback_) {
+      progress_callback_(processed_nodes, total_nodes);
+    }
     // 7a. 处理range_datas
     if (!node.data.constant_data->range_datas.empty()) {
       nodes_with_real_range_data++;

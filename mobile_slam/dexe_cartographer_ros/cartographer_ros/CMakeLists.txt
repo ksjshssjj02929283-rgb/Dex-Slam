@@ -38,6 +38,7 @@ set(PACKAGE_DEPENDENCIES
   urdf
   visualization_msgs
   nav_interfaces
+  robot_localization
   rosbag2_cpp
   rosbag2_storage
 )
