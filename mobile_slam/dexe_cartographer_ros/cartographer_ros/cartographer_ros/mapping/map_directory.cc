@@ -16,13 +16,45 @@
 
 #include "cartographer_ros/mapping/map_directory.h"
 
+#include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <string>
 #include <system_error>
+#include <vector>
 
 namespace cartographer_ros {
 namespace fs = std::filesystem;
 
+namespace {
+
+// 解码一个合法的 UTF-8 码点；非法（截断、续字节错、超长编码、代理区、超出范围）返回 false
+bool NextCodePoint(const std::string& s, size_t* i, uint32_t* cp) {
+  const unsigned char c = static_cast<unsigned char>(s[*i]);
+  int len = 0;
+  if (c < 0x80) { *cp = c; *i += 1; return true; }
+  if ((c & 0xE0) == 0xC0) { len = 2; *cp = c & 0x1F; }
+  else if ((c & 0xF0) == 0xE0) { len = 3; *cp = c & 0x0F; }
+  else if ((c & 0xF8) == 0xF0) { len = 4; *cp = c & 0x07; }
+  else return false;
+  if (*i + len > s.size()) return false;
+  for (int k = 1; k < len; ++k) {
+    const unsigned char cc = static_cast<unsigned char>(s[*i + k]);
+    if ((cc & 0xC0) != 0x80) return false;
+    *cp = (*cp << 6) | (cc & 0x3F);
+  }
+  if ((len == 2 && *cp < 0x80) || (len == 3 && *cp < 0x800) || (len == 4 && *cp < 0x10000)) return false;
+  if ((*cp >= 0xD800 && *cp <= 0xDFFF) || *cp > 0x10FFFF) return false;
+  *i += len;
+  return true;
+}
+
+}  // namespace
+
+// 与 map_manager 的 map_package::ValidateNewMapName 同一套规则（建图、改名、恢复、导入都按它）：
+//   合法 UTF-8；不超过 kMaxMapNameBytes 字节；不是 . / ..，不以 . 或 - 开头；
+//   首尾没有空格（含全角空格、不换行空格）；不含控制字符和不可见字符；
+//   不含 / \ : * ? " < > | ' $ 和反引号（路径分隔、Windows 文件名、脚本引号与 shell 展开）
 bool ValidateMapName(const std::string& map_name,
                      std::string* error_message) {
   auto fail = [error_message](const std::string& message) {
@@ -35,15 +67,41 @@ bool ValidateMapName(const std::string& map_name,
   if (map_name.empty()) {
     return fail("map_name must not be empty");
   }
-  if (map_name.find('\0') != std::string::npos) {
-    return fail("map_name must not contain NUL characters");
+  if (map_name.size() > kMaxMapNameBytes) {
+    return fail("map_name is too long: " + std::to_string(map_name.size()) +
+                " bytes (limit " + std::to_string(kMaxMapNameBytes) +
+                " bytes, about 66 Chinese characters)");
   }
-
-  const fs::path name_path(map_name);
-  if (name_path.is_absolute() || name_path.has_root_path() ||
-      name_path.has_parent_path() || name_path.filename() != name_path ||
-      name_path == "." || name_path == "..") {
-    return fail("map_name must be a single directory name");
+  if (map_name == "." || map_name == "..") {
+    return fail("map_name must not be '.' or '..'");
+  }
+  if (map_name[0] == '.' || map_name[0] == '-') {
+    return fail("map_name must not start with '.' or '-'");
+  }
+  std::vector<uint32_t> code_points;
+  for (size_t i = 0; i < map_name.size();) {
+    uint32_t cp = 0;
+    if (!NextCodePoint(map_name, &i, &cp)) {
+      return fail("map_name is not valid UTF-8");
+    }
+    code_points.push_back(cp);
+  }
+  for (const uint32_t cp : code_points) {
+    if (cp < 0x20 || cp == 0x7F || (cp >= 0x80 && cp <= 0x9F)) {
+      return fail("map_name contains control characters");
+    }
+    if ((cp >= 0x200B && cp <= 0x200F) || (cp >= 0x202A && cp <= 0x202E) ||
+        (cp >= 0x2060 && cp <= 0x2064) || cp == 0x2028 || cp == 0x2029 ||
+        cp == 0xFEFF) {
+      return fail("map_name contains invisible characters (zero-width / direction marks)");
+    }
+    if (cp < 0x80 && std::strchr("/\\:*?\"<>|'$`", static_cast<int>(cp)) != nullptr) {
+      return fail("map_name must not contain any of / \\ : * ? \" < > | ' $ `");
+    }
+  }
+  auto is_space = [](uint32_t cp) { return cp == 0x20 || cp == 0xA0 || cp == 0x3000; };
+  if (is_space(code_points.front()) || is_space(code_points.back())) {
+    return fail("map_name must not start or end with a space (including full-width space)");
   }
 
   if (error_message != nullptr) {
@@ -146,6 +204,44 @@ MapDirectoryResetResult ResetMapDirectory(const fs::path& map_folder,
     return result;
   }
 
+  result.success = true;
+  return result;
+}
+
+bool IsLoadableMapDirectory(const fs::path& map_directory) {
+  std::error_code error;
+  return fs::is_regular_file(map_directory / "slam" / "map.yaml", error) ||
+         fs::is_regular_file(map_directory / "map.yaml", error);
+}
+
+MapDirectoryDiscardResult DiscardMapDirectory(const MapDirectoryResetResult& session,
+                                              const bool restore_previous) {
+  MapDirectoryDiscardResult result;
+  if (session.map_directory.empty()) {
+    result.success = true;
+    return result;
+  }
+  std::error_code error;
+  fs::remove_all(session.map_directory, error);
+  if (error) {
+    result.error_message = "failed to remove unsaved map directory " +
+                           session.map_directory.string() + ": " + error.message();
+    return result;
+  }
+  if (restore_previous && !session.trashed_directory.empty()) {
+    if (!fs::is_directory(session.trashed_directory, error)) {
+      result.error_message = "archived previous map is missing: " +
+                             session.trashed_directory.string();
+      return result;
+    }
+    fs::rename(session.trashed_directory, session.map_directory, error);
+    if (error) {
+      result.error_message = "failed to restore previous map from " +
+                             session.trashed_directory.string() + ": " + error.message();
+      return result;
+    }
+    result.restored_previous = true;
+  }
   result.success = true;
   return result;
 }

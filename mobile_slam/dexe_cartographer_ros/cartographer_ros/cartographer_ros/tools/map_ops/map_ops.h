@@ -248,8 +248,11 @@ struct RewriteOptions {
   ::cartographer::mapping::StructureAlignmentOptions align_options;
   // 写进 map.yaml 的 created_at（内容采集时刻）。替换语义下内容整体来自 src，
   // 所以调用方应传 **src 的** created_at，而不是目标图的、更不是"现在"
-  // （"现在"由 map.yaml 的 mtime 表达）。留空则不写该键。
+  // （"现在"由 map.yaml 的 mtime 表达）。src 也没有时留空，写入当前时间。
   std::string created_at;
+  // map.yaml 的合并底：本次不负责的键（display_yaw 等）从这里原样带过来。
+  // 留空则以输出路径上的旧 yaml 为底。
+  std::string base_yaml_path;
 };
 
 // 重写后的产物自检量。变换本身没有"对不对"的内建判据，只能靠产物侧的

@@ -160,11 +160,10 @@ int MapBuilderBridge::AddTrajectory(
              const std::unique_ptr<
                  const ::cartographer::mapping::TrajectoryBuilderInterface::
                      InsertionResult> insertion_result) {
-        std::shared_ptr<::cartographer::sensor::PointCloud> cloud_map(
-          new ::cartographer::sensor::PointCloud());
-        std::shared_ptr<::cartographer::mapping::LineMap2DList> line_map_2d_list(
-          new ::cartographer::mapping::LineMap2DList());
-        // 因为map insertion 的频率和matching result的频率不一样，所以map_insertion可能会返回空值
+        std::shared_ptr<::cartographer::sensor::PointCloud> cloud_map;
+        std::shared_ptr<::cartographer::mapping::LineMap2DList> line_map_2d_list;
+        // 因为map insertion 的频率和matching result的频率不一样，所以map_insertion可能会返回空值；
+        // 此时传 nullptr，由 OnLocalSlamResult 沿用上一次插入的结果
         if (insertion_result) {
           cloud_map = insertion_result->local_map;
           line_map_2d_list = insertion_result->line_map_2d_list;
@@ -1400,8 +1399,23 @@ void MapBuilderBridge::OnLocalSlamResult(
     std::shared_ptr<::cartographer::sensor::PointCloud> local_map,
     std::map<int, std::vector<::cartographer::sensor::LineData>>  line_data_in_local,
     std::shared_ptr<::cartographer::mapping::LineMap2DList> line_map_2d_list) {
-  // 构造当前轨迹的local_slam_data
-  std::shared_ptr<const LocalTrajectoryData::LocalSlamData> local_slam_data =
+  absl::MutexLock lock(&mutex_);
+  // 未插入子图的帧不带 local_map / line_map_2d_list，沿用上一次插入的结果；
+  // 否则每隔几帧就发一次空 Marker，RViz 中 local_feature_map 会一闪一闪
+  const auto last = local_slam_data_.find(trajectory_id);
+  if (!local_map) {
+    local_map = last != local_slam_data_.end() && last->second->local_map
+                    ? last->second->local_map
+                    : std::make_shared<::cartographer::sensor::PointCloud>();
+  }
+  if (!line_map_2d_list) {
+    line_map_2d_list =
+        last != local_slam_data_.end() && last->second->line_map_2d_list
+            ? last->second->line_map_2d_list
+            : std::make_shared<::cartographer::mapping::LineMap2DList>();
+  }
+  // 构造当前轨迹的local_slam_data，并保存到local_slam_data_中
+  local_slam_data_[trajectory_id] =
       std::make_shared<LocalTrajectoryData::LocalSlamData>(
           LocalTrajectoryData::LocalSlamData{time, local_pose,
                                              std::move(range_data_in_local),
@@ -1409,9 +1423,6 @@ void MapBuilderBridge::OnLocalSlamResult(
                                              std::move(line_data_in_local),
                                              line_map_2d_list
                                              });
-  absl::MutexLock lock(&mutex_);
-  // 将local_slam_data保存到local_slam_data_中
-  local_slam_data_[trajectory_id] = std::move(local_slam_data);
 }
 
 }  // namespace cartographer_ros

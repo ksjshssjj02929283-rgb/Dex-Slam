@@ -13,18 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <ctime>
-#include <fstream>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/imgcodecs.hpp>
-
 #include "cartographer_ros/mapping/ros_map.h"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <fstream>
+#include <map>
 #include <set>
 
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "glog/logging.h"
 
 namespace cartographer_ros {
 
@@ -89,66 +100,283 @@ GridMapStats ComputeGridMapStats(const cv::Mat& rendered_mat,
   return stats;
 }
 
-std::string ReadMapCreatedAt(const std::string& yaml_path) {
-  std::ifstream in(yaml_path);
-  if (!in.is_open()) return "";
-  std::string line;
-  while (std::getline(in, line)) {
-    const size_t colon = line.find(':');
-    if (colon == std::string::npos) continue;
-    std::string key = line.substr(0, colon);
-    const size_t kb = key.find_first_not_of(" \t");
-    const size_t ke = key.find_last_not_of(" \t\r");
-    if (kb == std::string::npos) continue;
-    key = key.substr(kb, ke - kb + 1);
-    if (key != "created_at") continue;
-    std::string value = line.substr(colon + 1);
-    const size_t vb = value.find_first_not_of(" \t");
-    const size_t ve = value.find_last_not_of(" \t\r");
-    if (vb == std::string::npos) return "";
-    value = value.substr(vb, ve - vb + 1);
-    // 去掉可能的引号（两种写法都接受）
-    if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
-        value.back() == value.front()) {
-      value = value.substr(1, value.size() - 2);
+namespace {
+
+// map.yaml 的内存镜像：整份载入，按键读改，整份写出。
+// 内部仍按行保存——没改过的行（含注释、空行、行尾注释）写回时逐字节不变。
+// 不用 yaml-cpp 正是为此：它重新输出会丢注释、改浮点格式和 origin 的行内列表写法。
+// 只处理扁平的单行 "key: value"（map.yaml 全由我方生成，就是这个形状）；
+// 其它行（注释、空行、缩进的续行）当作无键行原样保留。
+class MapYamlDoc {
+ public:
+  // 路径为空或文件不存在 = 空文档。重复键只认第一次出现，其后的同名行丢弃。
+  static MapYamlDoc Load(const std::string& path) {
+    MapYamlDoc doc;
+    if (path.empty()) return doc;
+    std::ifstream in(path);
+    for (std::string text; std::getline(in, text);) {
+      const std::string key = KeyOf(text);
+      if (!key.empty() && doc.index_.count(key) > 0) continue;
+      if (!key.empty()) doc.index_[key] = doc.lines_.size();
+      doc.lines_.push_back({key, text, /*touched=*/false});
     }
-    return value;
+    return doc;
   }
-  return "";
+
+  bool Has(const std::string& key) const { return index_.count(key) > 0; }
+
+  absl::optional<std::string> Get(const std::string& key) const {
+    const auto it = index_.find(key);
+    if (it == index_.end()) return absl::nullopt;
+    const std::string& text = lines_[it->second].text;
+    const size_t b = text.find_first_not_of(" \t", text.find(':') + 1);
+    const size_t e = text.find_last_not_of(" \t\r");
+    if (b == std::string::npos || e < b) return std::string();
+    return text.substr(b, e - b + 1);
+  }
+
+  absl::optional<double> GetDouble(const std::string& key) const {
+    const auto value = Get(key);
+    if (!value.has_value()) return absl::nullopt;
+    char* end = nullptr;
+    const double v = std::strtod(value->c_str(), &end);
+    if (end == value->c_str() || !std::isfinite(v)) return absl::nullopt;
+    return v;
+  }
+
+  // 已有：原位改值；没有：追加到末尾。
+  void Set(const std::string& key, const std::string& value) {
+    const std::string text = absl::StrCat(key, ": ", value);
+    const auto it = index_.find(key);
+    if (it != index_.end()) {
+      lines_[it->second].text = text;
+      lines_[it->second].touched = true;
+      return;
+    }
+    index_[key] = lines_.size();
+    lines_.push_back({key, text, /*touched=*/true});
+  }
+
+  void Erase(const std::string& key) {
+    const auto it = index_.find(key);
+    if (it == index_.end()) return;
+    lines_[it->second].erased = true;
+    index_.erase(it);
+  }
+
+  // 载入时就有、本次没被 Set / Erase 动过的键，用于日志。
+  std::vector<std::string> UntouchedKeys() const {
+    std::vector<std::string> keys;
+    for (const auto& line : lines_) {
+      if (!line.key.empty() && !line.touched && !line.erased) keys.push_back(line.key);
+    }
+    return keys;
+  }
+
+  std::string ToString() const {
+    std::string out;
+    for (const auto& line : lines_) {
+      if (!line.erased) absl::StrAppend(&out, line.text, "\n");
+    }
+    return out;
+  }
+
+ private:
+  struct Line {
+    std::string key;  // 空 = 注释 / 空行 / 续行
+    std::string text;
+    bool touched = false;
+    bool erased = false;
+  };
+
+  // 顶层键行 = 行首非空白、非 '#'，且冒号前有键名。
+  static std::string KeyOf(const std::string& text) {
+    if (text.empty() || text[0] == ' ' || text[0] == '\t' || text[0] == '#') return "";
+    const size_t colon = text.find(':');
+    if (colon == std::string::npos || colon == 0) return "";
+    const size_t e = text.find_last_not_of(" \t", colon - 1);
+    return e == std::string::npos ? "" : text.substr(0, e + 1);
+  }
+
+  std::vector<Line> lines_;
+  std::map<std::string, size_t> index_;  // 键 → lines_ 下标（已删除的不在内）
+};
+
+double NormalizeAngle(const double a) {
+  double r = std::remainder(a, 2.0 * M_PI);  // [-π, π]
+  if (r <= -M_PI) r += 2.0 * M_PI;            // 归到 (-π, π]
+  return r;
 }
 
-std::vector<std::string> FindDroppedYamlKeys(
-    const std::string& existing_yaml_path, const bool with_area_stats) {
-  std::vector<std::string> dropped;
-  std::ifstream in(existing_yaml_path);
-  if (!in.is_open()) return dropped;
-  // 本工具重写 map.yaml 时会产出的全部键（见 WriteYaml）。
-  std::set<std::string> written = {
-      "image",  "line_map",        "cloud_map",   "highlight_cloud_map",
-      "resolution", "origin",      "negate",      "occupied_thresh",
-      "free_thresh",
-      // created_at 由调用方读出后原样回写（ReadMapCreatedAt），不算丢。
-      "created_at",
-      // data_version 由调用方按写出的 pbstream 重新给出，不算丢。
-      "data_version"};
-  if (with_area_stats) {
-    written.insert("total_area_m2");
-    written.insert("effective_area_m2");
+// 角度会被反复读回再叠加补偿，6 位有效数字（StrCat 默认）会累积误差，这里给足 10 位。
+std::string FormatAngle(const double rad) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.10g", rad);
+  return buf;
+}
+
+std::string DirOf(const std::string& path) {
+  const size_t slash = path.find_last_of('/');
+  return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
+}
+
+// 目录级排它锁：同一目录下所有写 map.yaml 的进程（SLAM 节点、离线工具、map_manager）
+// 用同一个锁文件互斥，读改写之间不会被别人插进来。拿不到锁不阻止写盘，只告警。
+class MapYamlDirLock {
+ public:
+  explicit MapYamlDirLock(const std::string& dir) {
+    const std::string path = dir + "/.map.yaml.lock";
+    fd_ = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
+    if (fd_ < 0 || ::flock(fd_, LOCK_EX) != 0) {
+      LOG(WARNING) << "map.yaml lock unavailable (" << path << "): " << std::strerror(errno);
+    }
   }
-  std::string line;
-  while (std::getline(in, line)) {
-    const size_t colon = line.find(':');
-    if (colon == std::string::npos) continue;
-    std::string key = line.substr(0, colon);
-    // 去首尾空白
-    const size_t b = key.find_first_not_of(" \t");
-    const size_t e = key.find_last_not_of(" \t\r");
-    if (b == std::string::npos) continue;
-    key = key.substr(b, e - b + 1);
-    if (key.empty() || key[0] == '#') continue;
-    if (written.count(key) == 0) dropped.push_back(key);
+  ~MapYamlDirLock() {
+    if (fd_ >= 0) {
+      ::flock(fd_, LOCK_UN);
+      ::close(fd_);
+    }
   }
-  return dropped;
+  MapYamlDirLock(const MapYamlDirLock&) = delete;
+  MapYamlDirLock& operator=(const MapYamlDirLock&) = delete;
+
+ private:
+  int fd_ = -1;
+};
+
+bool WriteFileAtomically(const std::string& path, const std::string& content) {
+  const std::string tmp = path + ".tmp";
+  FILE* f = std::fopen(tmp.c_str(), "w");
+  if (f == nullptr) {
+    LOG(ERROR) << "Failed to open " << tmp << ": " << std::strerror(errno);
+    return false;
+  }
+  const bool ok = std::fwrite(content.data(), 1, content.size(), f) == content.size() &&
+                  std::fflush(f) == 0 && ::fsync(::fileno(f)) == 0;
+  std::fclose(f);
+  if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) {
+    LOG(ERROR) << "Failed to write " << path << ": " << std::strerror(errno);
+    std::remove(tmp.c_str());
+    return false;
+  }
+  return true;
+}
+
+// 写入方负责的键依次写进文档；data_version 放最后，保证追加时排在末尾
+// （与新建时的顺序一致：其它键 → created_at → last_edited_at → data_version）。
+void SetEntriesExceptVersion(const MapYamlEntries& entries, MapYamlDoc* yaml) {
+  for (const auto& kv : entries) {
+    if (kv.first != "data_version") yaml->Set(kv.first, kv.second);
+  }
+}
+
+void SetVersion(const MapYamlEntries& entries, MapYamlDoc* yaml) {
+  for (const auto& kv : entries) {
+    if (kv.first == "data_version") yaml->Set(kv.first, kv.second);
+  }
+}
+
+bool HasEntry(const MapYamlEntries& entries, const std::string& key) {
+  for (const auto& kv : entries) {
+    if (kv.first == key) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+std::string ReadMapCreatedAt(const std::string& yaml_path) {
+  std::string value = MapYamlDoc::Load(yaml_path).Get("created_at").value_or("");
+  // 去掉可能的引号（两种写法都接受）
+  if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+      value.back() == value.front()) {
+    value = value.substr(1, value.size() - 2);
+  }
+  return value;
+}
+
+MapYamlEntries MakeMapYamlEntries(const double resolution, const Eigen::Vector2d& origin,
+                                  const std::string& map_file_name,
+                                  const double occ_thresh, const double free_thresh,
+                                  const absl::optional<std::string>& data_version,
+                                  const GridMapStats* stats) {
+  // image 使用相对路径（仅 basename），不写绝对路径：无论地图目录位于何处
+  // （staging / 正式 / backup / 被整体移动），读取侧都按"yaml 所在目录 + 相对路径"解析。
+  // 点云与线特征都固化在 map.pbstream 里，yaml 不再引用 pcd / 线特征文件。
+  const size_t slash = map_file_name.find_last_of('/');
+  const std::string base =
+      (slash == std::string::npos) ? map_file_name : map_file_name.substr(slash + 1);
+  // 数值常量与写法沿用 ros map_saver：
+  // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
+  MapYamlEntries entries = {
+      {"image", base + ".png"},
+      {"resolution", absl::StrCat(resolution)},
+      {"origin", absl::StrCat("[", origin.x(), ", ", origin.y(), ", 0.0]")},
+      {"negate", "0"},
+      {"occupied_thresh", absl::StrCat(occ_thresh)},
+      {"free_thresh", absl::StrCat(free_thresh)}};
+  if (stats != nullptr) {
+    // 地图面积统计（口径见 GridMapStats）；读取侧对多余键不报错，旧地图无此段亦可加载
+    entries.emplace_back("total_area_m2", absl::StrCat(stats->TotalAreaM2()));
+    entries.emplace_back("effective_area_m2", absl::StrCat(stats->EffectiveAreaM2()));
+  }
+  // 同目录 map.pbstream 的数据版本（语义见 ros_map.h WriteYaml 注释）。
+  if (data_version.has_value()) {
+    entries.emplace_back("data_version",
+                         data_version->empty() ? std::string("legacy") : *data_version);
+  }
+  return entries;
+}
+bool WriteMapYamlMerged(const std::string& out_yaml_path, const MapYamlEntries& entries,
+                        const MapYamlMergeOptions& opts) {
+  // 锁加在"底"所在目录：读改写要防的是底在读和写之间被别人改掉。
+  // 定位侧保存的输出在 staging 目录、底是正式目录，两者不同时也以底为准。
+  MapYamlDirLock lock(
+      DirOf(opts.base_yaml_path.empty() ? out_yaml_path : opts.base_yaml_path));
+  MapYamlDoc yaml = MapYamlDoc::Load(opts.base_yaml_path);
+
+  // 1. 本方负责的键：原位覆盖，底里没有的追加
+  SetEntriesExceptVersion(entries, &yaml);
+
+  // 1b. 旧版本写过的文件引用键（点云 / 线特征已固化在 pbstream，文件不再生成），删掉免得指向不存在的文件
+  for (const char* key : {"line_map", "cloud_map", "highlight_cloud_map"}) yaml.Erase(key);
+
+  // 2. 面积依赖底图像素：重画了底图却没算面积，旧值必须删掉，宁缺勿错
+  if (!HasEntry(entries, "total_area_m2")) {
+    yaml.Erase("total_area_m2");
+    yaml.Erase("effective_area_m2");
+  }
+
+  // 3. created_at：显式给了用给的（空串 = 现在）；没给就沿用底，底也没有才取现在
+  if (opts.created_at.has_value()) {
+    yaml.Set("created_at", opts.created_at->empty() ? LocalTimeIso8601() : *opts.created_at);
+  } else if (!yaml.Has("created_at")) {
+    yaml.Set("created_at", LocalTimeIso8601());
+  }
+
+  // 4. display_yaw：坐标系转了就补偿，界面上的朝向保持不变；底里没有不新增
+  if (opts.display_yaw_delta != 0.0 && yaml.Has("display_yaw")) {
+    const auto yaw = yaml.GetDouble("display_yaw");
+    if (yaw.has_value()) {
+      yaml.Set("display_yaw", FormatAngle(NormalizeAngle(*yaw + opts.display_yaw_delta)));
+    } else {
+      LOG(WARNING) << "map.yaml display_yaw is not a number, kept as is: '"
+                   << yaml.Get("display_yaw").value_or("") << "'";
+    }
+  }
+
+  // 5. last_edited_at：底图最后一次被编辑的时刻。走到这里就是底图被重写了，一律取现在
+  yaml.Set("last_edited_at", LocalTimeIso8601());
+
+  // 6. data_version 最后写
+  SetVersion(entries, &yaml);
+
+  const std::vector<std::string> kept = yaml.UntouchedKeys();
+  if (!kept.empty()) {
+    LOG(INFO) << "map.yaml merged (" << out_yaml_path << "), kept keys not owned by this writer: "
+              << absl::StrJoin(kept, ", ");
+  }
+  return WriteFileAtomically(out_yaml_path, yaml.ToString());
 }
 
 void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
@@ -158,44 +386,18 @@ void WriteYaml(const double resolution, const Eigen::Vector2d& origin,
                const absl::optional<std::string>& data_version,
                const GridMapStats* stats, const std::string& created_at)
 {
-  // yaml 内引用的文件路径使用相对路径（仅 basename），不写绝对路径。
-  // 这样无论地图目录位于何处（staging / 正式 / backup / 被整体移动），
-  // 加载侧（map_loader）都按"yaml 所在目录 + 相对路径"解析，路径恒有效。
-  // 修复：此前用完整 map_file_name 导致 yaml 写入 staging 绝对路径，rename 后失效。
-  const size_t slash = map_file_name.find_last_of('/');
-  const std::string base =
-      (slash == std::string::npos) ? map_file_name : map_file_name.substr(slash + 1);
-  const std::string pgm_filename = base + ".png";
-  const std::string line_map_filename = base + "_line_map.json";
-  const std::string cloud_map_filename = base + ".pcd";
-  const std::string highlight_cloud_map_filename = base + "_highlight.pcd";
-
-  // Magic constants taken directly from ros map_saver code:
-  // https://github.com/ros-planning/navigation/blob/ac41d2480c4cf1602daf39a6e9629142731d92b0/map_server/src/map_saver.cpp#L114
-  std::string output = absl::StrCat(
-      "image: ", pgm_filename, "\n",
-      "line_map: ", line_map_filename, "\n",
-      "cloud_map: ", cloud_map_filename, "\n",
-      "highlight_cloud_map: ", highlight_cloud_map_filename, "\n",
-      "resolution: ", resolution, "\n",
-      "origin: [", origin.x(), ", ", origin.y(),
-      ", 0.0]\nnegate: 0\noccupied_thresh: ", occ_thresh, "\nfree_thresh: ", free_thresh, "\n");
-  if (stats != nullptr) {
-    // 地图面积统计（口径见 GridMapStats）；读取侧对多余键不报错，旧地图无此段亦可加载
-    absl::StrAppend(&output,
-        "total_area_m2: ", stats->TotalAreaM2(), "\n",
-        "effective_area_m2: ", stats->EffectiveAreaM2(), "\n");
-  }
+  // 新建地图：从空文档按 其它键 → created_at → last_edited_at → data_version 的顺序写。
+  const MapYamlEntries entries = MakeMapYamlEntries(resolution, origin, map_file_name,
+                                                    occ_thresh, free_thresh, data_version, stats);
+  MapYamlDoc yaml;
+  SetEntriesExceptVersion(entries, &yaml);
   // 地图创建时刻，机器人本地时间 ISO 8601、无时区后缀；map_manager get_maps 以 MapInfo.created_at 透传给上层。
-  // 新建图取当前时间；定位侧更新保存（save_map）传入已加载地图的原值，创建时刻不随更新漂移
-  absl::StrAppend(&output, "created_at: ", created_at.empty() ? LocalTimeIso8601() : created_at, "\n");
-  // 同目录 map.pbstream 的数据版本（语义见 ros_map.h WriteYaml 注释）。
-  if (data_version.has_value()) {
-    absl::StrAppend(&output, "data_version: ",
-                    data_version->empty() ? std::string("legacy")
-                                                   : *data_version,
-                    "\n");
-  }
+  const std::string created = created_at.empty() ? LocalTimeIso8601() : created_at;
+  yaml.Set("created_at", created);
+  // 新建即首次编辑，两者相同；之后只有底图编辑会推进 last_edited_at
+  yaml.Set("last_edited_at", created);
+  SetVersion(entries, &yaml);
+  const std::string output = yaml.ToString();
   file_writer->Write(output.data(), output.size());
 }
 

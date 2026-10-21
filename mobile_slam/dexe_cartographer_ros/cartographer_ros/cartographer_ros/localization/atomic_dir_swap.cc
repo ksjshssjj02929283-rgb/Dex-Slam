@@ -95,6 +95,15 @@ std::string FormatIsoTimestamp(std::time_t t) {
   return std::string(buf);
 }
 
+// 归档出的历史版本与 map_manager / 离线工具同一版本序列，写 .source 标明来源（定位侧保存）。
+// 失败只告警：版本内容完整，缺标记只影响来源显示。
+void MarkVersionSource(const std::string& version_dir) {
+  std::ofstream ofs(version_dir + "/.source");
+  if (!(ofs << "localization_save\n")) {
+    LOG(WARNING) << "[AtomicDirSwap] failed to write .source into " << version_dir;
+  }
+}
+
 // 从 sentinel 中读取 timestamp_unix 字段；失败返回当前时间作兜底
 std::time_t ReadSentinelTimestamp(const std::string& sentinel_path) {
   std::ifstream ifs(sentinel_path);
@@ -214,6 +223,7 @@ static bool ArchiveSwapBackupToTarget(const std::string& target_dir,
                  << ec_arc.message();
     return false;
   }
+  MarkVersionSource(history_backup);
   FsyncPath(target_backups_subdir);
   LOG(INFO) << "[AtomicDirSwap] ArchiveSwapBackupToTarget: archived to " << history_backup;
   return true;
@@ -600,6 +610,7 @@ bool AtomicDirSwap::ActivateAndCleanup() {
                  << ec.message() << "; new target is still valid";
       return true;
     }
+    MarkVersionSource(final_history);
     FsyncPath(container);
     LOG(INFO) << "[AtomicDirSwap] step 5b: archived swap_backup -> " << final_history;
   }

@@ -116,19 +116,37 @@ void RenderSingleStaticSubmap(
 ::cartographer::mapping::LineMap2DList LineMap2DListFromProto(
     const ::cartographer::mapping::proto::LineMap2DList& proto);
 
-// 把 map_filestem 对应的所有现存地图文件整体备份到一个带时间戳的目录：
-//   <slam目录>/backups/backup_<YYYYMMDD_HHMMSS>/<原文件名>
-// 目录内子文件保持原名（map.pbstream / map.png / ...），便于直接整目录恢复。
-// candidate_extensions 为待检查的后缀列表（如 ".pbstream"、"_highlight.pcd"）。
-// 返回备份目录路径；没有任何候选文件存在时返回空串且不创建目录。
-// 注意：建图节点自己的归档用 backup.<ts>/（点分隔）命名，AtomicDirSwap 轮换
-// 只认该前缀；本工具的 backup_<ts>/（下划线）目录不参与节点轮换，两者共存。
-std::string BackupMapFiles(
-    const std::string& map_filestem,
-    const std::vector<std::string>& candidate_extensions);
+// 地图级排它锁：改动同一张地图的操作（对齐 / 替换 / 重设原点，以及 map_manager 的底图编辑与回滚）互斥。
+// 锁文件 <slam_dir>/.map_op.lock，非阻塞：已被占用时 acquired() 为 false，调用方应报「地图正被其它操作修改」并退出，
+// 而不是两个进程同时写同一份 map.pbstream / map.png。进程退出（含崩溃）时内核自动释放。
+// 不复用 .map.yaml.lock：工具内部写 map.yaml 时还会拿那把锁，同一进程另开描述符再加锁会把自己锁死。
+class MapOpLock {
+ public:
+  explicit MapOpLock(const std::string& slam_dir);
+  ~MapOpLock();
+  MapOpLock(const MapOpLock&) = delete;
+  MapOpLock& operator=(const MapOpLock&) = delete;
+  bool acquired() const { return fd_ >= 0; }
 
-// 生成当前本地时间的时间戳字符串（YYYYMMDD_HHMMSS）。
-std::string CurrentTimestamp();
+ private:
+  int fd_ = -1;
+};
+
+// 底图版本保留份数，与 map_manager / 定位侧 map_backup_keep_count 默认值一致。
+constexpr int kMapVersionKeepCount = 50;
+
+// 改动地图文件前，把当前状态存成一个底图版本。与定位侧保存、map_manager（底图编辑 / 回滚）
+// 写同一个版本序列，格式只有一种：
+//   <slam_dir>/backups/backup.<YYYYMMDD-HHMMSS>[-N]/
+//     map.pbstream / map.png / map.yaml          必备三件（回滚要求齐全）
+//     map.pcd / map_highlight.pcd / map_line_map.json / map_origin.png   存在则一并保存
+//     .source                                     来源：align / replace / reset_origin / …
+// 只复制不移动（后续步骤有大量 CHECK 退出点，原地图必须原封不动）；先写隐藏临时目录再改名，
+// 不留半成品；同秒冲突追加 -N；超过 keep 份时删最旧的。
+// 返回版本目录（version_ts 非空时写入 <ts>）；slam_dir 里一个地图文件都没有时返回空串。
+std::string CreateMapVersion(const std::string& slam_dir, const std::string& source,
+                             std::string* version_ts = nullptr, int keep = kMapVersionKeepCount);
+
 
 // 对 PCD 文件（pcl::PointXYZ）施加 T_inv 并写回。文件不存在时返回 false。
 bool TransformPcdFile(const std::string& pcd_file,

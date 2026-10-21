@@ -210,7 +210,10 @@ private:
     }
     const std::filesystem::path map_directory =
         std::filesystem::path(FLAGS_map_folder) / req->map_name;
-    if (std::filesystem::exists(map_directory) && !req->overwrite) {
+    // 重名只看「是否已有一张可加载的地图」（与 get_maps 同口径）；取消 / 中断建图
+    // 留下的残留目录不算，照常开始，残留由 ResetMapDirectory 归档进回收站
+    const bool previous_is_map = IsLoadableMapDirectory(map_directory);
+    if (previous_is_map && !req->overwrite) {
       LOG(ERROR) << "Map '" << req->map_name << "' already exists and overwrite is false.";
       FillResult(res.get(), false, MS::E_MAP_NAME_EXISTS,
                  "Map already exists; set overwrite=true to recreate: " + req->map_name);
@@ -243,7 +246,16 @@ private:
       }
       return;
     }
-    if (reset_result.replaced_existing) {
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      session_reset_ = reset_result;
+      session_restore_previous_ = previous_is_map;
+    }
+    if (reset_result.replaced_existing && !previous_is_map) {
+      LOG(INFO) << "Map directory '" << reset_result.map_directory.string()
+                << "' held no loadable map (leftover of a cancelled or interrupted session); "
+                   "archived to '" << reset_result.trashed_directory.string() << "'.";
+    } else if (reset_result.replaced_existing) {
       if (!reset_result.trashed_directory.empty()) {
         LOG(WARNING) << "Recreated existing map directory '"
                      << reset_result.map_directory.string()
@@ -356,13 +368,31 @@ private:
     StopShowMap();
     // 直接重置建图节点，不保存任何数据
     ResetMappingNode();
+    MapDirectoryResetResult session;
+    bool restore_previous = false;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       map_name_.clear();
       map_path_.clear();
+      session = session_reset_;
+      restore_previous = session_restore_previous_;
+      session_reset_ = MapDirectoryResetResult{};
+      session_restore_previous_ = false;
     }
+    // 撤销本次建图对地图目录的改动：删掉未保存的目录，覆盖建图时还原原来的地图，
+    // 这样取消后同名可以直接再建，覆盖了的旧图也不会凭空消失
+    const MapDirectoryDiscardResult discard = DiscardMapDirectory(session, restore_previous);
     res->success = true;
-    res->message = "Mapping cancelled successfully";
+    if (!discard.success) {
+      LOG(ERROR) << "Mapping cancelled, but cleaning the unsaved map directory failed: "
+                 << discard.error_message;
+      res->message = "Mapping cancelled, but map directory cleanup failed: " + discard.error_message;
+    } else if (discard.restored_previous) {
+      LOG(INFO) << "Mapping cancelled; previous map restored to '" << session.map_directory.string() << "'.";
+      res->message = "Mapping cancelled; previous map restored";
+    } else {
+      res->message = "Mapping cancelled successfully";
+    }
   }
   // ---- Helpers ----
   bool EnsureDirectoryExists(const std::string& path) {
@@ -525,6 +555,12 @@ private:
     }
     LOG(INFO) << "Map saved successfully. Resetting mapping node.";
     ResetMappingNode();
+    {
+      // 已保存：本次会话的目录改动成立，之后的 cancel 不再回滚
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      session_reset_ = MapDirectoryResetResult{};
+      session_restore_previous_ = false;
+    }
     progress_ = 100.0f;
     SetStage("DONE");
     return true;
@@ -544,6 +580,9 @@ private:
   std::string stage_;                          // 受 state_mutex_ 保护
   int32_t error_code_{0};                      // 受 state_mutex_ 保护
   std::mutex state_mutex_;
+  // 本次建图会话对地图目录做的重置（取消时据此回滚），受 state_mutex_ 保护
+  MapDirectoryResetResult session_reset_;
+  bool session_restore_previous_ = false;      // 开始时原目录是一张可加载地图，取消时要还原
   std::atomic<float> progress_{0.0f};          // 0~100，定时器与保存线程并发读写
   std::atomic<bool> is_mapping_{false};
   std::atomic<bool> is_saving_{false};         // 正在保存/收尾建图（~/state 报 SAVING）

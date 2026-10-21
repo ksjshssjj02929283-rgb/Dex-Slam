@@ -38,6 +38,11 @@ struct MapDirectoryResetResult {
 // 「.」前缀让 map_manager 的目录扫描天然跳过它。
 inline constexpr const char* kMapTrashDirName = ".map_trash";
 
+// 地图名字节上限：ext4 单个文件名上限 255 字节，地图名之后还要拼回收站条目、导出包等后缀，
+// 留出余量；中文一个字 3 字节，约 66 个汉字。与 map_manager 一致。
+inline constexpr size_t kMaxMapNameBytes = 200;
+
+// 新地图名的校验（建图入口）。规则与 map_manager 的改名 / 恢复 / 导入相同，见 .cc。
 bool ValidateMapName(const std::string& map_name,
                      std::string* error_message);
 
@@ -58,6 +63,24 @@ bool ValidateMapName(const std::string& map_name,
 MapDirectoryResetResult ResetMapDirectory(
     const std::filesystem::path& map_folder, const std::string& map_name,
     bool use_trash = true);
+
+// 目录里是否有一张可加载的地图：<dir>/slam/map.yaml 或旧扁平布局的 <dir>/map.yaml。
+// 与 map_manager 列地图的口径一致——取消 / 中断建图留下的空 slam/ 不算地图，
+// 既不出现在 get_maps 里，也不应让 start_mapping 判为重名。
+bool IsLoadableMapDirectory(const std::filesystem::path& map_directory);
+
+struct MapDirectoryDiscardResult {
+  bool success = false;
+  bool restored_previous = false;  // 已把开始建图时归档的旧地图从回收站移回原位
+  std::string error_message;
+};
+
+// 撤销一次建图会话的目录改动（取消建图用）：删除本次 ResetMapDirectory 新建的
+// <map_folder>/<map_name>/（里面只有本次未保存的内容）；restore_previous 为真且
+// 开始时归档过旧目录，则把它从回收站移回原位，相当于这次建图没有发生过。
+// restore_previous 为假（旧目录只是残留、不是地图）时归档留在回收站，不再还原。
+MapDirectoryDiscardResult DiscardMapDirectory(const MapDirectoryResetResult& session,
+                                              bool restore_previous);
 
 }  // namespace cartographer_ros
 

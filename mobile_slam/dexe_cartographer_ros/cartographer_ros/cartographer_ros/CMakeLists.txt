@@ -62,6 +62,18 @@ install(TARGETS atomic_dir_swap_test
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# map.yaml 合并写出测试 binary（standalone，运行：`ros2 run cartographer_ros map_yaml_merge_test`）
+google_binary(map_yaml_merge_test
+  SRCS
+    mapping/map_yaml_merge_test_main.cc
+)
+
+install(TARGETS map_yaml_merge_test
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 google_binary(loc_offline_node
   SRCS
     localization/loc_offline_node_main.cc
@@ -236,6 +248,18 @@ google_binary(replace_map_tool
 )
 
 install(TARGETS replace_map_tool
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+# 从 map.pbstream 导出点云 / 静态底图 / 线特征（只读，运行：`ros2 run cartographer_ros pbstream_export_tool --map_name <图名>`）
+google_binary(pbstream_export_tool
+  SRCS
+    tools/pbstream_export_main.cc
+)
+
+install(TARGETS pbstream_export_tool
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

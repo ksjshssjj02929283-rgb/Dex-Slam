@@ -319,6 +319,12 @@ private:
       RCLCPP_WARN(get_logger(), "MapState with empty folder/name, ignoring");
       return;
     }
+    // 地图名会拼成 <map_folder>/<map_name>/slam：只接受单层目录名，防止拼出地图目录之外的路径
+    if (msg->map_name == "." || msg->map_name == ".." ||
+        msg->map_name.find('/') != std::string::npos) {
+      RCLCPP_WARN(get_logger(), "MapState with invalid map name '%s', ignoring", msg->map_name.c_str());
+      return;
+    }
     if (msg->epoch == last_map_epoch_) return;  // epoch 未变，无需处理
 
     const uint64_t prev = last_map_epoch_;

@@ -149,7 +149,7 @@ void LocalizationUpdaterBridge::LoadState(const std::string& state_filename,
   {
     const size_t slash = state_filename.find_last_of('/');
     const std::string dir = (slash == std::string::npos) ? "." : state_filename.substr(0, slash);
-    loaded_created_at_ = ReadMapCreatedAt(dir + "/map.yaml");   // 更新保存沿用创建时刻
+    loaded_map_yaml_path_ = dir + "/map.yaml";   // 保存时的合并底
   }
   cartographer::io::ProtoStreamReader stream(state_filename);
   localization_updater_->LoadState(&stream, load_frozen_state);
@@ -234,8 +234,11 @@ bool LocalizationUpdaterBridge::ResetMapOrigin(
   //   渲染单个 global_dynamic_submap_（已是新坐标系下的合并 submap），
   //   与 reset_map_origin_tool 的 RenderSingleStaticSubmap 等价。
   // -----------------------------------------------------------------------
+  // 新原点在旧系下的朝向就是坐标系转过的角度，显示朝向随之补偿。
+  pending_display_yaw_delta_ = ::cartographer::transform::GetYaw(T_reset);
   const bool map_ok = SaveMap(map_base_filename, occ_thresh, free_thresh,
                               /*is_from_pose_graph=*/false);
+  pending_display_yaw_delta_ = 0.0;
   if (!map_ok) {
     LOG(ERROR) << "ResetMapOrigin: SaveMap failed for: " << map_base_filename;
     // 仍然尝试保存 pbstream，不因此提前退出
@@ -427,7 +430,7 @@ static bool RenderSubmapToFiles(
     const std::string& navigation_map_filter_mode,
     const bool save_debug_map,
     const bool save_map_pcd,
-    const std::string& created_at,     // 已加载地图的 created_at，空 = 取当前时间
+    const MapYamlMergeOptions& yaml_opts,  // map.yaml 合并底与补偿
     const std::string& data_version) {   // 随之写出的 pbstream 版本（空 = legacy）
   const cartographer::mapping::Grid2D* grid = submap->grid();
   if (!grid) {
@@ -527,13 +530,15 @@ static bool RenderSubmapToFiles(
   const GridMapStats map_stats =
       ComputeGridMapStats(origin_mat, filtered_mat, resolution, free_thresh);
   // 定位侧保存的是同一场勘测的更新结果（动态层/位姿图优化），内容没换
-  // ⇒ created_at 沿用已加载地图的值（由调用方传入）。
-  for (const auto& key : FindDroppedYamlKeys(yaml_path, true)) {
-    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key << "'";
+  // ⇒ 以已加载地图的 map.yaml 为底合并，created_at 等非本侧键原样沿用。
+  if (!WriteMapYamlMerged(yaml_path,
+                          MakeMapYamlEntries(resolution, map_origin, map_filename,
+                                             occ_thresh, free_thresh, data_version,
+                                             &map_stats),
+                          yaml_opts)) {
+    LOG(ERROR) << "RenderSubmapToFiles: failed to write " << yaml_path;
+    return false;
   }
-  cartographer::io::StreamFileWriter yaml_writer(yaml_path);
-  WriteYaml(resolution, map_origin, map_filename, &yaml_writer, occ_thresh,
-            free_thresh, data_version, &map_stats, created_at);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
@@ -553,6 +558,13 @@ static bool RenderSubmapToFiles(
   }
 
   return true;
+}
+
+MapYamlMergeOptions LocalizationUpdaterBridge::LoadedMapYamlMergeOptions() const {
+  MapYamlMergeOptions opts;
+  opts.base_yaml_path = loaded_map_yaml_path_;
+  opts.display_yaw_delta = pending_display_yaw_delta_;
+  return opts;
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +598,7 @@ bool LocalizationUpdaterBridge::SaveMapFromGlobalSubmap(
                              node_options_.navigation_map_filter_mode,
                              node_options_.save_debug_map,
                              node_options_.save_map_pcd,
-                             loaded_created_at_,
+                             LoadedMapYamlMergeOptions(),
                              localization_updater_->data_version());
 }
 
@@ -690,13 +702,15 @@ bool LocalizationUpdaterBridge::SaveMapFromPoseGraph(
   const std::string yaml_path = map_filename + ".yaml";
   const GridMapStats map_stats =
       ComputeGridMapStats(origin_mat, filtered_mat, resolution, free_thresh);
-  for (const auto& key : FindDroppedYamlKeys(yaml_path, true)) {
-    LOG(WARNING) << "map.yaml key dropped by rewrite: '" << key << "'";
+  if (!WriteMapYamlMerged(yaml_path,
+                          MakeMapYamlEntries(resolution, map_origin, map_filename,
+                                             occ_thresh, free_thresh,
+                                             localization_updater_->data_version(),
+                                             &map_stats),
+                          LoadedMapYamlMergeOptions())) {
+    LOG(ERROR) << "SaveMapFromPoseGraph: failed to write " << yaml_path;
+    return false;
   }
-  cartographer::io::StreamFileWriter yaml_writer(yaml_path);
-  WriteYaml(resolution, map_origin, map_filename, &yaml_writer,
-            occ_thresh, free_thresh, localization_updater_->data_version(),
-            &map_stats, loaded_created_at_);
   LOG(INFO) << "Map area recomputed: total " << map_stats.TotalAreaM2()
             << " m2, effective (free) " << map_stats.EffectiveAreaM2() << " m2";
 
