@@ -16,6 +16,8 @@
 
 #include "cartographer/localization/internal/2d/pose_estimator_2d.h"
 
+#include <algorithm>
+
 #include <limits>
 #include <memory>
 #include <cmath>
@@ -76,6 +78,20 @@ PoseEstimator2D::PoseEstimator2D(
 
   // 初始化一致性检查器
   consistency_checker_ = std::make_unique<ConsistencyChecker>(options_);
+
+  // 一致性/恢复现场快照（排障用，由 lua consistency_checker.debug_dump_enabled 打开）
+  {
+    const auto& cc = options_.consistency_checker_options();
+    ConsistencyDebugDumper::Options dump_options;
+    dump_options.enabled = cc.debug_dump_enabled();
+    dump_options.dir = cc.debug_dump_dir();
+    dump_options.max_files =
+        cc.debug_dump_max_files() != 0 ? cc.debug_dump_max_files() : 1000;
+    dump_options.scale = cc.debug_dump_scale() != 0 ? cc.debug_dump_scale() : 2;
+    dump_options.point_radius = cc.debug_dump_point_radius();
+    dump_options.every_frame = cc.debug_dump_every_frame();
+    consistency_debug_dumper_.Configure(dump_options);
+  }
   
   // 设置 scan matchers 到 consistency checker
   consistency_checker_->SetRealTimeCorrelativeScanMatcher(&real_time_correlative_scan_matcher_);
@@ -356,7 +372,7 @@ std::unique_ptr<transform::Rigid2d> PoseEstimator2D::ScanMatch(
                               pose_observation.get(),
                               &summary);
 
-    active_submaps_.clear();
+    ResetActiveSubmaps("scan match fallback");
     if (!summary.IsSolutionUsable() || summary.final_cost == -1 ||
         std::isinf(summary.final_cost) || std::isnan(summary.final_cost))
     {
@@ -516,7 +532,7 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
         UpdateLastOdomForDelta(sync_time);
         loc_state_ = LocalizationState::LOCALIZED;
         pose_initializer_->stop();
-        active_submaps_.clear();
+        ResetActiveSubmaps("global relocalization succeeded");
         local_map_updater_->UpdateRobotPose(transform::Project2D(local_pose_));
         
         // 重置全局重定位尝试标志
@@ -610,6 +626,14 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     }
   }
 
+  // 供快照元数据：本帧里程计预测增量。快照里的 trans_err 就是它与扫描匹配位移之差，
+  // 把它单独打出来才能区分「匹配跑偏」和「预测没跟上」——两者的 trans_err 长得一样。
+  const auto odom_delta_2d = transform::Project2D(odom_delta_pose);
+  const std::string odom_dxy_str =
+      std::to_string(odom_delta_2d.translation().norm());
+  const std::string odom_dyaw_str =
+      std::to_string(odom_delta_2d.rotation().angle());
+
   const sensor::PointCloud& filtered_gravity_aligned_point_cloud = merged_data.merged_filtered_cloud;
   if (filtered_gravity_aligned_point_cloud.empty()) {
     return nullptr;
@@ -626,6 +650,14 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
                 tracked_lane_data,
                 global_tracked_lane_data);
   
+  // 回退门三项：必须**紧跟主匹配之后**取——recovery 路径复用同一个 matcher 对象会覆盖它。
+  // `revert=1` 表示 Ceres 结果被丢弃、输出位姿 ≡ 初值，此时下游 trans_err/rot_err 必为 0；
+  // 快照里同时看到 revert=1 与 trans_err=0，就说明这一帧的一致性检查是「被构造成通过的」。
+  const auto revert_info = ceres_scan_matcher_.last_revert_info();
+  const std::string revert_dxy_str = std::to_string(revert_info.delta_dist);
+  const std::string revert_dyaw_str = std::to_string(revert_info.delta_yaw);
+  const std::string reverted_str = revert_info.reverted ? "1" : "0";
+
   if (pose_estimate_2d == nullptr) {
     LOG(WARNING) << "Scan matching failed.";
     return nullptr;
@@ -653,7 +685,28 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
   // 步骤2: 如果一致性检查失败，尝试验证和恢复
   if (!check_result.is_consistent) {
     LOG(WARNING) << "Pose consistency check failed, attempting validation and recovery...";
-    
+
+    // 快照①：恢复行为被触发的那一刻——当前位姿下的点云 + 本次匹配用的 local submap。
+    // 各雷达合并前的去畸变点云分色绘出，若多雷达时间对齐有问题会整体错开一个角度。
+    if (consistency_debug_dumper_.enabled()) {
+      consistency_debug_dumper_.Dump(
+          ConsistencyDebugDumper::Event::kCheckFailed, time, *pose_estimate_2d,
+          &pose_prediction, *local_submap, filtered_gravity_aligned_point_cloud,
+          merged_data.original_undistorted_range_datas,
+          merged_data.original_sensor_ids,
+          {{"conf", std::to_string(check_result.confidence)},
+           {"trans_err", std::to_string(check_result.translation_error)},
+           {"rot_err", std::to_string(check_result.rotation_error)},
+           {"v", std::to_string(check_result.linear_velocity)},
+           {"w", std::to_string(check_result.angular_velocity)},
+           {"odom_dxy", odom_dxy_str},
+           {"odom_dyaw", odom_dyaw_str},
+           {"revert", reverted_str},
+           {"ceres_dxy", revert_dxy_str},
+           {"ceres_dyaw", revert_dyaw_str},
+           {"reason", check_result.failure_reason}});
+    }
+
     // 步骤2a: 尝试验证位姿
     bool validation_passed = consistency_checker_->ValidatePoseEstimate(
         *pose_estimate_2d,
@@ -663,13 +716,13 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
     if (!validation_passed) {
       LOG(WARNING) << "Pose validation also failed";
       
-      // 步骤2b: 以估计位姿为中心同步重建 local_map_updater_ 内部的 local_submap_
-      // 原因：当前 local_submap 可能以里程计位姿为中心，与 scan match 估计位置有偏差
-      // 重建后 local_submap_ 以 pose_estimate_2d 为中心，搜索范围更加合理
-      local_map_updater_->RebuildLocalSubmapAt(*pose_estimate_2d);
+      // 步骤2b: 以估计位姿为中心、从【static 底图】同步重建 local_submap_ 供恢复搜索。
+      // 不从 dynamic 裁：一致性检查失败但验证通过的帧仍会插图，dynamic 可能已被错位观测污染，
+      // 在它上面恢复等于在错墙上找最优；static 不随定位漂。搜索窗口由 FCSM 子表给。
+      local_map_updater_->RebuildLocalSubmapFromStaticAt(*pose_estimate_2d);
       auto recovery_local_submap = local_map_updater_->local_submap();
       if (!recovery_local_submap) {
-        LOG(WARNING) << "RebuildLocalSubmapAt returned nullptr, falling back to current local submap";
+        LOG(WARNING) << "RebuildLocalSubmapFromStaticAt returned nullptr, falling back to current local submap";
         recovery_local_submap = local_submap;
       }
       
@@ -683,13 +736,47 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
       
       // 步骤2d: 如果恢复失败，返回错误
       if (!recovery_pose) {
+        // 快照③：恢复失败 → 定位丢失。画的是「失败时仍在用的估计位姿 + 重建后的
+        // local submap」，用来回答「是点云不对，还是这块地图本来就没有这些东西」。
+        if (consistency_debug_dumper_.enabled()) {
+          consistency_debug_dumper_.Dump(
+              ConsistencyDebugDumper::Event::kRecoveryFailed, time,
+              *pose_estimate_2d, &pose_prediction, *recovery_local_submap,
+              filtered_gravity_aligned_point_cloud,
+              merged_data.original_undistorted_range_datas,
+              merged_data.original_sensor_ids,
+              {{"conf", std::to_string(check_result.confidence)},
+               {"odom_dxy", odom_dxy_str},
+               {"odom_dyaw", odom_dyaw_str},
+               {"revert", reverted_str},
+               {"ceres_dxy", revert_dxy_str},
+               {"ceres_dyaw", revert_dyaw_str},
+               {"reason", "all recovery attempts failed -> localization lost"}});
+        }
         LOG(ERROR) << "All recovery attempts failed! Localization lost.";
         loc_state_ = LocalizationState::LOCALIZATION_FAILED;
-        match_level_ = MatchLevel::POOR;
-        active_submaps_.clear();
+        ResetActiveSubmaps("recovery failed");
         return nullptr;
       }
-      
+
+      // 快照②：恢复成功——画恢复后的位姿，与快照①同位置对比即可看出恢复把位姿挪去了哪。
+      if (consistency_debug_dumper_.enabled()) {
+        const transform::Rigid2d delta = pose_estimate_2d->inverse() * *recovery_pose;
+        consistency_debug_dumper_.Dump(
+            ConsistencyDebugDumper::Event::kRecoverySucceeded, time,
+            *recovery_pose, &pose_prediction, *recovery_local_submap,
+            filtered_gravity_aligned_point_cloud,
+            merged_data.original_undistorted_range_datas,
+            merged_data.original_sensor_ids,
+            {{"conf", std::to_string(check_result.confidence)},
+             {"odom_dxy", odom_dxy_str},
+             {"odom_dyaw", odom_dyaw_str},
+             {"revert", reverted_str},
+             {"ceres_dxy", revert_dxy_str},
+             {"fix_dxy", std::to_string(delta.translation().norm())},
+             {"fix_dyaw", std::to_string(delta.rotation().angle())}});
+      }
+
       // 恢复成功（已经过一致性检查），更新位姿
       pose_estimate_2d = std::move(recovery_pose);
       
@@ -697,12 +784,34 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
                 << "\n  Recovered pose: " << *pose_estimate_2d
                 << "\n  Cleared active submaps, restarting mapping";
       
-      // 清空active_submaps重新开始
-      active_submaps_.clear();
+      // 清空 active_submaps 重新开始（含过滤器与速度历史）
+      ResetActiveSubmaps("recovery from local map succeeded");
     } else {
       // 验证成功，继续使用当前估计位姿
       LOG(INFO) << "Pose validation successful, using estimated pose";
     }
+  }
+
+  // 逐帧快照：不论本帧是否通过一致性检查都存一张，用于看「正常帧」长什么样——
+  // 只有失败帧时，无从判断哪些现象是常态、哪些才是异常。
+  // 落在 frames/ 子目录、独立环形区，不会挤掉主目录里的失败现场。
+  if (consistency_debug_dumper_.every_frame()) {
+    consistency_debug_dumper_.Dump(
+        ConsistencyDebugDumper::Event::kFrame, time, *pose_estimate_2d,
+        &pose_prediction, *local_submap, filtered_gravity_aligned_point_cloud,
+        merged_data.original_undistorted_range_datas,
+        merged_data.original_sensor_ids,
+        {{"conf", std::to_string(check_result.confidence)},
+         {"trans_err", std::to_string(check_result.translation_error)},
+         {"rot_err", std::to_string(check_result.rotation_error)},
+         {"v", std::to_string(check_result.linear_velocity)},
+         {"w", std::to_string(check_result.angular_velocity)},
+         {"odom_dxy", odom_dxy_str},
+         {"odom_dyaw", odom_dyaw_str},
+         {"revert", reverted_str},
+         {"ceres_dxy", revert_dxy_str},
+         {"ceres_dyaw", revert_dyaw_str},
+         {"consistent", check_result.is_consistent ? "1" : "0"}});
   }
 
   // ========== P0 漂移门控 + 重定位：拦截自洽漂移，先恢复正确位姿，再决定是否更新地图 ==========
@@ -723,6 +832,30 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
           filtered_gravity_aligned_point_cloud,
           *static_submap,
           *live_local);
+      // 漂移门控的「没触发」有两种含义：判据没命中 / 压根没判。指纹条件是
+      //   static_overlap < static_map_min_score  且  (live - static) > drift_score_gap
+      // 中等幅度的稳定偏移会让 static_overlap 停在阈值之上、live-static 差值又不够大，
+      // 从两条判据下面同时滑过去。不把分量打出来，只能看到「一条日志都没有」。
+      if (consistency_debug_dumper_.enabled()) {
+        const auto& cc_opt = options_.consistency_checker_options();
+        const double gap = drift_result.live_overlap - drift_result.static_overlap;
+        const bool near_miss =
+            !drift_result.drift_suspected &&
+            (drift_result.static_overlap < cc_opt.static_map_min_score() ||
+             gap > cc_opt.drift_score_gap());
+        if (near_miss) {
+          LOG(WARNING) << "DriftGate NEAR-MISS (only one condition met) | "
+                       << drift_result.ToString() << " | gap=" << gap
+                       << " need static<" << cc_opt.static_map_min_score()
+                       << " AND gap>" << cc_opt.drift_score_gap();
+        } else {
+          LOG_EVERY_N(INFO, 20)
+              << "DriftGate telemetry | " << drift_result.ToString()
+              << " | gap=" << gap << " need static<"
+              << cc_opt.static_map_min_score() << " AND gap>"
+              << cc_opt.drift_score_gap();
+        }
+      }
       if (drift_result.drift_suspected) {
         drift_flagged = true;
         LOG(WARNING) << "Localization drift confirmed — relocalizing against static map "
@@ -748,7 +881,10 @@ PoseEstimator2D::ProcessDataAndEstimatePose(
           // 重定位成功且通过一致性校验 → 用校正后的正确位姿，清空 active_submaps 重启匹配，
           // 位姿已确认正确 → 允许在正确位姿更新地图。
           pose_estimate_2d = std::move(corrected);
-          active_submaps_.clear();
+          // 漂移已被 static 独立确认 → 漂移期间写入 dynamic 的观测同样是漂的：整层丢弃、
+          // 从 static 重新起算，否则下次裁剪重建会把错墙裁回参考、再把位姿拉回漂移方向。
+          local_map_updater_->ResetDynamicMapFromStatic(*pose_estimate_2d);
+          ResetActiveSubmaps("static-map drift correction");
           safe_to_update_map = true;
           LOG(WARNING) << "Static-map relocalization succeeded — resuming map update at corrected pose "
                        << *pose_estimate_2d;
@@ -911,8 +1047,20 @@ PoseEstimator2D::InsertIntoSubmap(
         }
         return dst;
       };
+  // active 刚被重置（submaps 为空）时，本帧 tracked_lane_data 的 id 仍是旧 active 线图的编号；
+  // 新线图的计数从 0 起，沿用旧 id 会与之后的新线撞号（map::insert 静默失败、角度索引与
+  // 观测计数却照写）。改成负号 → InsertLineData 按新线 PushBack，由新线图重新编号。
+  std::map<int, std::vector<sensor::LineData>> lines_for_active;
+  if (active_submaps_.submaps().empty()) {
+    int fresh_id = -1;
+    for (const auto& kv : tracked_lane_data) {
+      lines_for_active[fresh_id--] = kv.second;
+    }
+  } else {
+    lines_for_active = tracked_lane_data;
+  }
   const std::map<int, std::vector<sensor::LineData>> tracked_lines_in_local =
-      to_local_frame(tracked_lane_data);
+      to_local_frame(lines_for_active);
   const std::map<int, std::vector<sensor::LineData>> global_tracked_lines_in_local =
       to_local_frame(global_tracked_lane_data);
 
@@ -1006,11 +1154,34 @@ transform::Rigid3d PoseEstimator2D::GetOdomDeltaPose(const common::Time& laser_t
     last_odom_for_delta_ = *current_odom;
     return transform::Rigid3d::Identity();
   }
+  // 里程计断流 / 重置之后的第一帧：断前后的差不是运动，只对齐基准（判据在 DataPreprocessor）
+  if (data_preprocessor_ && data_preprocessor_->TakeOdometryDiscontinuity()) {
+    LOG(WARNING) << "Odometry discontinuity before this frame: re-aligning delta baseline, "
+                    "no motion this frame";
+    last_odom_for_delta_ = *current_odom;
+    return transform::Rigid3d::Identity();
+  }
   
   // 计算delta pose
   const transform::Rigid3d delta_pose = 
       last_odom_for_delta_->pose.inverse() * current_odom->pose;
   
+  // odom delta 限幅：里程计还在发但位姿跳变（底盘节点重启从零开始、坏样本）时 delta 会大到
+  // 物理上不可能——超过「速度上限 × 时间」就当作跳变：重新对齐基准、本帧预测零运动。
+  // 上限复用一致性检查器的 max_linear/angular_velocity，×2 留余量，dt 下限 0.1 s 防 dt≈0 误判。
+  // （停发/陈旧的情况由 DataPreprocessor 的守卫负责，那边是保持最后位姿。）
+  const double dt = std::max(common::ToSeconds(laser_time - last_odom_for_delta_->time), 0.1);
+  const auto& cc = options_.consistency_checker_options();
+  const double max_dist = 2.0 * (cc.max_linear_velocity() > 0.0 ? cc.max_linear_velocity() : 1.0) * dt;
+  const double max_yaw = 2.0 * (cc.max_angular_velocity() > 0.0 ? cc.max_angular_velocity() : 1.5708) * dt;
+  const double dist = delta_pose.translation().head<2>().norm();
+  const double yaw = std::abs(transform::GetYaw(delta_pose.rotation()));
+  if (dist > max_dist || yaw > max_yaw) {
+    LOG(ERROR) << "Odometry delta implausible: " << dist << " m / " << yaw << " rad in " << dt
+               << " s (max " << max_dist << " m / " << max_yaw << " rad); rebasing, no motion this frame";
+    last_odom_for_delta_ = *current_odom;
+    return transform::Rigid3d::Identity();
+  }
   return delta_pose;
 }
 
@@ -1035,6 +1206,26 @@ absl::optional<sensor::OdometryData> PoseEstimator2D::GetOdometryAtTime(const co
  * 
  * @param time 时间戳
  */
+/**
+ * @brief 清空 active submap 并重置与之绑定的状态。
+ *
+ * 只 clear() 不够，三处状态仍记着重置前的轨迹：
+ *  - map_insertion_motion_filter_：修正量小于 0.2 m / 1° 且不足 5 s 时本帧不插图 →
+ *    active 为空 → ScanMatch 直接返回预测、不做任何匹配，直到走出阈值；
+ *  - ConsistencyChecker 的速度历史：修正量 ÷ 帧间隔被当成速度，连续报超限并逐帧走验证；
+ *  - 本帧线段 id 仍是旧 active 线图的编号：在 InsertIntoSubmap 里按新线改号。
+ */
+void PoseEstimator2D::ResetActiveSubmaps(const char* reason) {
+  active_submaps_.clear();
+  map_insertion_motion_filter_.Reset();
+  if (consistency_checker_) {
+    consistency_checker_->Reset();
+  }
+  LOG(INFO) << "Active submaps reset (" << reason
+            << "): motion filter and consistency history cleared, "
+               "next frame will be inserted.";
+}
+
 void PoseEstimator2D::UpdateLastOdomForDelta(const common::Time& time) {
   auto current_odom = GetOdometryAtTime(time);
   if (current_odom.has_value()) {

@@ -75,13 +75,13 @@ POSE_ESTIMATOR_2D.data_preprocessor.adaptive_voxel_filter.max_range = 15.
 -- 激光感知选项
 POSE_ESTIMATOR_2D.data_preprocessor.laser_perception.min_cluster_points = 5
 -- POSE_ESTIMATOR_2D.use_imu_data = false
-POSE_ESTIMATOR_2D.use_online_correlative_scan_matching = false
+POSE_ESTIMATOR_2D.use_online_correlative_scan_matching = true
 
 -- [[局部匹配参数]]
 POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.rotation_delta_cost_weight = 1
 POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.translation_delta_cost_weight = 1
-POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.linear_search_window = 0.2
-POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(15.)
+POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.linear_search_window = 0.4
+POSE_ESTIMATOR_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.)
 POSE_ESTIMATOR_2D.ceres_scan_matcher.occupied_space_weight = 60
 POSE_ESTIMATOR_2D.ceres_scan_matcher.translation_weight = 1
 POSE_ESTIMATOR_2D.ceres_scan_matcher.rotation_weight = 1

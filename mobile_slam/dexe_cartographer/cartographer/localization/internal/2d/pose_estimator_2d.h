@@ -51,6 +51,7 @@
 #include "cartographer/mapping/2d/line_map_2d.h"
 #include "cartographer/localization/internal/2d/pose_initializer_2d.h"
 #include "cartographer/localization/internal/2d/consistency_checker.h"
+#include "cartographer/localization/internal/2d/consistency_debug_dumper.h"
 #include "cartographer/localization/2d/local_map_updater_2d.h"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -159,6 +160,10 @@ class PoseEstimator2D {
   absl::optional<sensor::OdometryData> GetOdometryAtTime(const common::Time& time) const;
   void UpdateLastOdomForDelta(const common::Time& time);
 
+  // 清空 active submap 并重置与之绑定的状态（关键帧过滤器、一致性检查的速度历史）。
+  // 只 clear() 会留下三处仍记着重置前轨迹的状态，见 .cc 内说明。
+  void ResetActiveSubmaps(const char* reason);
+
   sensor::FeatureData GetFeatureData(
     const common::Time & time,
     const std::vector<laser_perception::FeatureMsgWithOrigin> & feature_data);
@@ -245,6 +250,8 @@ private:
   std::unique_ptr<ConsistencyChecker> consistency_checker_;
 
   MatchLevel match_level_ = MatchLevel::UNKNOWN;  // 每帧由一致性/漂移判定更新
+  // 一致性/恢复现场快照（排障用，默认关闭）
+  ConsistencyDebugDumper consistency_debug_dumper_;
 
   std::mutex data_mutex_;
   

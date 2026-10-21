@@ -16,6 +16,10 @@
 
 #include "cartographer/localization/internal/2d/consistency_checker.h"
 
+#include <chrono>
+
+#include "cartographer/mapping/internal/2d/scan_matching/fast_correlative_scan_matcher_2d.h"
+
 #include <cmath>
 #include <algorithm>
 #include <sstream>
@@ -354,27 +358,36 @@ std::unique_ptr<transform::Rigid2d> ConsistencyChecker::RecoverFromLocalMap(
     return nullptr;
   }
   
-  // 1. 使用验证位姿作为初始位姿，在局部地图上用real time matcher搜索
-  //    注意：因为pose check失败，local map不会被错误更新，所以使用local map是安全的
-  transform::Rigid2d recovery_pose = validation_pose;
-  const double recovery_score = real_time_correlative_scan_matcher_->Match(
-      validation_pose,
-      point_cloud,
-      *local_submap->grid(),
-      &recovery_pose);
-  
-  LOG(INFO) << "Recovery correlative matching score: " << recovery_score;
-  
-  // 2. 如果correlative匹配分数太低，直接返回失败（使用统一的最小分数阈值）
+  // 1. 用 FCSM（分支限界）在局部地图上大窗口搜索。
+  //    以前用 RTCSM，窗口 0.2 m / 15°，与一致性检查容差同量级——检查会失败的偏差恢复也搜不到。
+  //    窗口由 consistency_checker.fast_correlative_scan_matcher 给（默认 3 m / 180° / 深度 7）。
+  //    预计算栈按需构造：恢复是稀有路径，不能逐帧建。
+  //    传入哪张 local map 由调用方决定：恢复路径用 static 裁剪，避免在可能已被污染的 dynamic 上找最优。
   const double min_score = options_.consistency_checker_options().min_score();
-  if (recovery_score < min_score) {
-    LOG(ERROR) << "Recovery correlative match failed (score: " << recovery_score 
+  const auto t0 = std::chrono::steady_clock::now();
+  mapping::scan_matching::FastCorrelativeScanMatcher2D fcsm(
+      *local_submap->grid(),
+      options_.consistency_checker_options().fast_correlative_scan_matcher_options());
+  const auto t1 = std::chrono::steady_clock::now();
+  float recovery_score = 0.f;
+  transform::Rigid2d recovery_pose = validation_pose;
+  const bool matched = fcsm.Match(validation_pose, point_cloud,
+                                  static_cast<float>(min_score), &recovery_score, &recovery_pose);
+  const auto t2 = std::chrono::steady_clock::now();
+  LOG(INFO) << "Recovery FCSM: build "
+            << std::chrono::duration<double, std::milli>(t1 - t0).count() << " ms, match "
+            << std::chrono::duration<double, std::milli>(t2 - t1).count() << " ms, score "
+            << recovery_score;
+
+  // 2. 如果FCSM匹配分数太低，直接返回失败（使用统一的最小分数阈值）
+  if (!matched || recovery_score < min_score) {
+    LOG(ERROR) << "Recovery FCSM match failed (score: " << recovery_score
                << ", threshold: " << min_score << ")!";
     return nullptr;
   }
-  
-  // 3. Correlative匹配成功，使用ceres进行精细优化
-  LOG(INFO) << "Recovery correlative match successful, performing ceres refinement...";
+
+  // 3. FCSM匹配成功，使用ceres进行精细优化
+  LOG(INFO) << "Recovery FCSM match successful, performing ceres refinement...";
   
   // 4. 使用局部地图进行ceres优化
   auto recovery_pose_refined = absl::make_unique<transform::Rigid2d>();

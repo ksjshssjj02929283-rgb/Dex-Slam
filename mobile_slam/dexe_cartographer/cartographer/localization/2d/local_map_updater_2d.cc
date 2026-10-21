@@ -148,6 +148,11 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
       latest_line_id,
       active_line_data);
       
+  // 继承静态底图的线特征 culling 判据（其判据来自 pbstream 内嵌的建图期
+  // submaps_options）。必须在 Finish() 之前 —— Finish() 会立即触发一次
+  // LineDataCulling()，此时若还是类内默认值，建图判据与默认值的差集会被剔除。
+  global_dynamic_submap_->InheritLineCullingParamFrom(*global_static_submap_);
+
   // 重建ikd-trees
   global_dynamic_submap_->RebuildIkdTrees();
   if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
@@ -359,6 +364,8 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
       nullptr,  // local_submap 只用于匹配，不需要 conversion_tables
       std::move(local_cloud), std::make_unique<sensor::PointCloud>(),
       latest_line_id, active_line_data);
+  // 同 SetGlobalSubmap：深拷贝不带 culling 判据，需从源 submap 继承后再 Finish()。
+  new_submap->InheritLineCullingParamFrom(*source_submap);
   new_submap->RebuildIkdTrees();
   new_submap->Finish();
 
@@ -514,6 +521,32 @@ void LocalMapUpdater2D::RebuildLocalSubmapFromStaticAt(const transform::Rigid2d&
     local_submap_ = std::move(new_submap);
     local_map_origin_ = std::make_shared<transform::Rigid2d>(pose);
   }
+}
+
+void LocalMapUpdater2D::ResetDynamicMapFromStatic(const transform::Rigid2d& pose)
+{
+  // 在途的异步裁剪裁自污染前的旧 dynamic，落地会把错墙带回参考：先等它结束并丢弃结果。
+  if (build_future_.valid()) {
+    build_future_.wait();
+    build_future_ = std::future<std::shared_ptr<mapping::Submap2D>>();
+    is_building_ = false;
+  }
+  std::shared_ptr<mapping::Submap2D> static_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    static_snapshot = global_static_submap_;
+  }
+  if (!static_snapshot) {
+    LOG(ERROR) << "ResetDynamicMapFromStatic: global_static_submap_ is not initialized.";
+    return;
+  }
+  common::TicToc t;
+  // 重新从 static 深拷贝 dynamic（grid / cloud / line + ikd-tree）；
+  // SetGlobalSubmap 会把 local_submap_ 建在地图原点，随后裁回机器人当前位姿。
+  SetGlobalSubmap(static_snapshot);
+  RebuildLocalSubmapFromStaticAt(pose);
+  LOG(WARNING) << "Dynamic map reset from static map in " << t.toc()
+               << " ms; accumulated dynamic layer discarded.";
 }
 
 std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::local_submap()

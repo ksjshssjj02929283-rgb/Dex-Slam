@@ -46,6 +46,10 @@ proto::DataPreprocessorOptions CreateDataPreprocessorOptions(
   options.set_voxel_filter_size(parameter_dictionary->GetDouble("voxel_filter_size"));
   options.set_enable_feature_detection(parameter_dictionary->GetBool("enable_feature_detection"));
   options.set_enable_multi_sensor_fusion(parameter_dictionary->GetBool("enable_multi_sensor_fusion"));
+  options.set_max_odometry_extrapolation_seconds(
+      parameter_dictionary->HasKey("max_odometry_extrapolation_seconds")
+          ? parameter_dictionary->GetDouble("max_odometry_extrapolation_seconds")
+          : 0.2);
 
   // 自适应体素滤波配置
   if (parameter_dictionary->HasKey("adaptive_voxel_filter")) {

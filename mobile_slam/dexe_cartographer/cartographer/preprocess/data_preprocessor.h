@@ -48,6 +48,9 @@ struct MergedData {
   std::vector<sensor::LineData> merged_line_data;
   std::vector<sensor::LandmarkPointData> merged_reflector_data;
   std::vector<sensor::RangeData> original_undistorted_range_datas;
+  // 与 original_undistorted_range_datas 一一对应的 sensor_id（按 sensor_id 排序）。
+  // 调试渲染时靠它给各雷达分色，避免只能按下标猜是前雷达还是后雷达。
+  std::vector<std::string> original_sensor_ids;
 
   bool IsEmpty() const {
     return merged_range_data.returns.empty() && 
@@ -77,6 +80,10 @@ public:
       const sensor::TimedPointCloudOriginData& cloud_in,
       const common::Time& reference_time);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
+
+  // 里程计连续性：AddOdometryData 发现相邻样本跳变（计数被重置）或断流（间隔超过陈旧阈值）时
+  // 清空缓冲并置位；调用方（odom delta 计算）取走一次后清零——该帧只对齐基准、不推算运动。
+  bool TakeOdometryDiscontinuity();
   
   // 新增接口
   /**
@@ -152,6 +159,7 @@ private:
 
   std::deque<sensor::OdometryData> odom_data_buff_;
   mutable std::mutex odometry_buffer_mutex_;
+  bool odom_discontinuity_ = false;   // 见 TakeOdometryDiscontinuity
 };
 
 }  // namespace preprocess

@@ -117,7 +117,19 @@ class CeresScanMatcher2D {
             transform::Rigid2d* const pose_estimate,
             ceres::Solver::Summary* const summary) const;
 
+  // 回退门（Match 末尾：修正量超限即丢弃匹配结果、退回初值）的最近一次观测量。
+  // 单独暴露的理由：这道门一旦触发，输出位姿 ≡ 输入初值，于是下游一致性检查的
+  // translation_error/rotation_error **恒等于 0**——匹配越差它越安静。
+  // 不把它打出来，这个构造性盲区在日志和快照里都不可见。
+  struct RevertInfo {
+    double delta_dist = 0.0;   // 本次 Ceres 相对初值的平移修正量 (m)
+    double delta_yaw = 0.0;    // 同上，旋转 (rad)
+    bool reverted = false;     // 是否触发了回退（结果被丢弃）
+  };
+  const RevertInfo& last_revert_info() const { return last_revert_info_; }
+
  private:
+  mutable RevertInfo last_revert_info_;
   const proto::CeresScanMatcherOptions2D options_;
   ceres::Solver::Options ceres_solver_options_;
 };
