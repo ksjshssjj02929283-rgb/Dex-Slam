@@ -21,6 +21,8 @@
 
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/submap_2d.h"
+#include "cartographer/mapping/2d/xy_index.h"
+#include "cartographer/transform/rigid_transform.h"
 #include "gmock/gmock.h"
 
 namespace cartographer {
@@ -172,6 +174,93 @@ TEST(LocalMapUpdater2DTest, LocalPoseIsNotTheGridCenter) {
   EXPECT_THAT(grid_center.y(), AllOf(Ge(limits_min.y()), Le(limits.max().y())));
   EXPECT_THAT(grid_center.x(), DoubleEq(0.5 * (limits_min.x() + limits.max().x())));
   EXPECT_THAT(grid_center.y(), DoubleEq(0.5 * (limits_min.y() + limits.max().y())));
+}
+
+// 源图 401×401 格，覆盖 [-10.05, 10] m：格数为奇数，栅格几何中心落在格心上；±15 m
+// 窗口会伸出源图。按固定规律填概率并留出未知格。点云所在格先标为占据，否则
+// Finish() 的 CloudDataCulling 会把点删光（SetProbability 只允许写未知格，故先写点）。
+std::shared_ptr<mapping::Submap2D> MakePatternSubmap(
+    mapping::ValueConversionTables* conversion_tables) {
+  auto grid = std::make_unique<mapping::ProbabilityGrid>(
+      mapping::MapLimits(kResolution, Eigen::Vector2d(10., 10.),
+                         mapping::CellLimits(401, 401)),
+      conversion_tables);
+  std::vector<sensor::PointCloud::PointType> points;
+  for (int i = 0; i < 100; ++i) {
+    sensor::PointCloud::PointType point;
+    point.position = Eigen::Vector3f(0.1f * (i % 10) - 0.5f,
+                                     0.1f * (i / 10) - 0.5f, 0.f);
+    points.push_back(point);
+    const auto index = grid->limits().GetCellIndex(point.position.head<2>());
+    if (!grid->IsKnown(index)) {
+      grid->SetProbability(index, mapping::kMaxProbability);
+    }
+  }
+  for (const Eigen::Array2i& index :
+       mapping::XYIndexRangeIterator(grid->limits().cell_limits())) {
+    const int key = index.x() * 7 + index.y();
+    if (key % 13 == 0 || grid->IsKnown(index)) continue;
+    grid->SetProbability(index, 0.2f + (key % 9) * 0.07f);
+  }
+  return std::make_shared<mapping::Submap2D>(
+      Eigen::Vector2f(10.f, 10.f), std::move(grid), conversion_tables,
+      std::make_unique<sensor::PointCloud>(std::move(points)),
+      std::make_unique<sensor::PointCloud>(), 0,
+      std::map<int, mapping::MapLine2D>{});
+}
+
+// 局部栅格必须与源图格线对齐：在不落在格线上的位姿重建时，局部图每个格心都与一个
+// 源图格心重合、概率和未知状态一致，源图外的格子为 kMinProbability，且覆盖请求窗口。
+// 旧实现以位姿为中心另建网格、按格心最近邻查源图，障碍物会平移，最多半格。
+TEST(LocalMapUpdater2DTest, LocalGridKeepsSourceCellGeometry) {
+  mapping::ValueConversionTables conversion_tables;
+  LocalMapUpdater2D updater(MakeUpdaterOptions(), MakeSubmapOptions());
+  updater.SetGlobalSubmap(MakePatternSubmap(&conversion_tables));
+  const auto* source = dynamic_cast<const mapping::ProbabilityGrid*>(
+      updater.GetGlobalSubmap()->grid());
+  ASSERT_NE(nullptr, source);
+  const auto& source_limits = source->limits();
+
+  for (const Eigen::Vector2d& pose :
+       {Eigen::Vector2d(0.537, -0.213), Eigen::Vector2d(-3.025, 4.011),
+        Eigen::Vector2d(1., 1.)}) {
+    updater.RebuildLocalSubmapAt(transform::Rigid2d(pose, 0.));
+    const auto local_submap = updater.local_submap();
+    ASSERT_NE(nullptr, local_submap);
+    const auto* local =
+        dynamic_cast<const mapping::ProbabilityGrid*>(local_submap->grid());
+    ASSERT_NE(nullptr, local);
+    const auto& limits = local->limits();
+    EXPECT_DOUBLE_EQ(limits.resolution(), source_limits.resolution());
+
+    // 边界向外取整，窗口不缩小。源图外的格子是已知格，Finish() 的裁剪不会削掉它们。
+    const Eigen::Vector2d limits_min = LimitsMin(limits);
+    EXPECT_GE(limits.max().x() + 1e-9, pose.x() + 15.);
+    EXPECT_GE(limits.max().y() + 1e-9, pose.y() + 15.);
+    EXPECT_LE(limits_min.x() - 1e-9, pose.x() - 15.);
+    EXPECT_LE(limits_min.y() - 1e-9, pose.y() - 15.);
+
+    for (const Eigen::Array2i& index :
+         mapping::XYIndexRangeIterator(limits.cell_limits())) {
+      const Eigen::Vector2f center = limits.GetCellCenter(index);
+      const Eigen::Array2i source_index = source_limits.GetCellIndex(center);
+      if (!source_limits.Contains(source_index)) {
+        ASSERT_NEAR(local->GetProbability(index), mapping::kMinProbability,
+                    1e-3);
+        continue;
+      }
+      ASSERT_LT((center - source_limits.GetCellCenter(source_index))
+                    .cwiseAbs()
+                    .maxCoeff(),
+                1e-4)
+          << "pose=" << pose.transpose() << " index=" << index.transpose();
+      ASSERT_EQ(local->IsKnown(index), source->IsKnown(source_index));
+      if (source->IsKnown(source_index)) {
+        ASSERT_FLOAT_EQ(local->GetProbability(index),
+                        source->GetProbability(source_index));
+      }
+    }
+  }
 }
 
 }  // namespace

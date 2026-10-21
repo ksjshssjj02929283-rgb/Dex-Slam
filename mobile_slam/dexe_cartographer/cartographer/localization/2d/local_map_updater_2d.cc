@@ -1,4 +1,7 @@
 #include "cartographer/localization/2d/local_map_updater_2d.h"
+
+#include <cmath>
+
 #include "cartographer/common/tic_toc.h"
 #include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/mapping/2d/probability_grid_range_data_inserter_2d.h"
@@ -208,11 +211,12 @@ bool LocalMapUpdater2D::NeedRebuildLocalMap() const
 
   const double dx = robot_pose_->translation().x() - local_map_origin_->translation().x();
   const double dy = robot_pose_->translation().y() - local_map_origin_->translation().y();
-  const double half_x = (box_.max_x - box_.min_x) * 0.5;
-  const double half_y = (box_.max_y - box_.min_y) * 0.5;
   const double thresh  = options_.update_threshold();
 
-  return (std::abs(dx) > half_x - thresh || std::abs(dy) > half_y - thresh);
+  // The reference pose need not be the center of an asymmetric crop box.
+  // For symmetric boxes this is the existing distance-based condition.
+  return (dx > box_.max_x - thresh || dx < box_.min_x + thresh ||
+          dy > box_.max_y - thresh || dy < box_.min_y + thresh);
 }
 
 // ============================================================
@@ -276,9 +280,26 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
 
   const double ox  = origin.translation().x();
   const double oy  = origin.translation().y();
-  const double res = prob_grid->limits().resolution();
-  const int    nx  = static_cast<int>((box_.max_x - box_.min_x) / res);
-  const int    ny  = static_cast<int>((box_.max_y - box_.min_y) / res);
+  if (!std::isfinite(ox) || !std::isfinite(oy)) {
+    LOG(ERROR) << "BuildLocalSubmap: origin is not finite (" << ox << ", "
+               << oy << "), keep the current local submap.";
+    return nullptr;
+  }
+  const auto&  gl  = prob_grid->limits();
+  const double res = gl.resolution();
+  // 窗口 [origin + box_.min, origin + box_.max] 向外取整到源图格线：offset 是窗口在
+  // 源图上的整数起点，nx / ny 是世界 X / Y 方向的格数。局部栅格按 offset 逐格拷贝，
+  // 格心与源图格心重合（写法同 ProbabilityGrid::ComputeCroppedGrid）。
+  // 不能以 origin 为中心另建网格再按格心查源图：origin 是连续量，新网格会相对源图
+  // 错开不到一格，障碍物随之平移，最多 res / 2。
+  // MapLimits 约定：index[0] 对应世界 Y，index[1] 对应世界 X。
+  const Eigen::Array2i offset(
+      static_cast<int>(std::floor((gl.max().y() - (oy + box_.max_y)) / res)),
+      static_cast<int>(std::floor((gl.max().x() - (ox + box_.max_x)) / res)));
+  const int nx = static_cast<int>(std::ceil(
+                     (gl.max().x() - (ox + box_.min_x)) / res)) - offset.y();
+  const int ny = static_cast<int>(std::ceil(
+                     (gl.max().y() - (oy + box_.min_y)) / res)) - offset.x();
 
   // 裁剪前的诊断快照：窗口与数据是否重叠必须在此处可见。
   // 历史上 origin 日志打在 BuildLocalSubmap 返回之后（SetGlobalSubmap 尾部），
@@ -314,17 +335,16 @@ std::shared_ptr<mapping::Submap2D> LocalMapUpdater2D::BuildLocalSubmap(
   }
 
   // ============ 1. 裁剪栅格 ============
+  // CellLimits 的 num_x_cells 是 index[0]（世界 Y）方向的格数，故传 (ny, nx)。
   mapping::MapLimits map_limits(
-      res,
-      Eigen::Vector2d(ox + 0.5 * nx * res, oy + 0.5 * ny * res),
-      mapping::CellLimits(nx, ny));
+      res, gl.max() - res * Eigen::Vector2d(offset.y(), offset.x()),
+      mapping::CellLimits(ny, nx));
   auto local_grid = std::make_unique<mapping::ProbabilityGrid>(
       map_limits, &conversion_tables_);
-  const auto& gl = prob_grid->limits();
   for (int row = 0; row < ny; ++row) {
     for (int col = 0; col < nx; ++col) {
       Eigen::Array2i li(row, col);
-      Eigen::Array2i gi = gl.GetCellIndex(map_limits.GetCellCenter(li));
+      Eigen::Array2i gi = li + offset;
       if (!gl.Contains(gi)) {
         local_grid->SetProbability(li, mapping::kMinProbability);
       } else if (prob_grid->IsKnown(gi)) {
