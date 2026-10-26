@@ -84,18 +84,7 @@ void LocalMapUpdater2D::SetGlobalSubmap(std::shared_ptr<mapping::Submap2D> globa
     return;
   }
   
-  // 策略1: NONE - 不使用dynamic，也不更新dynamic map
-  if (options_.dynamic_map_policy() == proto::DynamicMapPolicy::NONE) {
-    LOG(INFO) << "DynamicMapPolicy is NONE, not initializing dynamic submap";
-    global_dynamic_submap_ = nullptr;
-    return;
-  }
-  
-  // 策略2: SHORT - 暂未实现
-  // 策略3: LONG - 使用dynamic，但不保存到static map
-  // 策略4: PERSISTENT - 使用dynamic，并保存到static map
-  // 对于策略2/3/4，都需要从static map初始化dynamic map
-  
+  // 所有策略均创建定位参考副本，NONE 禁止向副本插入新观测。
   LOG(INFO) << "Initializing global_dynamic_submap from global_static_submap, policy: " 
             << static_cast<int>(options_.dynamic_map_policy());
   
