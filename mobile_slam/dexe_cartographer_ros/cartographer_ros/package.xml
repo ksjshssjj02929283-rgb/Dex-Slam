@@ -55,6 +55,7 @@
   <depend>robot_localization</depend>
   <depend>rosbag2_cpp</depend>
   <depend>rosbag2_storage</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>

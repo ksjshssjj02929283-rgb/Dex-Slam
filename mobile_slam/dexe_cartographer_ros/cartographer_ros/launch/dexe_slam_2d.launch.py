@@ -57,8 +57,10 @@ def generate_launch_description():
         executable='cartographer_node',
         name='mapping',
         output='screen',
-        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],  # 修复: 使用LaunchConfiguration
-        respawn=True,
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
+        respawn=False,
         arguments=[
             '-configuration_directory', configuration_directory,
             '-configuration_basename', config_file,  # 修复: 使用LaunchConfiguration而不是DeclareLaunchArgument

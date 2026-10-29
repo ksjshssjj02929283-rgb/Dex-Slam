@@ -48,7 +48,9 @@ class SensorBridge {
       int num_subdivisions_per_laser_scan, bool ignore_out_of_order_messages,
       const std::string& tracking_frame, double lookup_transform_timeout_sec,
       tf2_ros::Buffer* tf_buffer,
-      ::cartographer::mapping::TrajectoryBuilderInterface* trajectory_builder);
+      ::cartographer::mapping::TrajectoryBuilderInterface* trajectory_builder,
+      std::shared_ptr<::cartographer::mapping::MappingQualityState> health =
+          nullptr);
 
   SensorBridge(const SensorBridge&) = delete;
   SensorBridge& operator=(const SensorBridge&) = delete;
@@ -76,6 +78,10 @@ class SensorBridge {
   void HandlePointCloud2Message(const std::string& sensor_id,
                                 const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
 
+  // Called before sampling, on a complete scan. Retries until TF is available.
+  void CheckInitialLaserScan(const std::string& sensor_id,
+                             const sensor_msgs::msg::LaserScan& msg);
+
   const TfBridge& tf_bridge() const;
   bool IgnoreMessage(const std::string& sensor_id,
                      ::cartographer::common::Time sensor_time);
@@ -96,6 +102,8 @@ class SensorBridge {
       sensor_to_previous_subdivision_time_;
   std::map<std::string, cartographer::common::Time> latest_sensor_time_;
   const TfBridge tf_bridge_;
+  const TfBridge base_tf_bridge_;
+  const std::shared_ptr<::cartographer::mapping::MappingQualityState> health_;
   // noted by hz: SLAM算法的接口
   ::cartographer::mapping::TrajectoryBuilderInterface* const
       trajectory_builder_;

@@ -1619,13 +1619,13 @@ void Node::HandleLaserScanMessage(const int trajectory_id,
                                   const std::string& sensor_id,
                                   const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg) {
   absl::MutexLock lock(&mutex_);
-  auto* samplers = GetSensorSamplersLocked(trajectory_id);
-  if (samplers == nullptr || !samplers->rangefinder_sampler.Pulse()) {
-    return;
-  }
-  // sensor_bridge（返回SensorBridge类）是map_builder_bridge_（MapBuilderBridge类）的一个成员函数，用来
   auto sensor_bridge_ptr = map_builder_bridge_->sensor_bridge(trajectory_id);
   if (sensor_bridge_ptr == nullptr) {
+    return;
+  }
+  sensor_bridge_ptr->CheckInitialLaserScan(sensor_id, *msg);
+  auto* samplers = GetSensorSamplersLocked(trajectory_id);
+  if (samplers == nullptr || !samplers->rangefinder_sampler.Pulse()) {
     return;
   }
   sensor_bridge_ptr->HandleLaserScanMessage(sensor_id, msg);

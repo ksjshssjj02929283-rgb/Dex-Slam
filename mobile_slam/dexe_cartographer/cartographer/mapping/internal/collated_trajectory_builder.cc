@@ -41,6 +41,10 @@ CollatedTrajectoryBuilder::CollatedTrajectoryBuilder(
       last_logging_time_(std::chrono::steady_clock::now()) {
   absl::flat_hash_set<std::string> expected_sensor_id_strings;
   for (const auto& sensor_id : expected_sensor_ids) {
+    if (sensor_id.type == SensorId::SensorType::RANGE ||
+        sensor_id.type == SensorId::SensorType::ODOMETRY) {
+      watched_sensor_ids_.insert(sensor_id.id);
+    }
     if (sensor_id.type == SensorId::SensorType::LANDMARK &&
         !collate_landmarks_) {
       continue;
@@ -67,6 +71,18 @@ bool CollatedTrajectoryBuilder::SetInitialPose(const transform::Rigid3d &initial
 std::optional<localization::LocalizationState> CollatedTrajectoryBuilder::GetLocalizationState() const
 {
   return wrapped_trajectory_builder_->GetLocalizationState();
+}
+
+void CollatedTrajectoryBuilder::RecordInput(const std::string& sensor_id,
+                                            common::Time stamp) {
+  if (!quality_fault_) return;
+  std::lock_guard<std::mutex> lock(quality_fault_->mutex);
+  auto it = quality_fault_->inputs.find(sensor_id);
+  if (it == quality_fault_->inputs.end()) return;
+  auto& input = it->second;
+  if (input.stamp && stamp <= *input.stamp) return;
+  input.stamp = stamp;
+  input.received = MappingQualityState::Clock::now();
 }
 
 void CollatedTrajectoryBuilder::AddData(std::unique_ptr<sensor::Data> data) {

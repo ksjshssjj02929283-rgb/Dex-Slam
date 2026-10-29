@@ -17,6 +17,7 @@
 #ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_MAP_BUILDER_BRIDGE_H
 #define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_MAP_BUILDER_BRIDGE_H
 
+#include <atomic>
 #include <memory>
 #include <set>
 #include <string>
@@ -83,6 +84,11 @@ class MapBuilderBridge {
 
   MapBuilderBridge(const MapBuilderBridge&) = delete;
   MapBuilderBridge& operator=(const MapBuilderBridge&) = delete;
+
+  std::shared_ptr<const cartographer::mapping::MappingQualityState>
+  GetMappingQualityFaultFlag() const {
+    return quality_fault_;
+  }
 
   void LoadState(const std::string& state_filename, bool load_frozen_state);
   int AddTrajectory(
@@ -171,6 +177,9 @@ class MapBuilderBridge {
   SensorBridge* sensor_bridge(int trajectory_id);
 
  private:
+  const std::shared_ptr<cartographer::mapping::MappingQualityState>
+      quality_fault_ =
+          std::make_shared<cartographer::mapping::MappingQualityState>();
   void OnLocalSlamResult(const int trajectory_id,
                          const ::cartographer::common::Time time,
                          const ::cartographer::transform::Rigid3d local_pose,

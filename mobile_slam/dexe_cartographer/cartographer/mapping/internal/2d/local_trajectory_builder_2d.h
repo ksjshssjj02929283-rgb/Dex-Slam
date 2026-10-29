@@ -22,9 +22,11 @@
 #include <mutex>
 #include <deque>
 #include <optional>
+#include <utility>
 
 #include "cartographer/common/time.h"
 #include "cartographer/mapping/2d/submap_2d.h"
+#include "cartographer/mapping/trajectory_builder_interface.h"
 #include "cartographer/mapping/internal/2d/scan_matching/ceres_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/real_time_correlative_scan_matcher_2d.h"
 #include "cartographer/mapping/internal/2d/scan_matching/line_matcher_2d.h"
@@ -106,9 +108,24 @@ class LocalTrajectoryBuilder2D {
   void AddImuData(const sensor::ImuData& imu_data);
   void AddOdometryData(const sensor::OdometryData& odometry_data);
 
+  void SetMappingQualityFault(std::shared_ptr<MappingQualityState> fault) {
+    quality_fault_ = std::move(fault);
+  }
+
   static void RegisterMetrics(metrics::FamilyFactory* family_factory);
 
  private:
+  friend class MappingQualityTest;
+  void ResetQualityEvaluation();
+  void EvaluateQuality(common::Time time, const Grid2D& grid,
+                       const sensor::PointCloud& cloud,
+                       const transform::Rigid2d& prediction,
+                       const transform::Rigid2d& estimate);
+  std::shared_ptr<MappingQualityState> quality_fault_;
+  std::optional<common::Time> quality_time_, low_start_, combined_start_;
+  int low_count_ = 0;
+  int combined_count_ = 0;
+
   std::unique_ptr<MatchingResult> ProcessDataAndEstimatePose(
     const std::string& sensor_id,
     const common::Time& time,

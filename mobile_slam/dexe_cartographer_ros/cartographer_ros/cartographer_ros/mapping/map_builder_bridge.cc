@@ -172,6 +172,8 @@ int MapBuilderBridge::AddTrajectory(
                           range_data_in_local, cloud_map,
                           line_data_in_local, line_map_2d_list);
       });
+  map_builder_->GetTrajectoryBuilder(trajectory_id)
+      ->SetMappingQualityFault(quality_fault_);
   LOG(INFO) << "Added trajectory with ID '" << trajectory_id << "'.";
 
   // Make sure there is no trajectory with 'trajectory_id' yet. 如果已经存在该轨迹id，则报错
@@ -182,7 +184,7 @@ int MapBuilderBridge::AddTrajectory(
       trajectory_options.ignore_out_of_order_messages,
       trajectory_options.tracking_frame,
       node_options_.lookup_transform_timeout_sec, tf_buffer_,
-      map_builder_->GetTrajectoryBuilder(trajectory_id));
+      map_builder_->GetTrajectoryBuilder(trajectory_id), quality_fault_);
 
   auto emplace_result =
       trajectory_options_.emplace(trajectory_id, trajectory_options);

@@ -17,6 +17,7 @@
 #ifndef CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_NODE_H
 #define CARTOGRAPHER_ROS_CARTOGRAPHER_ROS_NODE_H
 
+#include <atomic>
 #include <map>
 #include <functional>
 #include <memory>
@@ -78,6 +79,11 @@ class Node
 
   Node(const Node&) = delete;
   Node& operator=(const Node&) = delete;
+
+  std::shared_ptr<const cartographer::mapping::MappingQualityState>
+  GetMappingQualityFaultFlag() const {
+    return map_builder_bridge_->GetMappingQualityFaultFlag();
+  }
 
   // Finishes all yet active trajectories.
   void FinishAllTrajectories();

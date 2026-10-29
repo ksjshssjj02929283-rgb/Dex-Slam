@@ -17,6 +17,10 @@
 #ifndef CARTOGRAPHER_MAPPING_TRAJECTORY_BUILDER_INTERFACE_H_
 #define CARTOGRAPHER_MAPPING_TRAJECTORY_BUILDER_INTERFACE_H_
 
+#include <atomic>
+#include <chrono>
+#include <map>
+#include <mutex>
 #include <functional>
 #include <memory>
 #include <string>
@@ -44,6 +48,27 @@ proto::TrajectoryBuilderOptions CreateTrajectoryBuilderOptions(
     common::LuaParameterDictionary* const parameter_dictionary);
 
 class LocalSlamResultData;
+
+// Shared by the input collator, local matcher and ROS watchdog. Receipt times
+// use a monotonic clock; message times only detect repeated/backward samples.
+struct MappingQualityState {
+  using Clock = std::chrono::steady_clock;
+  struct Input {
+    std::optional<common::Time> stamp;
+    std::optional<Clock::time_point> received;
+  };
+  struct InitialScan {
+    bool checked = false;
+    size_t total = 0;
+    size_t outside = 0;
+    bool insufficient() const { return checked && outside <= total / 2; }
+  };
+  std::map<std::string, InitialScan> initial_scans;  // Protected by mutex.
+  std::atomic<bool> fault{false};
+  mutable std::mutex mutex;
+  std::map<std::string, Input> inputs;                // Protected by mutex.
+  std::optional<Clock::time_point> last_valid_match;  // Protected by mutex.
+};
 
 // This interface is used for both 2D and 3D SLAM. Implementations wire up a
 // global SLAM stack, i.e. local SLAM for initial pose estimates, scan matching
@@ -99,6 +124,8 @@ class TrajectoryBuilderInterface {
   TrajectoryBuilderInterface(const TrajectoryBuilderInterface&) = delete;
   TrajectoryBuilderInterface& operator=(const TrajectoryBuilderInterface&) =
       delete;
+
+  virtual void SetMappingQualityFault(std::shared_ptr<MappingQualityState>) {}
 
   virtual bool SetInitialPose(const transform::Rigid3d &initial_pose) = 0;
   virtual std::optional<localization::LocalizationState> GetLocalizationState() const = 0;

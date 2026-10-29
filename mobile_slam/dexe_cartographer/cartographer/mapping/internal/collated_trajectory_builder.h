@@ -52,6 +52,17 @@ class CollatedTrajectoryBuilder : public TrajectoryBuilderInterface {
   CollatedTrajectoryBuilder& operator=(const CollatedTrajectoryBuilder&) =
       delete;
 
+  void SetMappingQualityFault(
+      std::shared_ptr<MappingQualityState> fault) override {
+    quality_fault_ = fault;
+    {
+      std::lock_guard<std::mutex> lock(fault->mutex);
+      for (const auto& id : watched_sensor_ids_)
+        fault->inputs.emplace(id, MappingQualityState::Input{});
+    }
+    wrapped_trajectory_builder_->SetMappingQualityFault(std::move(fault));
+  }
+
   bool SetInitialPose(const transform::Rigid3d &initial_pose) override;
   std::optional<localization::LocalizationState> GetLocalizationState() const override;
 
@@ -59,6 +70,9 @@ class CollatedTrajectoryBuilder : public TrajectoryBuilderInterface {
   void AddSensorData(
       const std::string& sensor_id,
       const sensor::TimedPointCloudData& timed_point_cloud_data) override {
+    if (!timed_point_cloud_data.ranges.empty()) {
+      RecordInput(sensor_id, timed_point_cloud_data.time);
+    }
     AddData(sensor::MakeDispatchable(sensor_id, timed_point_cloud_data));
   }
 
@@ -71,6 +85,10 @@ class CollatedTrajectoryBuilder : public TrajectoryBuilderInterface {
   // 加入里程计数据
   void AddSensorData(const std::string& sensor_id,
                      const sensor::OdometryData& odometry_data) override {
+    if (odometry_data.pose.translation().allFinite() &&
+        odometry_data.pose.rotation().coeffs().allFinite()) {
+      RecordInput(sensor_id, odometry_data.time);
+    }
     AddData(sensor::MakeDispatchable(sensor_id, odometry_data));
   }
 
@@ -102,6 +120,10 @@ class CollatedTrajectoryBuilder : public TrajectoryBuilderInterface {
   }
 
  private:
+  void RecordInput(const std::string& sensor_id, common::Time stamp);
+  std::set<std::string> watched_sensor_ids_;
+  std::shared_ptr<MappingQualityState> quality_fault_;
+
   void AddData(std::unique_ptr<sensor::Data> data);
 
   void HandleCollatedSensorData(const std::string& sensor_id,

@@ -28,6 +28,7 @@ set(PACKAGE_DEPENDENCIES
   geometry_msgs
   nav_msgs
   pcl_conversions
+  diagnostic_msgs
   sensor_msgs
   std_msgs
   std_srvs

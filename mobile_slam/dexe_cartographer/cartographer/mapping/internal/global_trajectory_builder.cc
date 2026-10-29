@@ -62,6 +62,14 @@ class GlobalTrajectoryBuilder : public mapping::TrajectoryBuilderInterface {
   GlobalTrajectoryBuilder(const GlobalTrajectoryBuilder&) = delete;
   GlobalTrajectoryBuilder& operator=(const GlobalTrajectoryBuilder&) = delete;
 
+  void SetMappingQualityFault(
+      std::shared_ptr<MappingQualityState> fault) override {
+    if constexpr (std::is_same_v<LocalTrajectoryBuilder,
+                                 LocalTrajectoryBuilder2D>) {
+      local_trajectory_builder_->SetMappingQualityFault(std::move(fault));
+    }
+  }
+
   bool SetInitialPose(const transform::Rigid3d &initial_pose) override
   {
     // 如果是地图扩建，则需要使用pose estimator

@@ -17,6 +17,8 @@
 #include "cartographer_ros/mapping/sensor_bridge.h"
 #include "cartographer/sensor/timed_point_cloud_data.h"
 
+#include <cmath>
+
 #include "absl/memory/memory.h"
 #include "cartographer_ros/conversion/msg_conversion.h"
 #include "cartographer_ros/conversion/time_conversion.h"
@@ -55,11 +57,56 @@ SensorBridge::SensorBridge(
     const int num_subdivisions_per_laser_scan,
     const bool ignore_out_of_order_messages, const std::string& tracking_frame,
     const double lookup_transform_timeout_sec, tf2_ros::Buffer* const tf_buffer,
-    carto::mapping::TrajectoryBuilderInterface* const trajectory_builder)
+    carto::mapping::TrajectoryBuilderInterface* const trajectory_builder,
+    std::shared_ptr<carto::mapping::MappingQualityState> health)
     : num_subdivisions_per_laser_scan_(num_subdivisions_per_laser_scan),
       ignore_out_of_order_messages_(ignore_out_of_order_messages),
       tf_bridge_(tracking_frame, lookup_transform_timeout_sec, tf_buffer),
+      base_tf_bridge_("base_footprint", lookup_transform_timeout_sec,
+                      tf_buffer),
+      health_(std::move(health)),
       trajectory_builder_(trajectory_builder) {}
+
+void SensorBridge::CheckInitialLaserScan(
+    const std::string& sensor_id, const sensor_msgs::msg::LaserScan& msg) {
+  if (!health_) return;
+  {
+    std::lock_guard<std::mutex> lock(health_->mutex);
+    if (health_->initial_scans[sensor_id].checked) return;
+  }
+  if (!std::isfinite(msg.range_min) || !std::isfinite(msg.range_max) ||
+      msg.range_min < 0.f || msg.range_max < msg.range_min ||
+      !std::isfinite(msg.angle_min) || !std::isfinite(msg.angle_increment) ||
+      msg.header.frame_id.empty())
+    return;
+  const auto to_base = base_tf_bridge_.LookupToTracking(
+      FromRos(msg.header.stamp), msg.header.frame_id);
+  if (!to_base) return;
+  carto::mapping::MappingQualityState::InitialScan result;
+  result.total = msg.ranges.size();
+  for (size_t i = 0; i < msg.ranges.size(); ++i) {
+    const float range = msg.ranges[i];
+    // Invalid returns remain in total, but never count as usable outside
+    // points.
+    if (!std::isfinite(range) || range <= 0.f || range < msg.range_min ||
+        range > msg.range_max)
+      continue;
+    const double angle =
+        msg.angle_min + static_cast<double>(i) * msg.angle_increment;
+    const Eigen::Vector3d point =
+        *to_base *
+        Eigen::Vector3d(range * std::cos(angle), range * std::sin(angle), 0.);
+    if (!point.allFinite()) continue;
+    // Complement of DataPreprocessor's open XY rectangle; no height
+    // restriction.
+    if (!(point.x() > -0.3 && point.x() < 0.3 && point.y() > -0.3 &&
+          point.y() < 0.3))
+      ++result.outside;
+  }
+  result.checked = true;
+  std::lock_guard<std::mutex> lock(health_->mutex);
+  health_->initial_scans[sensor_id] = result;
+}
 
 std::unique_ptr<carto::sensor::OdometryData> SensorBridge::ToOdometryData(
     const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {

@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <filesystem>
 #include <thread>
 #include <chrono>
 #include <fstream>
+#include <cmath>
+#include <optional>
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -27,6 +30,7 @@
 #include <mutex>
 #include "nav_interfaces/srv/start_mapping.hpp"
 #include "nav_interfaces/msg/mapping_state.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 
 
 #include "cartographer/mapping/map_builder.h"
@@ -85,6 +89,62 @@ DEFINE_double(
 namespace cartographer_ros {
 namespace {
 
+using SteadyClock = std::chrono::steady_clock;
+constexpr double kBatteryThreshold = 60.;
+constexpr double kBatteryTimeoutMs = 10000.;
+constexpr int kFaultReportGraceMs = 500;
+
+struct BatterySnapshot {
+  double percentage;
+  SteadyClock::time_point expires_at;
+  bool fresh(SteadyClock::time_point now) const { return now <= expires_at; }
+  bool low() const { return percentage < kBatteryThreshold; }
+};
+
+bool ParseNumber(const std::string& text, double* value) {
+  try {
+    size_t end = 0;
+    *value = std::stod(text, &end);
+    return end == text.size() && std::isfinite(*value);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+std::optional<BatterySnapshot> ParseBatteryDiagnostics(
+    const diagnostic_msgs::msg::DiagnosticArray& msg,
+    SteadyClock::time_point now) {
+  std::optional<double> percentage;
+  double age = 0.;
+  bool invalid = false;
+  for (const auto& status : msg.status) {
+    if (status.name.size() < 10 ||
+        status.name.compare(status.name.size() - 10, 10, "PowerBoard") != 0)
+      continue;
+    std::optional<std::string> percentage_text, age_text;
+    for (const auto& value : status.values) {
+      if (value.key == "battery_percentage") percentage_text = value.value;
+      if (value.key == "battery_age_ms") age_text = value.value;
+    }
+    if (!percentage_text) continue;
+    double current = 0., current_age = 0.;
+    if (!age_text || !ParseNumber(*percentage_text, &current) ||
+        !ParseNumber(*age_text, &current_age) || current < 0. ||
+        current > 100. || current_age < 0. || current_age > kBatteryTimeoutMs) {
+      invalid = true;
+      continue;
+    }
+    if (percentage && *percentage != current) invalid = true;
+    percentage = current;
+    age = std::max(age, current_age);
+  }
+  if (!percentage || invalid) return std::nullopt;
+  return BatterySnapshot{
+      *percentage, now + std::chrono::duration_cast<SteadyClock::duration>(
+                             std::chrono::duration<double, std::milli>(
+                                 kBatteryTimeoutMs - age))};
+}
+
 class MappingNode : public rclcpp::Node
 {
 public:
@@ -97,6 +157,16 @@ public:
 
     // 建图控制服务放独立回调组：finish 期间阻塞较久，不能拖住默认组里的状态定时器
     ops_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    // 电量更新独立于耗时的建图操作，仅保留最新诊断。
+    battery_group_ =
+        create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rclcpp::SubscriptionOptions diagnostic_options;
+    diagnostic_options.callback_group = battery_group_;
+    battery_sub_ = create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+        "/diagnostics_agg", rclcpp::QoS(1).best_effort(),
+        std::bind(&MappingNode::OnDiagnostics, this, std::placeholders::_1),
+        diagnostic_options);
 
     start_mapping_srv_ = this->create_service<nav_interfaces::srv::StartMapping>(
       "~/start_mapping",
@@ -122,10 +192,10 @@ public:
     stop_show_map_client_ = this->create_client<std_srvs::srv::Trigger>(
       "/cartographer_occupancy_grid_node/stop_showing_map");
 
-    // Timer: 5Hz -> 0.2s
+    // Keep the watchdog independent of potentially slow sensor callbacks.
     publish_timer_ = this->create_wall_timer(
-      std::chrono::milliseconds(200),
-      std::bind(&MappingNode::Publish, this));
+        std::chrono::milliseconds(200), std::bind(&MappingNode::Publish, this),
+        battery_group_);
   }
 
   ~MappingNode()
@@ -135,13 +205,63 @@ public:
     }
   }
 
+  void SetExitCallback(std::function<void()> callback) {
+    exit_callback_ = std::move(callback);
+  }
+  bool exit_requested() {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return exit_deadline_.has_value();
+  }
+
 private:
+  bool HasMappingQualityFaultLocked() const {
+    return quality_fault_ && quality_fault_->fault.load();
+  }
+
+  bool HasMappingQualityFault() {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return HasMappingQualityFaultLocked();
+  }
+
+  void OnDiagnostics(
+      const diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg) {
+    const auto battery = ParseBatteryDiagnostics(*msg, SteadyClock::now());
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    battery_ = battery;
+  }
+
+  std::optional<BatterySnapshot> FreshBatteryLocked() const {
+    if (battery_ && battery_->fresh(SteadyClock::now())) return battery_;
+    return std::nullopt;
+  }
+
+  int32_t ExitErrorLocked() const {
+    if (HasMappingQualityFaultLocked()) {
+      return nav_interfaces::msg::MappingState::E_MAP_QUALITY_BAD;
+    }
+    return exit_deadline_ ? error_code_
+                          : nav_interfaces::msg::MappingState::E_NONE;
+  }
+
+  void RequestExit(int32_t error_code) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (exit_deadline_) return;
+    error_code_ = error_code;
+    error_message_.clear();
+    exit_deadline_ =
+        SteadyClock::now() + std::chrono::milliseconds(kFaultReportGraceMs);
+  }
+
   // ---- Service Callbacks (ROS2 签名) ----
   // 构建结构化建图状态（~/state topic 发布用）
   nav_interfaces::msg::MappingState BuildMappingState() {
     nav_interfaces::msg::MappingState s;
     s.header.stamp = this->now();
-    if (is_saving_) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    const auto fault = ExitErrorLocked();
+    if (fault != 0) {
+      s.status = nav_interfaces::msg::MappingState::ERROR;
+    } else if (is_saving_) {
       s.status = nav_interfaces::msg::MappingState::SAVING;
     } else if (is_mapping_) {
       s.status = nav_interfaces::msg::MappingState::MAPPING;
@@ -149,11 +269,17 @@ private:
       s.status = nav_interfaces::msg::MappingState::IDLE;
     }
     s.progress = progress_.load();
-    std::lock_guard<std::mutex> lock(state_mutex_);
     s.map_name = map_name_;
     s.map_path = map_path_;
-    s.stage = stage_;
-    s.error_code = error_code_;
+    s.stage = fault != 0 ? "" : stage_;
+    s.error_code = fault != 0
+                       ? fault
+                       : (error_code_ != 0 ? error_code_ : battery_error_code_);
+    if (s.error_code == nav_interfaces::msg::MappingState::E_MAP_QUALITY_BAD) {
+      s.error_message = "Mapping quality fault";
+    } else if (s.error_code != 0 && s.error_code == error_code_) {
+      s.error_message = error_message_;
+    }
     return s;
   }
 
@@ -172,21 +298,31 @@ private:
 
   void SetErrorCode(int32_t code) {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    error_code_ = code;
+    if (!exit_deadline_) {
+      error_code_ = code;
+      error_message_.clear();
+    }
   }
-
-
 
   void StartMappingCallback(const std::shared_ptr<nav_interfaces::srv::StartMapping::Request> req,
                             std::shared_ptr<nav_interfaces::srv::StartMapping::Response> res)
   {
     using MS = nav_interfaces::msg::MappingState;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      const auto fault = ExitErrorLocked();
+      if (fault != 0) {
+        FillResult(res.get(), false, fault,
+                   "Mapping process is exiting; restart it before starting a "
+                   "new session");
+        return;
+      }
+    }
     if (is_saving_) {
       LOG(ERROR) << "Map saving is in progress; start_mapping rejected.";
       FillResult(res.get(), false, MS::E_MAP_SAVING, "Map saving in progress; wait for ~/state to become IDLE");
       return;
     }
-    using MS = nav_interfaces::msg::MappingState;
     if (is_mapping_) {
       LOG(ERROR) << "Mapping node is already running.";
       FillResult(res.get(), false, MS::E_MAP_ALREADY_RUNNING, "Mapping already running");
@@ -203,11 +339,6 @@ private:
       FillResult(res.get(), false, MS::E_MAP_NAME_INVALID, "Invalid map_name: " + name_error);
       return;
     }
-    if (!EnsureDirectoryExists(FLAGS_map_folder)) {
-      FillResult(res.get(), false, MS::E_MAP_FOLDER_MISSING,
-                 "map_folder does not exist and cannot be created: " + FLAGS_map_folder);
-      return;
-    }
     const std::filesystem::path map_directory =
         std::filesystem::path(FLAGS_map_folder) / req->map_name;
     // 重名只看「是否已有一张可加载的地图」（与 get_maps 同口径）；取消 / 中断建图
@@ -219,12 +350,50 @@ private:
                  "Map already exists; set overwrite=true to recreate: " + req->map_name);
       return;
     }
+    std::optional<BatterySnapshot> battery;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
+      battery = FreshBatteryLocked();
+      if (!battery) {
+        error_code_ = MS::E_MAP_SENSOR_ABNORMAL;
+        error_message_ =
+            "Battery diagnostics missing, invalid or stale; mapping was "
+            "not started; retry with fresh data";
+        FillResult(res.get(), false, MS::E_MAP_SENSOR_ABNORMAL,
+                   "Battery diagnostics missing, invalid or stale; mapping was "
+                   "not started; retry with fresh data");
+        return;
+      }
+    }
+    if (battery->low()) {
+      FillResult(res.get(), false, MS::E_MAP_BATTERY_LOW,
+                 "Battery " + std::to_string(battery->percentage) +
+                     "% is below " +
+                     std::to_string(kBatteryThreshold) +
+                     "%; mapping was not started; mapping process will exit");
+      RequestExit(MS::E_MAP_BATTERY_LOW);
+      return;
+    }
+    node_options_ = std::make_unique<MappingNodeOptions>();
+    trajectory_options_ = std::make_unique<TrajectoryOptions>();
+
+    // 1. 解析节点和轨迹的配置文件(tie会自动根据参数名，对应node_options和trajectory_options)
+    std::tie(*node_options_, *trajectory_options_) =
+      LoadMappingOptions(FLAGS_configuration_directory, FLAGS_configuration_basename);
+    if (!EnsureDirectoryExists(FLAGS_map_folder)) {
+      FillResult(res.get(), false, MS::E_MAP_FOLDER_MISSING,
+                 "map_folder does not exist and cannot be created: " + FLAGS_map_folder);
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      battery_error_code_ = 0;
       map_name_ = req->map_name;
       map_path_ = FLAGS_map_folder + "/" + req->map_name + "/slam";
       stage_.clear();
       error_code_ = MS::E_NONE;
+      error_message_.clear();
+      initial_scan_fault_ = false;
     }
     progress_ = 0.0f;
     // A new mapping session always owns a clean map directory. Existing
@@ -280,20 +449,21 @@ private:
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-    node_options_ = std::make_unique<MappingNodeOptions>();
-    trajectory_options_ = std::make_unique<TrajectoryOptions>();
-
-    // 1. 解析节点和轨迹的配置文件(tie会自动根据参数名，对应node_options和trajectory_options)
-    std::tie(*node_options_, *trajectory_options_) =
-      LoadMappingOptions(FLAGS_configuration_directory, FLAGS_configuration_basename);
     // 2. 构建 map_builder
     auto map_builder =
       cartographer::mapping::CreateMapBuilder(node_options_->map_builder_options);
     // 3. 创建 Cartographer ROS Node（节点发布的topic、服务等在其中定义）
-    mapping_node_ =
-          std::make_unique<cartographer_ros::Node>(*node_options_, std::move(map_builder),
-                                                    tf_buffer_, this->shared_from_this(),
-                                                    FLAGS_collect_metrics);
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      // The manager owns Node, so its back-reference must not keep the manager
+      // alive.
+      mapping_node_ = std::make_unique<cartographer_ros::Node>(
+          *node_options_, std::move(map_builder), tf_buffer_,
+          rclcpp::Node::SharedPtr(this, [](rclcpp::Node*) {}),
+          FLAGS_collect_metrics);
+      // Capture before starting trajectories; retain through teardown.
+      quality_fault_ = mapping_node_->GetMappingQualityFaultFlag();
+    }
     // 4. 读取pstream文件（子图、约束、轨迹等信息）
     // TODO： 扩建模式下，才需要 load_state_filename
     if (!FLAGS_load_state_filename.empty()) {
@@ -304,16 +474,21 @@ private:
       mapping_node_->StartTrajectoryWithDefaultTopics(*trajectory_options_);
     }
 
-    is_mapping_ = true;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      health_started_ = SteadyClock::now();
+      is_mapping_ = true;
+    }
     trajectories_finished_ = false;  // 重置标志
 
     StartShowMap();
     FillResult(res.get(), true, MS::E_NONE, "OK");
   }
 
-  // finish 为触发动作：本回调同步执行收尾管线，期间经 ~/state 上报 progress/stage。
-  // 状态定时器在节点默认回调组，与本服务所在的 ops_group_ 由 MultiThreadedExecutor 并行调度，
-  // 因此 SAVING 期间 ~/state 照常以 5 Hz 发布；调用方无需等待本响应，盯 ~/state 即可。
+  // finish 为触发动作：本回调同步执行收尾管线，期间经 ~/state 上报
+  // progress/stage。 状态定时器与电量诊断共用独立回调组，与 ops_group_ 由
+  // MultiThreadedExecutor 并行调度， 因此 SAVING 期间 ~/state 照常以 5 Hz
+  // 发布；调用方无需等待本响应，盯 ~/state 即可。
   void FinishMappingCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
                              std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
@@ -325,6 +500,11 @@ private:
     if (!is_mapping_) {
       res->success = false;
       res->message = "Mapping not running";
+      return;
+    }
+    if (HasMappingQualityFault() || exit_requested()) {
+      res->success = false;
+      res->message = "Mapping fault; process is exiting";
       return;
     }
     std::string map_path;
@@ -359,6 +539,10 @@ private:
       res->success = true;
       res->message = had_name ? "Map name cleared, ready for new mapping" : "Already idle";
       return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      health_started_.reset();
     }
     progress_ = 0.0f;
     SetStage("");
@@ -450,14 +634,27 @@ private:
   // 重置建图节点（清理所有资源）
   void ResetMappingNode() {
     LOG(INFO) << "Resetting mapping node...";
-    
-    mapping_node_.reset();
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      health_started_.reset();
+    }
+
+    // Finish before marking idle; the destructor also finishes as a fallback.
+    // Retain the shared fault flag, including faults raised by flushed samples.
+    if (mapping_node_) mapping_node_->FinishAllTrajectories();
+    std::unique_ptr<cartographer_ros::Node> finished_node;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      finished_node = std::move(mapping_node_);
+      battery_error_code_ = 0;
+      is_mapping_ = false;
+      is_saving_ = false;
+    }
+    finished_node.reset();
     node_options_.reset();
     trajectory_options_.reset();
     tf_listener_.reset();
     tf_buffer_.reset();
-    is_mapping_ = false;
-    is_saving_ = false;
     trajectories_finished_ = false;  // 重置标志
     // 地图原点重置的幂等标志在 Node 内部，mapping_node_ 重建时自然复位
 
@@ -472,7 +669,11 @@ private:
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       map_name = map_name_;
-      error_code_ = MS::E_NONE;
+      if (!exit_deadline_) {
+        error_code_ = MS::E_NONE;
+        error_message_.clear();
+      }
+      health_started_.reset();
     }
     // Exception firewall. Everything below touches the live pose graph, the
     // submap list and the filesystem; an escaping exception would unwind into
@@ -569,17 +770,138 @@ private:
   void FinishMapping() {
     RunFinishPipeline();
   }
+  // Runs even when missing input has stopped all matching callbacks.
+  void CheckMappingData() {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!is_mapping_ || is_saving_ || !health_started_ || !quality_fault_)
+      return;
+    const auto now = SteadyClock::now();
+    std::lock_guard<std::mutex> health_lock(quality_fault_->mutex);
+    const auto topic_for = [this](const std::string& id) {
+      return get_node_topics_interface()->resolve_topic_name(id);
+    };
+    std::string insufficient;
+    for (const auto& entry : quality_fault_->initial_scans) {
+      const auto& scan = entry.second;
+      if (!scan.insufficient()) continue;
+      if (!insufficient.empty()) insufficient += "; ";
+      insufficient +=
+          "topic=" + topic_for(entry.first) +
+          " outside=" + std::to_string(scan.outside) +
+          " total=" + std::to_string(scan.total) + " ratio=" +
+          std::to_string(scan.total == 0
+                             ? 0.
+                             : static_cast<double>(scan.outside) / scan.total);
+    }
+    if (!insufficient.empty() && (!exit_deadline_ || initial_scan_fault_)) {
+      const std::string message =
+          "雷达有效点数不足，可能是受遮挡或超量程无回波: " + insufficient +
+          " frame=base_footprint rect=(-0.3,0.3)x(-0.3,0.3)";
+      if (message != error_message_) LOG(ERROR) << message;
+      error_message_ = message;
+      error_code_ = nav_interfaces::msg::MappingState::E_MAP_SENSOR_ABNORMAL;
+      initial_scan_fault_ = true;
+      if (!exit_deadline_)
+        exit_deadline_ = now + std::chrono::milliseconds(kFaultReportGraceMs);
+      return;
+    }
+    if (exit_deadline_) return;
+    // Allow initial TF/submap creation; normal keyframe interval is about 2 s.
+    if (now - *health_started_ < std::chrono::seconds(15)) return;
+    std::string unavailable;
+    double age = 0.;
+    bool never_received = false;
+    for (const auto& entry : quality_fault_->inputs) {
+      const auto last = entry.second.received.value_or(*health_started_);
+      if (now - last >= std::chrono::seconds(5)) {
+        unavailable = entry.first;
+        never_received = !entry.second.received.has_value();
+        age = std::chrono::duration<double>(now - last).count();
+        break;
+      }
+    }
+    if (unavailable.empty()) {
+      const auto last =
+          quality_fault_->last_valid_match.value_or(*health_started_);
+      if (now - last >= std::chrono::seconds(15)) {
+        unavailable = "valid_match";
+        age = std::chrono::duration<double>(now - last).count();
+      }
+    }
+    if (unavailable.empty()) return;
+    error_code_ = nav_interfaces::msg::MappingState::E_MAP_SENSOR_ABNORMAL;
+    error_message_ =
+        unavailable == "valid_match"
+            ? "Valid matching timeout: source=valid_match timeout_s=15"
+            : std::string(never_received
+                              ? "No valid sensor data received: topic="
+                              : "Valid sensor data timeout: topic=") +
+                  topic_for(unavailable) + " timeout_s=5";
+    error_message_ += " age_s=" + std::to_string(age);
+    exit_deadline_ = now + std::chrono::milliseconds(kFaultReportGraceMs);
+    LOG(ERROR) << error_message_;
+    LOG(ERROR) << "Mapping data unavailable source=" << unavailable
+               << " age_s=" << age << " error_code=" << error_code_;
+  }
+
   void Publish() {
-    // ~/state：结构化建图状态（唯一状态出口，仅 topic）
+    const bool already_exiting = exit_requested();
+    if (HasMappingQualityFault() && !already_exiting) {
+      RequestExit(nav_interfaces::msg::MappingState::E_MAP_QUALITY_BAD);
+    }
+    CheckMappingData();
+    if (!already_exiting && exit_requested()) {
+      if (stop_show_map_client_->service_is_ready()) {
+        try {
+          stop_show_map_client_->async_send_request(
+              std::make_shared<std_srvs::srv::Trigger::Request>());
+        } catch (const std::exception& e) {
+          LOG(WARNING) << "Cannot stop map display during exit: " << e.what();
+        }
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (is_mapping_ || is_saving_) {
+        if (const auto battery = FreshBatteryLocked()) {
+          battery_error_code_ =
+              battery->low()
+                  ? nav_interfaces::msg::MappingState::E_MAP_BATTERY_LOW
+                  : 0;
+        } else {
+          RCLCPP_WARN_THROTTLE(
+              get_logger(), *get_clock(), 10000,
+              "Mapping battery diagnostics unavailable or stale");
+        }
+      }
+    }
     state_pub_->publish(BuildMappingState());
+    bool exit_due;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      exit_due = exit_deadline_ && SteadyClock::now() >= *exit_deadline_;
+    }
+    if (exit_due && exit_callback_) exit_callback_();
   }
  private:
   // 状态
   std::string map_name_;                       // 受 state_mutex_ 保护
   std::string map_path_;                       // 受 state_mutex_ 保护
   std::string stage_;                          // 受 state_mutex_ 保护
+  std::string error_message_;
+  bool initial_scan_fault_ = false;
   int32_t error_code_{0};                      // 受 state_mutex_ 保护
   std::mutex state_mutex_;
+  // Protected by state_mutex_; retained after mapping_node_ is released.
+  std::shared_ptr<const cartographer::mapping::MappingQualityState>
+      quality_fault_;
+  std::optional<BatterySnapshot> battery_;
+  int32_t battery_error_code_ = 0;
+  std::optional<SteadyClock::time_point> exit_deadline_;
+  std::optional<SteadyClock::time_point> health_started_;
+  std::function<void()> exit_callback_;
+  rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
+      battery_sub_;
   // 本次建图会话对地图目录做的重置（取消时据此回滚），受 state_mutex_ 保护
   MapDirectoryResetResult session_reset_;
   bool session_restore_previous_ = false;      // 开始时原目录是一张可加载地图，取消时要还原
@@ -598,6 +920,7 @@ private:
   rclcpp::Publisher<nav_interfaces::msg::MappingState>::SharedPtr state_pub_;
 
   rclcpp::CallbackGroup::SharedPtr ops_group_;
+  rclcpp::CallbackGroup::SharedPtr battery_group_;
   rclcpp::Service<nav_interfaces::srv::StartMapping>::SharedPtr start_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr finish_mapping_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_mapping_srv_;
@@ -628,10 +951,16 @@ int main(int argc, char** argv) {
   cartographer_ros::ScopedRosLogSink ros_log_sink;
   auto node = std::make_shared<cartographer_ros::MappingNode>();
 
-  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
-  executor.add_node(node);
-  executor.spin();
-
+  {
+    rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+    node->SetExitCallback([&executor] { executor.cancel(); });
+    executor.add_node(node);
+    executor.spin();
+    executor.remove_node(node);
+    node->SetExitCallback({});
+  }
+  const bool failed = node->exit_requested();
+  node.reset();
   rclcpp::shutdown();
-  return 0;
+  return failed ? 1 : 0;
 }

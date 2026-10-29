@@ -26,6 +26,7 @@
 #include "pcl/io/pcd_io.h"
 
 #include "absl/memory/memory.h"
+#include "cartographer/mapping/2d/probability_grid.h"
 #include "cartographer/metrics/family_factory.h"
 #include "cartographer/sensor/range_data.h"
 #include "cartographer/sensor/sync_point_cloud.h"
@@ -33,6 +34,18 @@
 
 namespace cartographer {
 namespace mapping {
+namespace {
+
+// Local scan-to-submap consistency thresholds; require calibration with bags.
+constexpr int kQualityMinPoints = 30;
+constexpr int kQualityMinKnownPoints = 20;
+constexpr double kQualityMinKnownRatio = 0.3;
+constexpr double kQualityScoreLow = 0.55;
+constexpr double kQualityTranslationLimit = 0.05;
+constexpr double kQualityRotationLimit = 3. * M_PI / 180.;
+constexpr double kQualityMaxSampleGap = 3.;
+
+}  // namespace
 
 static auto* kLocalSlamLatencyMetric = metrics::Gauge::Null();
 static auto* kLocalSlamRealTimeRatio = metrics::Gauge::Null();
@@ -42,6 +55,126 @@ static auto* kRealTimeCorrelativeScanMatcherScoreMetric =
 static auto* kCeresScanMatcherCostMetric = metrics::Histogram::Null();
 static auto* kScanMatcherResidualDistanceMetric = metrics::Histogram::Null();
 static auto* kScanMatcherResidualAngleMetric = metrics::Histogram::Null();
+
+void LocalTrajectoryBuilder2D::ResetQualityEvaluation() {
+  low_start_.reset();
+  combined_start_.reset();
+  low_count_ = 0;
+  combined_count_ = 0;
+  quality_time_.reset();
+}
+
+void LocalTrajectoryBuilder2D::EvaluateQuality(
+    common::Time time, const Grid2D& grid, const sensor::PointCloud& cloud,
+    const transform::Rigid2d& prediction, const transform::Rigid2d& estimate) {
+  if (grid.GetGridType() != GridType::PROBABILITY_GRID ||
+      !prediction.translation().allFinite() ||
+      !estimate.translation().allFinite() ||
+      !std::isfinite(prediction.rotation().angle()) ||
+      !std::isfinite(estimate.rotation().angle())) {
+    LOG(INFO) << "Mapping quality event=skip time_universal="
+              << common::ToUniversal(time) << " reason=invalid_grid_or_pose";
+    ResetQualityEvaluation();
+    return;
+  }
+  int points = 0;
+  int known_points = 0;
+  int inlier_points = 0;
+  double score = 0.;
+  const auto& probability_grid = static_cast<const ProbabilityGrid&>(grid);
+  const auto& limits = grid.limits();
+  for (const auto& point : cloud) {
+    if (!point.position.allFinite()) continue;
+    ++points;
+    const Eigen::Vector2d q =
+        estimate * point.position.head<2>().cast<double>();
+    // Reject extreme coordinates before GetCellIndex converts them to integers.
+    const Eigen::Vector2d cells = (limits.max() - q) / limits.resolution();
+    if (!cells.allFinite() || cells.x() < 0. || cells.y() < 0. ||
+        cells.x() >= limits.cell_limits().num_y_cells ||
+        cells.y() >= limits.cell_limits().num_x_cells)
+      continue;
+    const auto index = limits.GetCellIndex(q.cast<float>());
+    if (!grid.IsKnown(index)) continue;
+    ++known_points;
+    const double probability = probability_grid.GetProbability(index);
+    score += probability;
+    // Diagnostic only: fraction of known endpoints in occupied cells.
+    if (probability >= kQualityScoreLow) ++inlier_points;
+  }
+  if (points < kQualityMinPoints || known_points < kQualityMinKnownPoints ||
+      static_cast<double>(known_points) / points < kQualityMinKnownRatio) {
+    LOG(INFO) << "Mapping quality event=skip time_universal="
+              << common::ToUniversal(time) << " reason=insufficient_evidence"
+              << " points=" << points << " known=" << known_points
+              << " known_ratio="
+              << (points > 0 ? static_cast<double>(known_points) / points : 0.)
+              << " score_mean="
+              << (known_points > 0 ? score / known_points : -1.);
+    ResetQualityEvaluation();
+    return;
+  }
+  score /= known_points;
+  {
+    std::lock_guard<std::mutex> lock(quality_fault_->mutex);
+    quality_fault_->last_valid_match = MappingQualityState::Clock::now();
+  }
+  const double translation =
+      (estimate.translation() - prediction.translation()).norm();
+  const double angle =
+      estimate.rotation().angle() - prediction.rotation().angle();
+  const double rotation =
+      std::abs(std::atan2(std::sin(angle), std::cos(angle)));
+  if (quality_time_) {
+    const double interval = common::ToSeconds(time - *quality_time_);
+    if (interval <= 0. || interval > kQualityMaxSampleGap) {
+      LOG(INFO) << "Mapping quality event=reset time_universal="
+                << common::ToUniversal(time) << " reason=sample_gap"
+                << " interval_s=" << interval << " low_count=" << low_count_
+                << " combined_count=" << combined_count_;
+      ResetQualityEvaluation();
+    }
+  }
+  const bool low = score < kQualityScoreLow;
+  const bool motion = translation > kQualityTranslationLimit ||
+                      rotation > kQualityRotationLimit;
+  const auto advance = [time](std::optional<common::Time>& start, int& count,
+                              bool condition, double duration,
+                              int min_samples) {
+    if (!condition) {
+      start.reset();
+      count = 0;
+      return false;
+    }
+    if (!start) start = time;
+    return ++count >= min_samples &&
+           common::ToSeconds(time - *start) >= duration;
+  };
+  const bool low_fault =
+      advance(low_start_, low_count_, low, 3., 1) || low_count_ >= 3;
+  const bool combined_fault =
+      advance(combined_start_, combined_count_, low && motion, 1., 2);
+  LOG(INFO)
+      << "Mapping quality event=sample time_universal="
+      << common::ToUniversal(time) << " score=" << score << " points=" << points
+      << " known=" << known_points
+      << " known_ratio=" << static_cast<double>(known_points) / points
+      << " inlier_ratio=" << static_cast<double>(inlier_points) / known_points
+      << " translation_m=" << translation << " rotation_rad=" << rotation
+      << " low=" << low << " motion=" << motion << " low_count=" << low_count_
+      << " low_s=" << (low_start_ ? common::ToSeconds(time - *low_start_) : 0.)
+      << " combined_count=" << combined_count_ << " combined_s="
+      << (combined_start_ ? common::ToSeconds(time - *combined_start_) : 0.)
+      << " low_fault=" << low_fault << " combined_fault=" << combined_fault;
+  if ((low_fault || combined_fault) && !quality_fault_->fault.exchange(true)) {
+    LOG(ERROR) << "Mapping quality fault rule="
+               << (combined_fault ? "low_score_and_motion" : "low_score")
+               << " score=" << score << " known=" << known_points << "/"
+               << points << " translation=" << translation
+               << " rotation=" << rotation;
+  }
+  quality_time_ = time;
+}
 
 LocalTrajectoryBuilder2D::LocalTrajectoryBuilder2D(
     const proto::LocalTrajectoryBuilderOptions2D& options,
@@ -164,6 +297,13 @@ std::unique_ptr<transform::Rigid2d> LocalTrajectoryBuilder2D::ScanMatch(
                             pose_observation.get(),
                             &summary);
 
+  if (quality_fault_) {
+    EvaluateQuality(time, *matching_submap->grid(),
+                    filtered_gravity_aligned_point_cloud, pose_prediction,
+                    *pose_observation);
+    if (quality_fault_->fault.load()) return nullptr;
+  }
+
   // LOG(INFO) << "scan match: " << *pose_observation;
 
   // 5. 如果匹配成功，向Metric中增加观测信息
@@ -193,6 +333,7 @@ std::unique_ptr<LocalTrajectoryBuilder2D::MatchingResult>
 LocalTrajectoryBuilder2D::AddRangeData(
     const std::string& sensor_id,
     const sensor::TimedPointCloudData& unsynchronized_data) {
+  if (quality_fault_ && quality_fault_->fault.load()) return nullptr;
   // 1. 将激光雷达数据添加到同步器
   if (!laser_synchronizer_.AddLaserData(sensor_id, unsynchronized_data)) {
     LOG(ERROR) << "Failed to add laser data for sensor: " << sensor_id;
@@ -416,6 +557,7 @@ LocalTrajectoryBuilder2D::InsertIntoSubmap(
     const transform::Rigid3d& pose_estimate,
     const Eigen::Quaterniond& gravity_alignment)
 {
+  if (quality_fault_ && quality_fault_->fault.load()) return nullptr;
   // 1. 判断是否是关键帧
   if (map_insertion_motion_filter_.IsSimilar(time, pose_estimate)) {
     return nullptr;
