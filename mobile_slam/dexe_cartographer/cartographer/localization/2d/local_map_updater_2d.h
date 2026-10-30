@@ -39,9 +39,7 @@ public:
 
   std::shared_ptr<mapping::Submap2D> local_submap();
 
-  // 根据策略获取 global submap
-  // - NONE: 返回 global_static_submap_
-  // - SHORT/LONG/PERSISTENT: 返回 global_dynamic_submap_
+  // 返回定位参考副本；NONE 不插入新观测，其余策略允许更新。
   std::shared_ptr<mapping::Submap2D> GetGlobalSubmap() const;
 
   // 获取漂移免疫的静态底图（SetGlobalSubmap 后从不插入新数据）。
