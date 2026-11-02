@@ -258,7 +258,7 @@ void RunVersion(const std::string& type_label,
 
   loc::PoseInitializer initializer(options);
   initializer.Initialize();
-  initializer.InitGlobalSubmap(submap);
+  initializer.InitGlobalSubmap(submap, submap);
 
   auto drive_once = [&](const Frame& f, loc::GlobalRelocInfo* profile) {
     initializer.UpdateSensorData(f.cloud, f.line_data);

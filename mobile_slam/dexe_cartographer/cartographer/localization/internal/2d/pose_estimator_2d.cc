@@ -174,7 +174,7 @@ bool PoseEstimator2D::SetInitialPose(const transform::Rigid3d &initial_pose)
     return false;
   }
 
-  pose_initializer_->InitGlobalSubmap(local_submap);
+  pose_initializer_->InitGlobalSubmap(local_submap, global_static_submap_);
 
   pose_initializer_->SetInitialPose(transform::Project2D(initial_pose));
   pose_initializer_->start();
@@ -200,7 +200,8 @@ void PoseEstimator2D::TriggerGlobalRelocalization()
   }
 
   // 使用 global_static_submap_ 初始化 pose_initializer_
-  pose_initializer_->InitGlobalSubmap(global_static_submap_);
+  pose_initializer_->InitGlobalSubmap(global_static_submap_,
+                                      global_static_submap_);
 
   // 触发全局重定位
   pose_initializer_->TriggerGlobalRelocalization();
@@ -545,8 +546,9 @@ PoseEstimator2D::ProcessSynchronizedLaserData(
       if (!has_tried_global_relocalization_) {
         LOG(INFO) << "Local relocalization failed, trying global relocalization...";
         pose_initializer_->stop();
-        
-        pose_initializer_->InitGlobalSubmap(global_static_submap_);
+
+        pose_initializer_->InitGlobalSubmap(global_static_submap_,
+                                            global_static_submap_);
 
         pose_initializer_->TriggerGlobalRelocalization();
         pose_initializer_->start();

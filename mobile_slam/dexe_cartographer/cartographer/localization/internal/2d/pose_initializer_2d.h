@@ -111,7 +111,11 @@ class PoseInitializer {
   void Initialize();
   void ResetStatus();
 
-  void InitGlobalSubmap(const std::shared_ptr<mapping::Submap2D>& global_submap);
+  // Matching may use a dynamic local submap; validation always uses the static
+  // map.
+  void InitGlobalSubmap(
+      const std::shared_ptr<mapping::Submap2D>& global_submap,
+      const std::shared_ptr<const mapping::Submap2D>& static_submap);
 
   bool SetInitialPose(const transform::Rigid2d& initial_pose);
 
@@ -143,6 +147,8 @@ class PoseInitializer {
   }
 
  private:
+  friend class PoseInitializerTest;
+
   void Run();
   void RelocalzationOnce();
   void CreateRelocalzationThread();
@@ -166,6 +172,7 @@ private:
   const proto::PoseInitializerOptions2D options_;
 
   std::shared_ptr<mapping::Submap2D> global_submap_ = nullptr;
+  std::shared_ptr<const mapping::Submap2D> static_validation_submap_;
 
   std::shared_ptr<transform::Rigid2d> initial_pose_;
   std::shared_ptr<transform::Rigid2d> global_pose_estimate_;

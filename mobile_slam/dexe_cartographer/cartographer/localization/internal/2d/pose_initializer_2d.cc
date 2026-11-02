@@ -87,10 +87,12 @@ void PoseInitializer::ResetStatus()
   initializer_status_ = PoseInitializerStatus::Idle;
 }
 
-void PoseInitializer::InitGlobalSubmap(const std::shared_ptr<mapping::Submap2D>& global_submap)
-{
+void PoseInitializer::InitGlobalSubmap(
+    const std::shared_ptr<mapping::Submap2D>& global_submap,
+    const std::shared_ptr<const mapping::Submap2D>& static_submap) {
   std::unique_lock<std::mutex> lock(data_mutex_);
   global_submap_ = global_submap;
+  static_validation_submap_ = static_submap;
   // 地图更新时重置快速匹配器，下次使用时重新创建
   fast_correlative_scan_matcher_.reset();
   batch_global_matcher_.reset();
@@ -622,6 +624,46 @@ bool PoseInitializer::IsRelocalizationSuccess()
     return false;
   }
 
+  // Validate the pose reference point against the loaded static map, not the
+  // potentially updated/cropped matching map. Known occupied cells are allowed.
+  const mapping::Grid2D* static_grid =
+      static_validation_submap_ ? static_validation_submap_->grid() : nullptr;
+  if (!static_grid) {
+    LOG(ERROR) << "Relocalization validation failed: static grid unavailable.";
+    return false;
+  }
+  const Eigen::Vector2d position = global_pose_estimate_->translation();
+  if (!position.allFinite()) {
+    LOG(ERROR) << "Relocalization validation failed: non-finite position "
+               << position.transpose();
+    return false;
+  }
+  const auto& limits = static_grid->limits();
+  // Avoid overflowing the integer conversion for extreme finite coordinates.
+  const Eigen::Vector2d cell_offset =
+      (limits.max() - position) / limits.resolution();
+  if (!cell_offset.allFinite() ||
+      cell_offset.cwiseAbs().maxCoeff() >
+          static_cast<double>(std::numeric_limits<int>::max()) / 2.) {
+    LOG(ERROR)
+        << "Relocalization validation failed: position outside static grid "
+        << position.transpose();
+    return false;
+  }
+  const Eigen::Array2i cell = limits.GetCellIndex(position.cast<float>());
+  if (!limits.Contains(cell)) {
+    LOG(ERROR)
+        << "Relocalization validation failed: position outside static grid "
+        << position.transpose() << ", cell=" << cell.transpose();
+    return false;
+  }
+  if (!static_grid->IsKnown(cell)) {
+    LOG(ERROR)
+        << "Relocalization validation failed: unknown static grid cell at "
+        << position.transpose() << ", cell=" << cell.transpose();
+    return false;
+  }
+
   const float min_score = options_.global_localization_min_score();
 
   // 门①：绝对质量
@@ -633,6 +675,8 @@ bool PoseInitializer::IsRelocalizationSuccess()
     return false;
   }
 
+  // TODO: Local relocalization does not refresh last_global_bbs_pose_; handle
+  // mode-specific consistency separately. Keep the existing behavior here.
   // 门②：最终位姿 vs 主链路 BBS 全局解的一致性（复用，零额外搜索）
   const double bbs_dist =
       (last_global_bbs_pose_.translation() - global_pose_estimate_->translation()).norm();
